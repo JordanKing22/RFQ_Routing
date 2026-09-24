@@ -3,6 +3,8 @@ RFQ Router demo server. Standard library only.
 
     python server.py            start on http://127.0.0.1:8765 and open the browser
     python server.py --port 9000 --no-browser
+    RFQ_DEMO_PASSWORD=... python server.py --host 0.0.0.0 --no-browser
+                                serve other machines too (cloud); every request needs the password
 
 The browser never sees your API key: the page talks to this local server, and
 this server talks to Jev.
@@ -11,10 +13,14 @@ this server talks to Jev.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import queue as queue_mod
+import signal
 import sys
 import threading
 import time
@@ -575,32 +581,66 @@ class App:
 # --------------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
     app: App = None  # type: ignore[assignment]
+    password = ""  # RFQ_DEMO_PASSWORD. When set, every request needs it (HTTP Basic auth, any user name).
     server_version = "RFQRouterDemo/1.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quiet: the worker logs Jev calls
         return
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str,
+              headers: Optional[Dict[str, str]] = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, obj: Any, status: int = 200) -> None:
-        self._send(status, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8")
+    def _json(self, obj: Any, status: int = 200, headers: Optional[Dict[str, str]] = None) -> None:
+        self._send(status, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8", headers)
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         return host in ("127.0.0.1", "localhost", "::1", "")
 
+    def _password_ok(self) -> bool:
+        scheme, _, token = (self.headers.get("Authorization") or "").partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            supplied = base64.b64decode(token.strip(), validate=True).decode("utf-8").partition(":")[2]
+        except ValueError:  # not base64, or not UTF-8
+            return False
+        return hmac.compare_digest(supplied.encode("utf-8"), self.password.encode("utf-8"))
+
+    def _allowed(self) -> bool:
+        """Gate every request. When it returns False the refusal has already been sent.
+
+        With a password (cloud), HTTP Basic auth guards everything, so the Host header no longer
+        matters. Without one, only requests addressed to this computer are answered, which also
+        stops web pages from reaching the server through DNS rebinding.
+        """
+        if self.password:
+            if self._password_ok():
+                return True
+            self._json({"error": "password required"}, 401,
+                       {"WWW-Authenticate": 'Basic realm="RFQ Router demo", charset="UTF-8"'})
+            return False
+        if self._host_ok():
+            return True
+        self._json({"error": "forbidden host"}, 403)
+        return False
+
     def do_GET(self) -> None:  # noqa: N802
-        if not self._host_ok():
-            return self._json({"error": "forbidden host"}, 403)
         path = urlparse(self.path).path
+        if path == "/healthz":  # for cloud health checks: no password needed, no data returned
+            return self._json({"ok": True})
+        if not self._allowed():
+            return
         if path in ("/", "/index.html"):
             return self._static("index.html")
         if path.startswith("/static/"):
@@ -625,10 +665,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, target.read_bytes(), types.get(target.suffix, "application/octet-stream"))
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self._host_ok():
-            return self._json({"error": "forbidden host"}, 403)
+        if not self._allowed():
+            return
         # JSON-only POSTs: a random web page cannot trigger calls without a CORS preflight.
-        if "application/json" not in (self.headers.get("Content-Type") or ""):
+        # Match the media type exactly: "text/plain; application/json" would skip the preflight.
+        media_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
             return self._json({"error": "JSON body required"}, 415)
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -680,19 +722,39 @@ def bind(host: str, port: int) -> ThreadingHTTPServer:
     raise SystemExit(f"Could not open a port near {port}: {last_error}")
 
 
+def is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> None:
+    cfg = jev_client.resolve_config()  # loads .env first, so the settings below can live there too
     parser = argparse.ArgumentParser(description="RFQ Router demo (Jev)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("RFQ_DEMO_PORT", "8765")))
-    parser.add_argument("--host", default="127.0.0.1")
+    # PORT is what cloud hosts (Cloud Run, Render, Railway, Heroku) tell the app to listen on.
+    parser.add_argument("--port", type=int,
+                        default=int(os.environ.get("RFQ_DEMO_PORT") or os.environ.get("PORT") or 8765))
+    parser.add_argument("--host", default=os.environ.get("RFQ_DEMO_HOST") or "127.0.0.1",
+                        help="0.0.0.0 lets other machines connect; it needs RFQ_DEMO_PASSWORD")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
+    password = os.environ.get("RFQ_DEMO_PASSWORD", "").strip()
+    public = not is_loopback(args.host)
+    if public and not password:
+        raise SystemExit(f"  Set RFQ_DEMO_PASSWORD before serving on {args.host}. Without it, anyone who "
+                         "can reach this server could use your Jev key. Or use --host 127.0.0.1.")
+
     disable_quickedit()
-    cfg = jev_client.resolve_config()
     app = App(cfg)
     Handler.app = app
+    Handler.password = password
     server = bind(args.host, args.port)
-    url = f"http://{args.host}:{server.server_address[1]}/"
+    port = server.server_address[1]
+    url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '') else args.host}:{port}/"
 
     lines = ["", "  RFQ Router demo  |  Jev by TypeSafe AI",
              "  -------------------------------------------------------------"]
@@ -704,14 +766,19 @@ def main() -> None:
             lines.append(f"  From:   {', '.join(str(p) for p in files)}")
     else:
         lines.append("  Jev:    NO API KEY FOUND. Cached results can still be replayed.")
-        lines.append(f"          Add AI_GATEWAY_API_KEY=vck_... to {HERE.parent / '.env'}")
+        lines.append("          Set AI_GATEWAY_API_KEY=vck_... as an environment variable, or in .env")
+        lines.append("          next to server.py or in the folder above it.")
     lines += [f"  Cache:  {len(app.cache)} saved Jev results in cache/jev_results.json",
-              f"  Open:   {url}",
-              "  Stop:   close this window or press Ctrl+C", ""]
+              f"  Open:   {url}" + (f"  (listening on {args.host}:{port} for other machines)" if public else "")]
+    if password:
+        lines.append("  Login:  any user name, password = RFQ_DEMO_PASSWORD")
+    lines += ["  Stop:   close this window or press Ctrl+C", ""]
     print("\n".join(lines), flush=True)
 
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    # docker stop and cloud hosts send SIGTERM: shut down the same way as Ctrl+C.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:

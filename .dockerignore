@@ -1,0 +1,8 @@
+# Keep the API key and local state out of the image.
+.env
+.env.*
+cache/
+.git/
+__pycache__/
+*.py[cod]
+*.bat

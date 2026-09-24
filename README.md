@@ -17,6 +17,46 @@ Your key stays in `Jev_Test\.env` as `AI_GATEWAY_API_KEY=vck_...`. The browser n
 
 To check the key again at any time, double-click `check_jev.bat`.
 
+On a Mac or Linux, run `./run_demo.sh` instead. It does the same steps. To check the key, run `python3 check_jev.py`.
+
+## Run it in the cloud
+
+The demo runs anywhere that has Python 3.10 or newer, or that runs a Docker image. Two things change when it leaves your laptop:
+
+- **Give the host your key** as a secret or environment variable: `AI_GATEWAY_API_KEY=vck_...`.
+- **A password is required.** Set `RFQ_DEMO_PASSWORD`. The browser asks for it once, and any user name works. The server won't listen on a public address without a password, because anyone who found the URL could spend your Jev key. Use the host's HTTPS address, because the browser sends the password with every request.
+
+| Setting | What it does |
+| --- | --- |
+| `AI_GATEWAY_API_KEY` | Your Vercel AI Gateway key (`vck_...`). Or `TYPESAFE_API_KEY` for TypeSafe direct. |
+| `RFQ_DEMO_PASSWORD` | The demo password. Required whenever other machines can connect. |
+| `RFQ_DEMO_HOST` | The address to listen on. `0.0.0.0` in the Docker image, otherwise `127.0.0.1` (this computer only). Same as `--host`. |
+| `PORT` or `RFQ_DEMO_PORT` | The port. Cloud hosts set `PORT` for you. The default is 8765. |
+
+These can also go in `.env` next to `server.py`.
+
+**Docker**
+
+```
+docker build -t rfq-router .
+docker run --rm -p 8765:8765 -e AI_GATEWAY_API_KEY=vck_... -e RFQ_DEMO_PASSWORD=pick-one rfq-router
+```
+
+Then open http://localhost:8765. To keep saved Jev results between runs, add `-v rfq-cache:/app/cache`.
+
+**A container host** (Google Cloud Run, Render, Railway, Fly.io, and others)
+
+1. Point the host at this repository. It builds the `Dockerfile`.
+2. Add `AI_GATEWAY_API_KEY` and `RFQ_DEMO_PASSWORD` as secrets or environment variables.
+3. If the host asks for a health check path, use `/healthz`. It is the only address that needs no password.
+4. Open the HTTPS address the host gives you.
+
+Saved Jev results live in the container, so a restart or redeploy starts with an empty cache, and so does a host that sleeps when idle. Route the inbox once shortly before a meeting. With any AI Gateway credits, a fresh run takes seconds.
+
+**A plain Linux server, without Docker**
+
+Create `.env` next to `server.py` with `AI_GATEWAY_API_KEY=vck_...` and `RFQ_DEMO_PASSWORD=...`, then run `python3 server.py --host 0.0.0.0 --no-browser`. Put HTTPS in front of it (Caddy does this in a few lines). Or skip the public address: run `python3 server.py --no-browser` (it keeps the default 127.0.0.1), connect with `ssh -L 8765:127.0.0.1:8765 you@your-server`, and open http://127.0.0.1:8765 on your laptop. That way no password is needed.
+
 ## Cost and the free tier
 
 - Jev on AI Gateway is free until September 25, 2026. After that it costs $0.042 per million input tokens, and output tokens are free. A full 20-email run costs well under a cent.
@@ -66,7 +106,9 @@ For each email:
 | File | What it is |
 | --- | --- |
 | `run_demo.bat` | One-click start |
+| `run_demo.sh` | The same start for macOS and Linux |
 | `check_jev.bat` / `check_jev.py` | Key check: routes sample email E01 with one real call |
+| `Dockerfile` | Container image for cloud hosts (see Run it in the cloud) |
 | `server.py` | Local web server and background Jev worker (rate limits, retries, cache) |
 | `jev_client.py` | Standard-library Jev client (AI Gateway or TypeSafe direct) |
 | `router.py` | The 8 questions and the routing policy |
@@ -121,5 +163,8 @@ print(result.answers["is_rfq"].noul, result.answers["machine"].choice)
 | "Could not reach ai-gateway.vercel.sh" | Check your internet connection, VPN, or firewall |
 | The browser didn't open | Go to the address printed in the black window |
 | You want a clean slate | Close the demo and delete the `cache` folder |
+| The browser asks for a user name and password | The demo is password protected. Type any user name and the `RFQ_DEMO_PASSWORD` value |
+| "Set RFQ_DEMO_PASSWORD before serving on ..." | Set it, or listen on 127.0.0.1 only |
+| `forbidden host` | You reached a server that listens on 127.0.0.1 through a proxy or a forwarded port. Set `RFQ_DEMO_PASSWORD`, which switches the server to password checks |
 
 Jev reads only the text of each email. Attachments are passed as file names, so Jev never sees what's inside a drawing. All companies, people, and emails in the sample inbox are fictional.
