@@ -1,0 +1,3 @@
+# Windows batch files need CRLF; shell scripts must stay LF (they also run inside Docker).
+*.bat text eol=crlf
+*.sh  text eol=lf

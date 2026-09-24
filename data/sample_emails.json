@@ -1,0 +1,231 @@
+{
+  "about": "Synthetic demo inbox for a CNC precision shop. All companies, people, part numbers, and addresses are fictional. 'expected' is the answer key used for the accuracy check; Jev never sees it.",
+  "emails": [
+    {
+      "id": "E01",
+      "received": "06:02",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "RFQ 26-0412: Sensor mounting bracket, 6061-T6",
+      "body": "Hi team,\n\nPlease quote the attached sensor mounting bracket, P/N QA-41127 Rev B.\n\nMaterial: 6061-T6 aluminum\nFinish: Black anodize per MIL-A-8625 Type II, Class 2\nQuantities: 25 / 50 / 100\nInspection: standard, FAI on the first lot\n\nQuote due by October 3. Let me know if you have any questions on the tolerances.\n\nThanks,\nRachel Kim\nBuyer, Quillon Aerospace",
+      "attachments": ["QA-41127_RevB.pdf", "QA-41127_RevB.step"],
+      "expected": {"lane": "milling_3axis", "note": "Simple prismatic bracket, full info, anodize is outside processing."}
+    },
+    {
+      "id": "E02",
+      "received": "06:19",
+      "from_name": "Marcus Hale",
+      "from_email": "mhale@brightwatermed.com",
+      "subject": "Quote request: Ti-6Al-4V instrument housing, prototypes",
+      "body": "Hello,\n\nWe're developing a new laparoscopic instrument and need 6 prototype housings machined from Ti-6Al-4V ELI. The part has sculpted ergonomic surfaces and several compound-angle ports, so I expect it will need 5-axis work.\n\nDrawing and STEP model attached. Please send pricing and lead time for 6 pcs, plus an estimate for a follow-on lot of 50 pcs. ISO 13485 certs required.\n\nThanks,\nMarcus Hale\nMechanical Engineering Lead, Brightwater Medical",
+      "attachments": ["BWM-2207_housing_revA.pdf", "BWM-2207_housing_revA.stp"],
+      "expected": {"lane": "milling_5axis", "note": "Sculpted titanium medical part with compound angles."}
+    },
+    {
+      "id": "E03",
+      "received": "06:47",
+      "from_name": "Greg Lindqvist",
+      "from_email": "glindqvist@halvorsenpv.com",
+      "subject": "RFQ: pump shaft HPV-3310, annual volume",
+      "body": "Morning,\n\nRequesting a quote on the attached pump shaft, HPV-3310 Rev C. 303 stainless, ground bearing journals, passivate per ASTM A967.\n\nRelease quantity is 500 pcs with an estimated annual usage of 6,000 pcs. Please show any tooling or NRE as a separate line.\n\nWe need the quote back within two weeks.\n\nGreg Lindqvist\nPurchasing Manager, Halvorsen Pump & Valve",
+      "attachments": ["HPV-3310_shaft_RevC.pdf"],
+      "expected": {"lane": "turning", "note": "Round shaft, production volume, passivation."}
+    },
+    {
+      "id": "E04",
+      "received": "07:05",
+      "from_name": "Dana Whitcomb",
+      "from_email": "dwhitcomb@sablecreekdefense.com",
+      "subject": "RFQ SCD-7781: gimbal yoke, ITAR controlled",
+      "body": "Mesa Ridge team,\n\nSable Creek is requesting a quote for 12 gimbal yokes in 7075-T7351. The geometry is complex and will need 5-axis machining.\n\nThe technical data package is ITAR controlled and is available only to U.S. persons through our secure supplier portal:\nhttps://suppliers.sablecreekdefense.com/rfq/SCD-7781\n\nPlease include your ITAR registration number with your quote. Quote due in 10 business days.\n\nDana Whitcomb\nSubcontracts Administrator, Sable Creek Defense Systems",
+      "attachments": [],
+      "expected": {"lane": "itar", "note": "Explicit ITAR, drawings behind a U.S.-persons portal."}
+    },
+    {
+      "id": "E05",
+      "received": "07:21",
+      "from_name": "Owen Marsh",
+      "from_email": "omarsh@tessaractoptics.com",
+      "subject": "Request for quote: lens cell TO-5520",
+      "body": "Hi,\n\nPlease quote 40 pcs of the attached lens cell, 6061-T6 with black anodize.\n\nThis drawing is marked CUI and the program flows down DFARS 252.204-7012, so please handle it per NIST SP 800-171 and confirm your compliance status in your reply.\n\nTarget quote date is next Friday.\n\nOwen Marsh\nSupply Chain, Tessaract Optics",
+      "attachments": ["TO-5520_lens_cell_CUI.pdf"],
+      "expected": {"lane": "itar", "note": "CUI plus DFARS 7012 flowdown: restricted handling."}
+    },
+    {
+      "id": "E06",
+      "received": "07:38",
+      "from_name": "Sam Patel",
+      "from_email": "spatel@cindervalehydraulics.com",
+      "subject": "Quote on spacers",
+      "body": "Hi there,\n\nFound you on Google. Can you quote 200 pcs of a steel spacer, part SP-1182? It's a simple round spacer, 1.25\" OD x 0.50\" ID x 0.75\" long, 1018 steel, zinc plated.\n\nI'll send the drawing tomorrow when our engineer is back in the office.\n\nThanks,\nSam",
+      "attachments": [],
+      "expected": {"lane": "turning", "note": "Round spacer, new prospect, drawing still to come."}
+    },
+    {
+      "id": "E07",
+      "received": "07:54",
+      "from_name": "Lena Fischer",
+      "from_email": "lfischer@ferroviarobotics.com",
+      "subject": "RFQ: heat sink plate FR-2290",
+      "body": "Hello,\n\nAttached is our heat sink plate FR-2290: 6063 aluminum, pocketed fins, clear anodize. Could you send pricing and lead time?\n\nWe're still finalizing the build plan, so I don't have quantities yet. Please quote your best price breaks.\n\nLena Fischer\nHardware Engineer, Ferrovia Robotics",
+      "attachments": ["FR-2290_heatsink.pdf", "FR-2290_heatsink.step"],
+      "expected": {"lane": "milling_3axis", "note": "Prismatic heat sink; quantity missing."}
+    },
+    {
+      "id": "E08",
+      "received": "08:10",
+      "from_name": "Tony Ruiz",
+      "from_email": "truiz@orrinmotorsports.com",
+      "subject": "URGENT: line down, need 10 gear blanks",
+      "body": "Guys,\n\nOur line is down. We need 10 pcs of the attached gear blank, 4140 pre-hard, ASAP. Ideally shipped by tomorrow.\n\nCan you quote today and tell me how fast you can turn it? We will pay for expedite.\n\nTony Ruiz\nProduction Manager, Orrin Motorsports",
+      "attachments": ["OM-118_gear_blank.pdf"],
+      "expected": {"lane": "turning", "note": "Line-down rush on a turned part."}
+    },
+    {
+      "id": "E09",
+      "received": "08:26",
+      "from_name": "Beth Okafor",
+      "from_email": "bokafor@halvorsenpv.com",
+      "subject": "RE: Quote Q-26-1187 manifold block, Rev D attached",
+      "body": "Hi,\n\nEngineering released Rev D of the valve manifold block HPV-2045. Changes: two ports moved and the bottom face tolerance opened up to +/-0.005.\n\nSame quantity as before, 30 pcs. Please update quote Q-26-1187 against Rev D.\n\nThanks,\nBeth Okafor\nSourcing, Halvorsen Pump & Valve",
+      "attachments": ["HPV-2045_manifold_RevD.pdf", "HPV-2045_manifold_RevD.step"],
+      "expected": {"lane": "milling_3axis", "note": "Revision to an open quote for a prismatic manifold."}
+    },
+    {
+      "id": "E10",
+      "received": "08:41",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "PO 45521 status?",
+      "body": "Hi Priya,\n\nChecking on PO 45521 for the QA-40988 brackets, 100 pcs. Our system shows a promise date of 9/26. Are we still on track?\n\nPlease send tracking once it ships.\n\nThanks,\nRachel",
+      "attachments": [],
+      "expected": {"lane": "orders", "note": "Status request on an open PO."}
+    },
+    {
+      "id": "E11",
+      "received": "09:03",
+      "from_name": "Lena Fischer",
+      "from_email": "lfischer@ferroviarobotics.com",
+      "subject": "PO 7781 for quote Q-26-1120",
+      "body": "Hi,\n\nPlease see the attached PO 7781 for 250 pcs of the FR-1904 motor mount per your quote Q-26-1120.\n\nPlease confirm receipt and your ship date.\n\nLena",
+      "attachments": ["PO_7781.pdf"],
+      "expected": {"lane": "orders", "note": "Purchase order awarding a quote."}
+    },
+    {
+      "id": "E12",
+      "received": "09:17",
+      "from_name": "Supplier Quality",
+      "from_email": "quality@brightwatermed.com",
+      "subject": "Material certs and FAI report for PO 44190",
+      "body": "Hello,\n\nWe received the shipment for PO 44190 yesterday. Please send the material certifications and the first article inspection report so we can close out receiving inspection.\n\nThank you,\nBrightwater Medical Supplier Quality",
+      "attachments": [],
+      "expected": {"lane": "orders", "note": "Paperwork for a shipped order."}
+    },
+    {
+      "id": "E13",
+      "received": "09:32",
+      "from_name": "Kyle Brennan",
+      "from_email": "kbrennan@apexcuttingsupply.com",
+      "subject": "20% off carbide end mills this month",
+      "body": "Hi there,\n\nThis month only, Apex Cutting Supply is offering 20% off all solid carbide end mills and free shipping on orders over $250.\n\nReply to set up a quick call, or visit our online store.\n\nKyle Brennan\nTerritory Sales, Apex Cutting Supply",
+      "attachments": [],
+      "expected": {"lane": "filtered", "note": "Tooling vendor promotion."}
+    },
+    {
+      "id": "E14",
+      "received": "09:50",
+      "from_name": "Jenna Morales",
+      "from_email": "jenna@quotebot-software.com",
+      "subject": "Cut your quoting time by 80% with AI",
+      "body": "Hi,\n\nMachine shops using QuoteBot turn RFQs into quotes in minutes instead of days. Can I show you a 15-minute demo this week?\n\nJenna Morales\nAccount Executive, QuoteBot",
+      "attachments": [],
+      "expected": {"lane": "filtered", "note": "Software sales pitch."}
+    },
+    {
+      "id": "E15",
+      "received": "10:08",
+      "from_name": "Marco Diaz",
+      "from_email": "marco.diaz@example.com",
+      "subject": "Experienced CNC machinist: resume",
+      "body": "Hello,\n\nI'm a CNC machinist with 8 years of experience on Haas and Mazak mills and lathes, including 5-axis setups. I saw your shop is growing and wanted to send my resume. I can start in two weeks.\n\nThank you,\nMarco Diaz",
+      "attachments": ["Marco_Diaz_Resume.pdf"],
+      "expected": {"lane": "filtered", "note": "Job seeker. Mentions machines but is not customer work."}
+    },
+    {
+      "id": "E16",
+      "received": "10:24",
+      "from_name": "Ivy Chen",
+      "from_email": "ichen@arcwrightag.com",
+      "subject": "RFQ: welded frame with machined mounting plate",
+      "body": "Hi,\n\nWe need a quote on a welded steel frame assembly: A36 tube frame, MIG welded, then the mounting plate is machined after welding for flatness, then powder coated. Qty 20. Drawings attached.\n\nCan you handle the fabrication and welding in-house, or would that be outsourced?\n\nIvy Chen\nArcwright Agriculture",
+      "attachments": ["AW-310_frame_assy.pdf"],
+      "expected": {"lane": "review", "note": "Mostly fabrication and welding: a person should decide."}
+    },
+    {
+      "id": "E17",
+      "received": "10:41",
+      "from_name": "Brandon Lee",
+      "from_email": "blee@lumenfieldsolar.com",
+      "subject": "Can you make these?",
+      "body": "Hey,\n\nI have a few parts we need made, some aluminum and some plastic. Pictures are on our shared drive: https://share.lumenfieldsolar.com/parts-pics\n\nCan you do this kind of work? What would something like this cost?\n\nBrandon",
+      "attachments": [],
+      "expected": {"lane": "review", "note": "Vague capability question, no specs."}
+    },
+    {
+      "id": "E18",
+      "received": "11:02",
+      "from_name": "Victor Almeida",
+      "from_email": "valmeida@quillonaero.com",
+      "subject": "RFQ 26-0419: wing rib fitting, 7050-T7451",
+      "body": "Please quote the attached wing rib fitting, P/N QA-50331 Rev A.\n\n7050-T7451 plate, thin walls and contoured pockets on multiple faces, 5-axis required. AS9100 and FAIR per AS9102.\n\nQty 8 for the first article lot, then about 40 per year. Quote requested by 10/10.\n\nVictor Almeida\nCommodity Manager, Machined Structures\nQuillon Aerospace",
+      "attachments": ["QA-50331_A.pdf", "QA-50331_A.stp"],
+      "expected": {"lane": "milling_5axis", "note": "Aerospace structural fitting, multi-face contours."}
+    },
+    {
+      "id": "E19",
+      "received": "11:23",
+      "from_name": "Hannah Ortiz",
+      "from_email": "hortiz@northpeakenergy.com",
+      "subject": "Swiss-turned brass contact pins, 10k/yr",
+      "body": "Hello,\n\nWe're looking for a new source for a brass contact pin: C360 brass, 0.062\" diameter x 0.450\" long, with a small groove and a chamfer, gold flash plated.\n\nAnnual volume is around 10,000 pcs with a first release of 2,500. Drawing attached. Please quote with and without plating.\n\nHannah Ortiz\nSourcing Specialist, NorthPeak Energy",
+      "attachments": ["NPE-0062_pin.pdf"],
+      "expected": {"lane": "turning", "note": "Swiss-type part, production volume, new prospect."}
+    },
+    {
+      "id": "E20",
+      "received": "11:48",
+      "from_name": "Alicia Moreno",
+      "from_email": "amoreno@ferroviarobotics.com",
+      "subject": "Blanket pricing for 3 enclosure covers",
+      "body": "Hi,\n\nWe'd like 12-month blanket pricing for three aluminum enclosure covers (FR-3101, FR-3102, FR-3103). 6061-T6, machined on the top and bottom faces, clear chem film.\n\nAnnual usage is about 2,000 pcs each, released monthly. Drawings attached.\n\nAlicia Moreno\nBuyer, Ferrovia Robotics",
+      "attachments": ["FR-3101.pdf", "FR-3102.pdf", "FR-3103.pdf"],
+      "expected": {"lane": "milling_3axis", "note": "Production blanket on prismatic covers."}
+    }
+  ],
+  "paste_examples": [
+    {
+      "label": "ITAR notice hidden in the signature",
+      "from_name": "Chris Novak",
+      "from_email": "cnovak@ridgebackuav.com",
+      "subject": "Quote: bracket set for new airframe",
+      "body": "Hi,\n\nCan you quote the attached bracket set, 6 unique brackets, 6061-T6, 10 of each? Nothing fancy, standard tolerances, clear anodize.\n\nThanks,\nChris Novak\nManufacturing Engineer, Ridgeback UAV\n\nWARNING: This email and its attachments contain technical data whose export is restricted by the Arms Export Control Act and the International Traffic in Arms Regulations (ITAR). Do not share with foreign persons without an export license.",
+      "attachments": ["RB-100_bracket_set.pdf", "RB-100_bracket_set.step"]
+    },
+    {
+      "label": "Status question with a new RFQ tucked inside",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "RE: PO 44810 shipped?",
+      "body": "Hi Priya,\n\nDid PO 44810 ship yesterday? I didn't see tracking come through.\n\nAlso, while I have you: could you quote 40 pcs of the attached 17-4 PH shaft? Drawing attached, H1025 heat treat. No rush on that one.\n\nThanks,\nRachel",
+      "attachments": ["QA-60112_shaft.pdf"]
+    },
+    {
+      "label": "Plain-language RFQ from a new prospect",
+      "from_name": "Maya Brooks",
+      "from_email": "maya@desertbloomcoffee.com",
+      "subject": "Parts for our espresso machines",
+      "body": "Hello! We build small-batch espresso machines here in Tempe. We need 150 stainless steel group head rings, basically a round ring with a thread on the inside. I've attached our CAD file. Could you give us a price? We'd love to have them in about a month.\n\nMaya",
+      "attachments": ["group_head_ring_v3.step"]
+    }
+  ]
+}

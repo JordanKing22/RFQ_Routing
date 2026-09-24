@@ -1,0 +1,85 @@
+{
+  "brand": {
+    "product": "RFQ Router",
+    "by": "Lead Time Labs",
+    "powered_by": "Jev by TypeSafe AI"
+  },
+  "shop": {
+    "name": "Mesa Ridge Precision",
+    "location": "Phoenix, AZ",
+    "inbox": "quotes@mesaridgeprecision.com",
+    "disclaimer": "Demo shop. All companies, people, and emails are fictional."
+  },
+  "lanes": {
+    "estimating": [
+      {
+        "id": "milling_3axis",
+        "name": "3-Axis Milling",
+        "owner": "Maria Gonzalez",
+        "role": "Estimator",
+        "jev_description": "Prismatic parts machined mostly from a few sides on a 3-axis mill: plates, brackets, blocks, covers, enclosures, housings, manifolds, fixtures, and heat sinks."
+      },
+      {
+        "id": "milling_5axis",
+        "name": "5-Axis & Complex",
+        "owner": "Dave Thornton",
+        "role": "Senior Estimator",
+        "jev_description": "Complex parts that need 4- or 5-axis simultaneous milling: contoured or sculpted surfaces, compound angles, thin walls on many faces, impellers, aerospace structural fittings, and medical instrument or implant parts."
+      },
+      {
+        "id": "turning",
+        "name": "Turning & Swiss",
+        "owner": "Luis Ortega",
+        "role": "Estimator",
+        "jev_description": "Round parts made on a CNC lathe or Swiss-type lathe: shafts, pins, bushings, spacers, fittings, threaded parts, and gear blanks."
+      }
+    ],
+    "itar": {
+      "id": "itar",
+      "name": "ITAR / CUI Restricted",
+      "owner": "Karen Walsh",
+      "role": "Export-controlled quoting, U.S. persons only"
+    },
+    "orders": {
+      "id": "orders",
+      "name": "Orders & Customer Service",
+      "owner": "Priya Nair",
+      "role": "Customer Service"
+    },
+    "review": {
+      "id": "review",
+      "name": "Needs Human Review",
+      "owner": "Tom Becker",
+      "role": "Quoting Manager"
+    },
+    "filtered": {
+      "id": "filtered",
+      "name": "Filtered: Not Customer Work",
+      "owner": "Auto-archive",
+      "role": "No reply"
+    }
+  },
+  "customers": [
+    {"domain": "quillonaero.com", "name": "Quillon Aerospace", "tier": "A", "account_manager": "Tom Becker"},
+    {"domain": "brightwatermed.com", "name": "Brightwater Medical", "tier": "A", "account_manager": "Tom Becker"},
+    {"domain": "sablecreekdefense.com", "name": "Sable Creek Defense Systems", "tier": "A", "account_manager": "Karen Walsh"},
+    {"domain": "halvorsenpv.com", "name": "Halvorsen Pump & Valve", "tier": "B", "account_manager": "Priya Nair"},
+    {"domain": "ferroviarobotics.com", "name": "Ferrovia Robotics", "tier": "B", "account_manager": "Priya Nair"},
+    {"domain": "tessaractoptics.com", "name": "Tessaract Optics", "tier": "B", "account_manager": "Karen Walsh"},
+    {"domain": "orrinmotorsports.com", "name": "Orrin Motorsports", "tier": "C", "account_manager": "Priya Nair"}
+  ],
+  "thresholds": {
+    "email_type_confidence": 0.5,
+    "process_confidence": 0.5,
+    "export_control_restrict": 0.5,
+    "itar_exempt_confidence": 0.8,
+    "export_control_warn": 0.2,
+    "rush_score": 2.3,
+    "soon_score": 1.5,
+    "quantity_given": 0.5,
+    "drawings_provided": 0.5,
+    "outside_processing": 0.6,
+    "volume_confidence": 0.35
+  },
+  "sla_business_days": {"P1": 0, "P2": 2, "P3": 5}
+}

@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFQ Router · Jev demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f5f1;
+  --surface: #ffffff;
+  --surface-2: #fbfaf8;
+  --ink: #16181c;
+  --ink-2: #4a4d55;
+  --muted: #7d8089;
+  --line: #e7e5df;
+  --line-2: #d8d5cd;
+  --blue: #2a78d6;
+  --blue-strong: #1c5cab;
+  --blue-soft: #9ec5f4;
+  --blue-track: #e3eefb;
+  --orange: #eb6834;
+  --aqua: #1baf7a;
+  --amber: #fab219;
+  --good: #0ca30c;
+  --good-text: #006300;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(22,24,28,.06), 0 1px 1px rgba(22,24,28,.04);
+  --shadow-lg: 0 18px 50px rgba(22,24,28,.18), 0 2px 6px rgba(22,24,28,.08);
+  --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 14px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.sm { width: 13px; height: 13px; }
+svg.i.lg { width: 20px; height: 20px; }
+
+/* ---------- top bar ---------- */
+.top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: rgba(255,255,255,.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { width: 30px; height: 30px; border-radius: 8px; background: var(--ink); display: grid; place-items: center; flex: none; }
+.brand-name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; white-space: nowrap; }
+.brand-sep { width: 1px; height: 22px; background: var(--line-2); }
+.shop { display: flex; flex-direction: column; min-width: 0; }
+.shop b { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.shop span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.demo-pill { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px; }
+.spacer { flex: 1; }
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 5px 12px 5px 10px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--good); }
+.dot.warn { background: var(--amber); }
+.dot.bad { background: var(--critical); }
+.dot.live { background: var(--orange); animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.actions { display: flex; gap: 8px; }
+.btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.btn:hover { background: #f3f2ee; }
+.btn:focus-visible, .card:focus-visible, .row:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+.btn.primary:hover { background: #2a2d33; }
+.btn.primary .play { color: var(--orange); fill: var(--orange); stroke: var(--orange); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: #efeee9; }
+.btn.icon { width: 36px; padding: 0; justify-content: center; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn.small { height: 30px; padding: 0 10px; font-size: 12px; }
+
+/* ---------- banner ---------- */
+.banner { display: none; margin: 16px 24px 0; padding: 12px 14px; border-radius: var(--radius); border: 1px solid; gap: 12px; align-items: flex-start; }
+.banner.show { display: flex; }
+.banner.warn { background: #fff8e6; border-color: #f3d68a; }
+.banner.warn .bicon { color: #9a6a00; }
+.banner.bad { background: #fdf0f0; border-color: #f0b9b9; }
+.banner.bad .bicon { color: var(--critical); }
+.banner.info { background: #eef5fd; border-color: #c4dbf6; }
+.banner.info .bicon { color: var(--blue-strong); }
+.banner .btitle { font-weight: 600; }
+.banner .bbody { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.banner .bmain { flex: 1; min-width: 0; }
+.countdown { font-variant-numeric: tabular-nums; font-weight: 700; }
+
+/* ---------- stats ---------- */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; padding: 16px 24px 0; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.tile .label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.tile .value { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin-top: 2px; white-space: nowrap; }
+.tile .value small { font-size: 14px; color: var(--muted); font-weight: 500; }
+.tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.hidden { display: none; }
+
+/* ---------- layout ---------- */
+.main { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; padding: 16px 24px 24px; align-items: start; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.panel-head .count { font-size: 12px; color: var(--muted); }
+.panel-head .addr { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- inbox ---------- */
+.inbox { position: sticky; top: 76px; max-height: calc(100vh - 92px); display: flex; flex-direction: column; }
+.inbox-list { overflow-y: auto; }
+.row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; background: var(--surface); width: 100%; text-align: left; border-left: 0; border-right: 0; border-top: 0; }
+.row:hover { background: #f9f8f5; }
+.row.sel { background: #eef5fd; }
+.row .st { margin-top: 4px; display: grid; place-items: center; }
+.row .line1 { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--ink-2); }
+.row .line1 .who { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .line1 .org { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.row .line1 .time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.row .subj { font-size: 13px; font-weight: 600; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .snip { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.row .dest { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.row .dest .lname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.done .subj { font-weight: 500; }
+.st-idle { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--line-2); }
+.st-queued { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); animation: pulse 1.1s infinite; }
+.spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--blue-track); border-top-color: var(--blue); animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.st-err { color: var(--critical); }
+.clip { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 11px; flex: none; }
+
+/* lane markers */
+.mk { width: 9px; height: 9px; border-radius: 2px; flex: none; background: var(--muted); }
+.mk.estimating { background: var(--blue); }
+.mk.itar { background: var(--ink); }
+.mk.orders { background: var(--aqua); }
+.mk.review { background: var(--amber); }
+.mk.filtered { background: #b7b4ab; }
+
+/* ---------- board ---------- */
+.board { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; }
+.group-head h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+.group-head span { font-size: 12px; color: var(--muted); }
+.lanes { display: grid; gap: 12px; }
+.lanes.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lane { background: #efeee9; border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 170px; min-width: 0; }
+.lane.itar { background: #ebecee; border-color: #d6d8dc; }
+.lane-head { padding: 10px 12px 8px; }
+.lane-title { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; min-width: 0; }
+.lane-title .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane-title .n { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; min-width: 22px; text-align: center; }
+.lane-owner { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cards { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
+.empty { font-size: 12px; color: var(--muted); padding: 14px 8px; text-align: center; border: 1px dashed var(--line-2); border-radius: 8px; margin: 0 8px 8px; }
+
+.card { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 9px; box-shadow: var(--shadow); cursor: pointer; text-align: left; width: 100%; }
+.card:hover { border-color: var(--line-2); box-shadow: 0 3px 10px rgba(22,24,28,.08); }
+.card.sel { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.card.fresh { animation: arrive .55s cubic-bezier(.2,.8,.2,1), glow 1.6s ease-out; }
+.card.moved { animation: glow 1.4s ease-out; }
+@keyframes arrive { from { opacity: 0; transform: translateX(-14px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes glow { 0% { box-shadow: 0 0 0 3px rgba(235,104,52,.45); } 100% { box-shadow: var(--shadow); } }
+.card .ctop { display: flex; gap: 6px; align-items: flex-start; }
+.card .csubj { font-size: 13px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .corg { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; gap: 6px; align-items: center; min-width: 0; }
+.card .corg .o { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.card .cfoot { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.key-mark { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface); }
+.key-mark.ok { background: var(--good); }
+.key-mark.bad { background: var(--critical); }
+
+/* badges */
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; line-height: 1; padding: 4px 6px; border-radius: 5px; border: 1px solid var(--line); background: #f3f2ee; color: var(--ink-2); white-space: nowrap; }
+.badge.restricted { background: var(--ink); border-color: var(--ink); color: #fff; }
+.badge.serious { background: #fdece4; border-color: #f4c6b2; color: #983915; }
+.badge.warning { background: #fff5d9; border-color: #f1d690; color: #6f4b00; }
+.badge.tier { background: #e8f0fc; border-color: #c9dcf6; color: var(--blue-strong); }
+.badge.prospect { background: #e6f5ee; border-color: #bfe5d2; color: #0b6b47; }
+.prio { font-size: 10px; font-weight: 700; letter-spacing: .02em; padding: 3px 5px; border-radius: 4px; flex: none; margin-top: 1px; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface-2); }
+.prio.P1 { background: #fdece4; border-color: #f4c6b2; color: #983915; }
+.prio.P2 { background: #e8f0fc; border-color: #c9dcf6; color: var(--blue-strong); }
+
+/* meter */
+.meter { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--blue-track); }
+.meter .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--blue); }
+.meter .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); border-radius: 1px; opacity: .75; }
+.meter.ink { background: #dcdde1; }
+.meter.ink .fill { background: var(--ink); }
+.mval { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink-2); flex: none; }
+
+/* how-it-works (empty board) */
+.how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.how .step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
+.how .num { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.how h4 { margin: 10px 0 4px; font-size: 14px; }
+.how p { margin: 0; color: var(--ink-2); font-size: 13px; }
+
+/* ---------- drawer ---------- */
+.scrim { position: fixed; inset: 0; background: rgba(22,24,28,.28); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 40; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 50; transform: translateX(104%); transition: transform .22s cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; }
+.drawer.show { transform: none; }
+.dhead { display: flex; gap: 12px; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+.dhead h2 { margin: 0; font-size: 17px; line-height: 1.3; letter-spacing: -.01em; }
+.dhead .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.dbody { overflow-y: auto; padding: 16px 20px 28px; flex: 1; }
+.sec { margin-top: 18px; }
+.sec:first-child { margin-top: 0; }
+.sec-title { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.sec-title .aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.decision { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; background: var(--surface-2); }
+.decision .dest { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
+.decision .owner { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.decision .reason { font-size: 13px; margin-top: 8px; }
+.decision .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
+.trace { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.trace li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 8px 0 0; font-size: 13px; }
+.trace .tk { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+.trace .tk.pass { background: #e3f4e3; color: var(--good-text); }
+.trace .tk.stop { background: #e3eefb; color: var(--blue-strong); }
+.trace .tk.warn { background: #fff5d9; color: #6f4b00; }
+.trace .tk.info, .trace .tk.done, .trace .tk.review { background: #efeee9; color: var(--ink-2); }
+.trace b { font-weight: 600; }
+.trace .td { color: var(--ink-2); }
+
+.q { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.q-head { display: flex; align-items: baseline; gap: 8px; }
+.q-head .ql { font-weight: 600; font-size: 13px; }
+.q-head .qt { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.q-head .qa { margin-left: auto; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.opt { display: grid; grid-template-columns: 150px minmax(0, 1fr) 40px; gap: 10px; align-items: center; font-size: 12px; margin-top: 6px; }
+.opt .on { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opt.win .on { color: var(--ink); font-weight: 600; }
+.opt .pv { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.opt.win .pv { color: var(--ink); font-weight: 600; }
+.bar { position: relative; height: 8px; border-radius: 4px; background: var(--blue-track); }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--blue-soft); min-width: 2px; }
+.opt.win .bar .fill { background: var(--blue); }
+.bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .7; border-radius: 1px; }
+.q-foot { font-size: 11px; color: var(--muted); margin-top: 7px; }
+
+.draft { width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--line-2); border-radius: 8px; padding: 10px 12px; background: var(--surface-2); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.action-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.email-body { white-space: pre-wrap; font-size: 13px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-wrap: anywhere; }
+.atts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.att { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--surface); }
+.att.cad { border-color: #c9dcf6; background: #f1f6fd; }
+.kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px 12px; font-size: 12px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.status-box { display: flex; gap: 10px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-size: 13px; }
+.err-box { padding: 12px 14px; border: 1px solid #f0b9b9; background: #fdf0f0; border-radius: var(--radius); font-size: 13px; }
+
+/* settings */
+.set-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.set-row:last-child { border-bottom: 0; }
+.set-row label { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.set-row .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.range { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.range input[type=range] { flex: 1; accent-color: var(--ink); }
+.range .rv { font-variant-numeric: tabular-nums; font-weight: 700; width: 44px; text-align: right; }
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.switch input { width: 16px; height: 16px; accent-color: var(--ink); }
+.qlist .qi { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.qlist .qi:last-child { border-bottom: 0; }
+.qlist .qn { font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+.qlist .qins { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.qlist details { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.qlist details li { margin: 2px 0; }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; background: #f1f0ec; padding: 1px 5px; border-radius: 4px; }
+
+/* modal */
+.modal { position: fixed; left: 50%; top: 50%; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; transform: translate(-50%, -48%) scale(.98); opacity: 0; pointer-events: none; transition: all .18s; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 60; }
+.modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+.mhead { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.mhead h2 { margin: 0; font-size: 16px; }
+.mbody { padding: 16px 20px; display: grid; gap: 12px; }
+.field label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.field input, .field textarea, .field select { width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+.field textarea { min-height: 170px; resize: vertical; line-height: 1.5; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mfoot { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 20px; border-top: 1px solid var(--line); }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow-lg); transition: all .2s; z-index: 70; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+
+@media (min-width: 981px) {
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .top, .banner, .stats, footer { flex: none; }
+  .main { flex: 1; min-height: 0; align-items: stretch; padding-bottom: 12px; }
+  .inbox { position: static; max-height: none; height: 100%; min-height: 0; }
+  .inbox-list { flex: 1; min-height: 0; }
+  .board { height: 100%; min-height: 0; overflow-y: auto; padding: 0 6px 12px 0; }
+  footer { padding: 0 24px 10px; }
+}
+@media (max-width: 1180px) { .lanes.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); } .conn .long { display: none; } }
+@media (max-width: 980px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .inbox { position: static; max-height: 420px; }
+  .how { grid-template-columns: minmax(0, 1fr); }
+  .lanes.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .top { flex-wrap: wrap; }
+  .conn { display: none; }
+}
+@media (max-width: 640px) {
+  .top, .stats, .main, footer { padding-left: 16px; padding-right: 16px; }
+  .banner { margin-left: 16px; margin-right: 16px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lanes.four, .lanes.three { grid-template-columns: minmax(0, 1fr); }
+  .brand-sep, .shop { display: none; }
+  .actions .label { display: none; }
+  .two { grid-template-columns: 1fr; }
+  .opt { grid-template-columns: 96px minmax(0, 1fr) 36px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eb6834" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l7 7-7 7"/><path d="M13 5l7 7-7 7" stroke="#ffffff"/></svg>
+    </div>
+    <div class="brand-name" id="product">RFQ Router</div>
+    <div class="brand-sep"></div>
+    <div class="shop"><b id="shopName">Shop</b><span id="shopSub"></span></div>
+    <span class="demo-pill">Demo</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="conn" id="conn" title=""><span class="dot" id="connDot"></span><span id="connText">Connecting</span></div>
+  <div class="actions">
+    <button class="btn primary" id="routeBtn"></button>
+    <button class="btn" id="pasteBtn"><svg class="i"><use href="#i-paste"/></svg><span class="label">Paste an RFQ</span></button>
+    <button class="btn ghost" id="resetBtn" title="Clear the board. Saved Jev results replay instantly."><svg class="i"><use href="#i-reset"/></svg><span class="label">Reset</span></button>
+    <button class="btn ghost icon" id="settingsBtn" title="Settings and rules" aria-label="Settings and rules"><svg class="i"><use href="#i-sliders"/></svg></button>
+  </div>
+</header>
+
+<div class="banner" id="banner" role="status" aria-live="polite"></div>
+
+<section class="stats" id="stats" aria-label="Routing summary"></section>
+
+<main class="main">
+  <section class="panel inbox" aria-label="Inbox">
+    <div class="panel-head">
+      <svg class="i"><use href="#i-inbox"/></svg>
+      <h2>Inbox</h2><span class="count" id="inboxCount"></span>
+      <span class="addr" id="inboxAddr"></span>
+    </div>
+    <div class="inbox-list" id="inboxList"></div>
+  </section>
+  <section class="board" id="board" aria-label="Routing board"></section>
+</main>
+<footer id="footer"></footer>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Details" aria-hidden="true"></aside>
+
+<div class="modal" id="pasteModal" role="dialog" aria-modal="true" aria-labelledby="pasteTitle">
+  <div class="mhead">
+    <svg class="i lg"><use href="#i-paste"/></svg>
+    <h2 id="pasteTitle">Paste an RFQ</h2>
+    <div class="spacer"></div>
+    <button class="btn ghost icon" data-close="paste" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <form id="pasteForm">
+    <div class="mbody">
+      <div class="field">
+        <label for="pExample">Start from an example (optional)</label>
+        <select id="pExample"></select>
+      </div>
+      <div class="two">
+        <div class="field"><label for="pName">From name</label><input id="pName" autocomplete="off" placeholder="Jane Smith"></div>
+        <div class="field"><label for="pEmail">From email</label><input id="pEmail" autocomplete="off" placeholder="jane@customer.com"></div>
+      </div>
+      <div class="field"><label for="pSubject">Subject</label><input id="pSubject" autocomplete="off" placeholder="RFQ: bracket, 6061-T6, qty 50"></div>
+      <div class="field"><label for="pBody">Email body</label><textarea id="pBody" placeholder="Paste the email text here"></textarea></div>
+      <div class="field"><label for="pAtt">Attachment file names (comma separated)</label><input id="pAtt" autocomplete="off" placeholder="part_revA.pdf, part_revA.step"></div>
+    </div>
+    <div class="mfoot">
+      <button type="button" class="btn ghost" data-close="paste">Cancel</button>
+      <button type="submit" class="btn primary"><svg class="i play"><use href="#i-play"/></svg>Route with Jev</button>
+    </div>
+  </form>
+</div>
+<div class="toast" id="toast"></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 4 14 12 14 11 22 20 10 12 10 13 2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+  </defs>
+</svg>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = (x) => (x == null || isNaN(x) ? "n/a" : Math.round(x * 100) + "%");
+const ic = (name, cls = "") => `<svg class="i ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const URGENCY_LEVELS = ["No deadline", "Normal", "Soon", "Emergency"];
+const LANE_ICON = { itar: "lock", orders: "package", review: "eye", filtered: "archive" };
+const NOUL_BAR = { export_controlled: "export_control_restrict", quantity_given: "quantity_given", drawings_provided: "drawings_provided", outside_processing: "outside_processing" };
+
+const S = {
+  boot: null, state: null, lanes: {}, emails: {}, selected: null, drawer: null,
+  revealed: new Set(), queue: [], revealedAt: {}, movedAt: {}, laneOf: {},
+  useCache: true, showKey: false, lastVersion: -1, revealTimer: null, clockOffset: 0,
+  offline: false, testResult: null, drawerVersion: null,
+};
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && !data.ok) throw Object.assign(new Error(data?.error?.message || data?.error || res.statusText), { data });
+  return data;
+}
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+function money(v) {
+  if (v == null) return "n/a";
+  if (v === 0) return "$0.00";
+  if (v < 0.01) return "$" + v.toFixed(5);
+  return "$" + v.toFixed(3);
+}
+
+function orgOf(email, decision) {
+  if (decision && decision.customer) return decision.customer.name;
+  const cust = (S.boot.customers || {})[(email.from_email || "").split("@").pop().toLowerCase()];
+  if (cust) return cust.name;
+  return (email.from_email || "").split("@").pop();
+}
+
+function laneGroupClass(laneId) {
+  const lane = S.lanes[laneId];
+  if (!lane) return "";
+  return lane.group === "estimating" && laneId !== "itar" ? "estimating" : laneId;
+}
+
+function marker(laneId) {
+  return `<span class="mk ${laneGroupClass(laneId)}" aria-hidden="true"></span>`;
+}
+
+/* ---------------------------------------------------------------- init */
+async function init() {
+  const boot = await api("/api/bootstrap");
+  S.boot = boot;
+  boot.customers = boot.customers || {};
+  for (const lane of boot.lanes) S.lanes[lane.id] = lane;
+  for (const e of boot.emails) S.emails[e.id] = e;
+  try { S.useCache = localStorage.getItem("rfq.useCache") !== "0"; S.showKey = localStorage.getItem("rfq.showKey") === "1"; } catch (e) {}
+  $("#product").textContent = boot.brand.product || "RFQ Router";
+  $("#shopName").textContent = boot.shop.name;
+  $("#shopSub").textContent = `${boot.shop.location} · ${boot.shop.inbox}`;
+  $("#inboxAddr").textContent = boot.shop.inbox;
+  document.title = `${boot.brand.product || "RFQ Router"} · ${boot.shop.name}`;
+  $("#footer").innerHTML = `<span><b>Jev</b> (TypeSafe AI) makes the judgment calls. Plain code applies the routing rules.</span><span>${esc(boot.shop.disclaimer || "")}</span><span>Built by ${esc(boot.brand.by || "")}</span>`;
+  buildPasteExamples();
+  renderConn();
+  applyState(boot.state, true);
+  poll();
+  bindEvents();
+}
+
+function renderConn() {
+  const j = S.boot.jev;
+  const dot = $("#connDot"), text = $("#connText"), conn = $("#conn");
+  const w = S.state ? S.state.worker : null;
+  if (S.offline) { dot.className = "dot bad"; text.textContent = "Demo server not responding"; return; }
+  if (!j.configured) { dot.className = "dot warn"; text.innerHTML = "No Jev key found"; conn.title = "Add AI_GATEWAY_API_KEY to Jev_Test/.env"; return; }
+  conn.title = `${j.provider}\n${j.endpoint}\nKey ${j.key_env}: ${j.key_hint}`;
+  let cls = "dot ok", label = `Jev <span class="long">· ${esc(j.provider)} · </span>${esc(j.model)}`;
+  if (w && w.state === "running") cls = "dot live";
+  else if (w && w.state === "waiting") cls = "dot warn";
+  else if (w && w.state === "stopped") cls = "dot bad";
+  else if (!(w && w.calls)) cls = "dot";
+  dot.className = cls; text.innerHTML = label;
+}
+
+function bindEvents() {
+  $("#routeBtn").addEventListener("click", onRoute);
+  $("#pasteBtn").addEventListener("click", openPaste);
+  $("#resetBtn").addEventListener("click", async () => {
+    const st = await api("/api/reset", {});
+    S.revealed.clear(); S.queue = []; S.revealedAt = {}; S.movedAt = {}; S.laneOf = {};
+    applyState(st.state, true);
+    toast("Board cleared. Route inbox again to replay.");
+  });
+  $("#settingsBtn").addEventListener("click", () => openDrawer("settings"));
+  $("#scrim").addEventListener("click", closeOverlays);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlays(); });
+  document.querySelectorAll("[data-close=paste]").forEach((b) => b.addEventListener("click", closePaste));
+  $("#pasteForm").addEventListener("submit", submitPaste);
+  $("#pExample").addEventListener("change", fillExample);
+  $("#inboxList").addEventListener("click", (e) => { const r = e.target.closest("[data-id]"); if (r) select(r.dataset.id); });
+  $("#board").addEventListener("click", (e) => { const c = e.target.closest("[data-id]"); if (c) select(c.dataset.id); });
+  const keySelect = (e) => { if (e.key !== "Enter" && e.key !== " ") return; const t = e.target.closest("[data-id]"); if (t) { e.preventDefault(); select(t.dataset.id); } };
+  $("#inboxList").addEventListener("keydown", keySelect);
+  $("#board").addEventListener("keydown", keySelect);
+}
+
+/* ---------------------------------------------------------------- state */
+async function poll() {
+  try {
+    const st = await api("/api/state");
+    if (S.offline) { S.offline = false; }
+    applyState(st);
+  } catch (e) {
+    S.offline = true; renderConn(); renderBanner();
+  }
+  const w = S.state && S.state.worker;
+  const active = (w && (w.state === "running" || w.state === "waiting")) || S.queue.length;
+  setTimeout(poll, active ? 400 : 1500);
+}
+
+function applyState(st, force) {
+  S.state = st;
+  S.clockOffset = st.worker.now * 1000 - Date.now();
+  if (st.order.some((id) => !S.emails[id])) { refreshEmails(); }
+  if (force || st.version !== S.lastVersion) {
+    S.lastVersion = st.version;
+    for (const id of st.order) {
+      const it = st.items[id];
+      const done = it && it.status === "done" && it.decision;
+      if (done && !S.revealed.has(id) && !S.queue.includes(id)) S.queue.push(id);
+      if (!done && S.revealed.has(id)) { S.revealed.delete(id); delete S.laneOf[id]; }
+      if (done && S.revealed.has(id)) {
+        const lane = it.decision.lane;
+        if (S.laneOf[id] && S.laneOf[id] !== lane) S.movedAt[id] = performance.now();
+        S.laneOf[id] = lane;
+      }
+    }
+    S.queue = S.queue.filter((id) => st.items[id] && st.items[id].status === "done");
+    renderAll();
+  }
+  renderBanner();
+  renderConn();
+  pumpReveal();
+}
+
+async function refreshEmails() {
+  if (S.refreshing) return;
+  S.refreshing = true;
+  try {
+    const boot = await api("/api/bootstrap");
+    for (const e of boot.emails) S.emails[e.id] = e;
+    renderAll();
+  } finally { S.refreshing = false; }
+}
+
+function pumpReveal() {
+  if (S.revealTimer || !S.queue.length) return;
+  const step = () => {
+    const id = S.queue.shift();
+    if (id) {
+      S.revealed.add(id); S.revealedAt[id] = performance.now();
+      S.laneOf[id] = S.state.items[id].decision.lane;
+      renderAll();
+    }
+    if (S.queue.length) S.revealTimer = setTimeout(step, S.queue.length > 8 ? 110 : 190);
+    else S.revealTimer = null;
+  };
+  step();
+}
+
+function renderAll() {
+  renderRouteBtn(); renderStats(); renderInbox(); renderBoard();
+  if (S.drawer === "email") renderEmailDrawer(false);
+  if (S.drawer === "settings") updateSettings();
+}
+
+/* ---------------------------------------------------------------- top */
+function renderRouteBtn() {
+  const w = S.state.worker, b = $("#routeBtn");
+  const busy = w.state === "running" || w.state === "waiting" || w.queue_length > 0;
+  b.innerHTML = busy ? `${ic("stop")}<span class="label">Stop</span>` : `${ic("play", "play")}<span class="label">Route inbox</span>`;
+  b.className = busy ? "btn" : "btn primary";
+  b.dataset.busy = busy ? "1" : "";
+}
+
+async function onRoute() {
+  if (Date.now() < (S.routeLock || 0)) return;  // a double-click must not start and then stop
+  S.routeLock = Date.now() + 800;
+  const b = $("#routeBtn");
+  if (b.dataset.busy) { const st = await api("/api/stop", {}); applyState(st.state, true); toast("Stopped. Everything routed so far is saved."); return; }
+  const ids = S.state.order.filter((id) => ["idle", "error"].includes(S.state.items[id].status));
+  if (!ids.length) { toast("Everything is routed. Press Reset to replay the demo."); return; }
+  try {
+    const r = await api("/api/run", { ids, use_cache: S.useCache });
+    applyState(r.state, true);
+    if (r.cached && !r.queued) toast(`Replaying ${r.cached} saved Jev results`);
+    else if (r.queued) toast(`Sending ${r.queued} email${r.queued === 1 ? "" : "s"} to Jev${r.cached ? `, replaying ${r.cached} saved` : ""}`);
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------------------------------------------------------------- stats */
+function visibleDone() {
+  return S.state.order.filter((id) => S.revealed.has(id) && S.state.items[id].decision);
+}
+
+function renderStats() {
+  const ids = visibleDone(), st = S.state, total = st.order.length;
+  let auto = 0, review = 0, match = 0, graded = 0, cost = 0, listPrice = 0, reported = false;
+  const lat = [];
+  for (const id of ids) {
+    const it = st.items[id], d = it.decision;
+    if (d.lane === "review") review++; else auto++;
+    if (d.matches_expected != null) { graded++; if (d.matches_expected) match++; }
+    if (it.jev) {
+      if (it.jev.latency_ms) lat.push(it.jev.latency_ms);
+      cost += it.jev.cost_usd || 0; listPrice += it.jev.list_price_usd || 0;
+      if (!it.jev.cost_is_estimate) reported = true;
+    }
+  }
+  lat.sort((a, b) => a - b);
+  const med = lat.length ? lat[Math.floor(lat.length / 2)] : null;
+  let costSub = "at $0.042 per 1M input tokens";
+  if (ids.length && reported && cost === 0) costSub = `free promo · list price ${money(listPrice)}`;
+  else if (ids.length && reported) costSub = "reported by AI Gateway";
+  else if (ids.length) costSub = "estimated at list price";
+  const tiles = [
+    { label: "Routed", value: `${ids.length}<small> / ${total}</small>`, sub: ids.length ? `${ids.length} sorted by Jev` : "Nothing routed yet" },
+    { label: "Auto-routed", value: ids.length ? pct(auto / ids.length) : "n/a", sub: ids.length ? `${review} sent to a person` : "Low-confidence mail goes to review" },
+    { label: "Median Jev response", value: med == null ? "n/a" : `${Math.round(med)}<small> ms</small>`, sub: `${S.boot.questions.length} questions per email, one call` },
+    { label: "Jev cost so far", value: ids.length ? money(reported && cost === 0 ? 0 : (cost || listPrice)) : "$0.00", sub: costSub },
+    { label: "Answer key", value: graded ? `${match}<small> / ${graded}</small>` : "n/a", sub: graded ? "matches the expected route" : "Scored against the demo key", hidden: !S.showKey },
+  ];
+  $("#stats").innerHTML = tiles.map((t) => `<div class="tile${t.hidden ? " hidden" : ""}"><div class="label">${t.label}</div><div class="value">${t.value}</div><div class="sub">${esc(t.sub)}</div></div>`).join("");
+}
+
+/* ---------------------------------------------------------------- inbox */
+function statusIcon(id) {
+  const it = S.state.items[id];
+  if (!it) return `<span class="st-idle"></span>`;
+  if (it.status === "done" && S.revealed.has(id)) return marker(it.decision.lane);
+  if (it.status === "running" || (it.status === "done" && !S.revealed.has(id))) return `<span class="spin" aria-label="Routing"></span>`;
+  if (it.status === "queued") return `<span class="st-queued" aria-label="Queued"></span>`;
+  if (it.status === "error") return `<span class="st-err">${ic("alert", "sm")}</span>`;
+  return `<span class="st-idle" aria-label="Not routed"></span>`;
+}
+
+function renderInbox() {
+  const st = S.state;
+  $("#inboxCount").textContent = `${st.order.length}`;
+  $("#inboxList").innerHTML = st.order.map((id) => {
+    const e = S.emails[id]; if (!e) return "";
+    const it = st.items[id], shown = it.status === "done" && S.revealed.has(id);
+    const d = shown ? it.decision : null;
+    const att = (e.attachments || []).length;
+    let dest = "";
+    if (d) dest = `<span class="dest">${ic("arrow", "sm")}${marker(d.lane)}<span class="lname">${esc(d.lane_name)}</span>${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}</span>`;
+    else if (it.status === "error") dest = `<span class="dest" style="color:var(--critical)">${esc((it.error && it.error.message) || "Error")}</span>`;
+    else if (it.status === "queued") dest = `<span class="snip">Queued for Jev</span>`;
+    else if (it.status === "running" || it.status === "done") dest = `<span class="snip">Asking Jev</span>`;
+    else dest = `<span class="snip">${esc((e.body || "").replace(/\s+/g, " ").slice(0, 110))}</span>`;
+    return `<div class="row${shown ? " done" : ""}${S.selected === id ? " sel" : ""}" data-id="${esc(id)}" role="button" tabindex="0" aria-label="${esc(e.subject)}">
+      <span class="st">${statusIcon(id)}</span>
+      <span style="min-width:0;display:block">
+        <span class="line1"><span class="who">${esc(e.from_name || "Unknown sender")}</span><span class="org">${esc(orgOf(e, d))}</span><span class="time">${att ? `<span class="clip">${ic("clip", "sm")}${att}</span> ` : ""}${esc(e.received || "")}</span></span>
+        <span class="subj" style="display:block">${esc(e.subject || "(no subject)")}</span>
+        ${dest}
+      </span></div>`;
+  }).join("");
+}
+
+/* ---------------------------------------------------------------- board */
+function badgeHtml(f) {
+  const icon = { restricted: "lock", serious: "zap", warning: "alert" }[f.tone];
+  return `<span class="badge ${f.tone}">${icon ? ic(icon, "sm") : ""}${esc(f.label)}</span>`;
+}
+
+function customerBadge(d) {
+  if (d.customer) return `<span class="badge tier">${esc(d.customer.tier)}-tier customer</span>`;
+  if (d.lane !== "filtered") return `<span class="badge prospect">${ic("spark", "sm")}New prospect</span>`;
+  return "";
+}
+
+function meterHtml(m, lane) {
+  if (!m || m.value == null) return "";
+  const ink = lane === "itar";
+  return `<div class="meter${ink ? " ink" : ""}" title="${esc(m.label)} ${pct(m.value)}; bar at ${pct(m.threshold)}"><div class="fill" style="width:${Math.max(2, m.value * 100)}%"></div><div class="tick" style="left:calc(${m.threshold * 100}% - 1px)"></div></div><span class="mval">${ink ? "ITAR " : ""}${pct(m.value)}</span>`;
+}
+
+function cardHtml(id) {
+  const e = S.emails[id], it = S.state.items[id], d = it.decision;
+  const cls = ["card"], now = performance.now();
+  const sinceReveal = S.revealedAt[id] != null ? now - S.revealedAt[id] : Infinity;
+  const sinceMove = S.movedAt[id] != null ? now - S.movedAt[id] : Infinity;
+  let anim = "";
+  if (sinceReveal < 1600) { cls.push("fresh"); anim = ` style="animation-delay:-${Math.round(sinceReveal)}ms"`; }
+  else if (sinceMove < 1400) { cls.push("moved"); anim = ` style="animation-delay:-${Math.round(sinceMove)}ms"`; }
+  if (S.selected === id) cls.push("sel");
+  const flags = d.flags.filter((f) => f.id !== "volume").slice(0, 4).map(badgeHtml).join("");
+  const vol = d.flags.find((f) => f.id === "volume");
+  const key = S.showKey && d.matches_expected != null
+    ? `<span class="key-mark ${d.matches_expected ? "ok" : "bad"}" title="Answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}">${ic(d.matches_expected ? "check" : "x", "sm")}</span>` : "";
+  const extra = d.lane === "itar" && d.is_rfq ? `<span class="badge">Likely ${esc(d.process_guess.label)}</span>` : (vol ? badgeHtml(vol) : "");
+  return `<div class="${cls.join(" ")}"${anim} data-id="${esc(id)}" role="button" tabindex="0" aria-label="${esc(e.subject || "No subject")}">
+    ${key}
+    <div class="ctop">${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}<div class="csubj">${esc(e.subject || "(no subject)")}</div></div>
+    <div class="corg"><span class="o">${esc(orgOf(e, d))}</span></div>
+    <div class="badges">${flags}${customerBadge(d)}${extra}</div>
+    <div class="cfoot">${meterHtml(d.meter, d.lane)}</div>
+  </div>`;
+}
+
+function laneHtml(lane) {
+  const ids = S.state.order.filter((id) => S.revealed.has(id) && S.state.items[id].decision && S.state.items[id].decision.lane === lane.id);
+  const icon = LANE_ICON[lane.id] ? ic(LANE_ICON[lane.id], "sm") : "";
+  return `<div class="lane ${lane.id === "itar" ? "itar" : ""}">
+    <div class="lane-head">
+      <div class="lane-title">${marker(lane.id)}${icon}<span class="nm">${esc(lane.name)}</span><span class="n">${ids.length}</span></div>
+      <div class="lane-owner">${esc(lane.owner)}${lane.role ? " · " + esc(lane.role) : ""}</div>
+    </div>
+    ${ids.length ? `<div class="cards">${ids.map(cardHtml).join("")}</div>` : `<div class="empty">No emails yet</div>`}
+  </div>`;
+}
+
+function renderBoard() {
+  const est = S.boot.lanes.filter((l) => l.group === "estimating");
+  const other = S.boot.lanes.filter((l) => l.group !== "estimating");
+  const any = S.revealed.size > 0;
+  const how = any ? "" : `<div class="how">
+      <div class="step"><div class="num">1</div><h4>One Jev call per email</h4><p>Each email goes to Jev with ${S.boot.questions.length} questions at once: what it is, which estimator, ITAR or CUI, urgency, and what is missing.</p></div>
+      <div class="step"><div class="num">2</div><h4>Typed answers with probabilities</h4><p>Jev returns choices, yes/no probabilities, and scores in a few hundred milliseconds. No text to parse, nothing to hallucinate.</p></div>
+      <div class="step"><div class="num">3</div><h4>Your rules route it</h4><p>Code checks ITAR first, sends low-confidence mail to a person, sets priority and quote dates, and drafts the reply from a template.</p></div>
+    </div>`;
+  $("#board").innerHTML = `${how}
+    <div><div class="group-head"><h3>Estimating</h3><span>Jev picks the estimator. Export control is checked first.</span></div>
+      <div class="lanes four">${est.map(laneHtml).join("")}</div></div>
+    <div><div class="group-head"><h3>Everything else</h3><span>Orders, review, and noise.</span></div>
+      <div class="lanes three">${other.map(laneHtml).join("")}</div></div>`;
+}
+
+/* ---------------------------------------------------------------- banner */
+function fmtClock(sec) { sec = Math.max(0, Math.ceil(sec)); const m = Math.floor(sec / 60), s = sec % 60; return `${m}:${String(s).padStart(2, "0")}`; }
+
+function renderBanner() {
+  const b = $("#banner"), w = S.state ? S.state.worker : null, j = S.boot ? S.boot.jev : null;
+  let cls = "", html = "";
+  if (S.offline) {
+    cls = "bad"; html = `<span class="bicon">${ic("plug", "lg")}</span><div class="bmain"><div class="btitle">The demo server stopped responding</div><div class="bbody">Check that the black command window is still open, or double-click run_demo.bat again.</div></div>`;
+  } else if (j && !j.configured) {
+    cls = "warn"; html = `<span class="bicon">${ic("alert", "lg")}</span><div class="bmain"><div class="btitle">No Jev API key found</div><div class="bbody">Add <code>AI_GATEWAY_API_KEY=vck_...</code> to <code>Jev_Test\\.env</code> and restart the demo. Saved results can still be replayed.</div></div>`;
+  } else if (w && w.state === "waiting" && (w.wait_reason === "rate_limit" || w.wait_reason === "pace")) {
+    const left = w.resume_at ? w.resume_at - (Date.now() + S.clockOffset) / 1000 : 0;
+    const remaining = S.state.order.filter((id) => ["queued", "running"].includes(S.state.items[id].status)).length;
+    cls = "warn"; html = `<span class="bicon">${ic("clock", "lg")}</span><div class="bmain"><div class="btitle">AI Gateway free tier: next Jev call in <span class="countdown" id="cd">${fmtClock(left)}</span> · ${remaining} left in the queue</div><div class="bbody">The free tier only allows a handful of Jev calls every few minutes, so the demo paces itself and keeps going on its own. Buying any amount of AI Gateway credits removes the limit. Every result is saved, so later runs replay instantly.</div></div><button class="btn small" id="bannerStop">${ic("stop", "sm")}Stop</button>`;
+  } else if (w && w.state === "stopped" && w.last_error) {
+    const e = w.last_error;
+    cls = "bad"; html = `<span class="bicon">${ic("alert", "lg")}</span><div class="bmain"><div class="btitle">${esc(e.message)}</div><div class="bbody">${esc(e.hint || "")}</div></div><button class="btn small" id="bannerRetry">${ic("refresh", "sm")}Try again</button>`;
+  } else if (w && w.state === "waiting" && w.wait_reason === "retry") {
+    cls = "info"; html = `<span class="bicon">${ic("refresh", "lg")}</span><div class="bmain"><div class="btitle">${esc(w.message)}</div></div>`;
+  }
+  b.className = "banner" + (html ? " show " + cls : "");
+  const structure = html.replace(/<span class="countdown" id="cd">[^<]*<\/span>/, "");
+  if (b.dataset.html === structure && html) {
+    const cd = $("#cd"), m = html.match(/id="cd">([^<]*)</);
+    if (cd && m) cd.textContent = m[1];
+    return;
+  }
+  {
+    b.innerHTML = html; b.dataset.html = structure;
+    const stop = $("#bannerStop"); if (stop) stop.onclick = async () => { const st = await api("/api/stop", {}); applyState(st.state, true); };
+    const retry = $("#bannerRetry"); if (retry) retry.onclick = onRoute;
+  }
+}
+setInterval(() => { if (S.state && S.state.worker.state === "waiting") renderBanner(); }, 1000);
+
+/* ---------------------------------------------------------------- drawer */
+function select(id) {
+  S.selected = id;
+  openDrawer("email");
+  renderInbox(); renderBoard();
+}
+
+function openDrawer(mode) {
+  S.drawer = mode;
+  $("#drawer").classList.add("show"); $("#drawer").setAttribute("aria-hidden", "false");
+  $("#scrim").classList.add("show");
+  if (mode === "email") renderEmailDrawer(true); else renderSettings();
+}
+
+function closeOverlays() {
+  if ($("#pasteModal").classList.contains("show")) return closePaste();
+  S.drawer = null; S.selected = null;
+  $("#drawer").classList.remove("show"); $("#drawer").setAttribute("aria-hidden", "true");
+  $("#scrim").classList.remove("show");
+  renderInbox(); renderBoard();
+}
+
+function optionLabel(qname, key) {
+  if (qname === "email_type") return S.boot.email_type_labels[key] || key;
+  if (qname === "volume") return S.boot.volume_labels[key] || key;
+  if (qname === "process") return (S.lanes[key] && S.lanes[key].name) || (key === "mixed_or_unclear" ? "Mixed / unclear" : key);
+  return key;
+}
+
+function answerHtml(q, a, th) {
+  if (!a) return "";
+  let head = "", body = "", foot = "";
+  if (a.type === "choice") {
+    const opts = Object.entries(a.probabilities).sort((x, y) => y[1] - x[1]);
+    head = `${esc(optionLabel(q.name, a.choice))} · confidence ${pct(a.confidence)}`;
+    body = opts.map(([k, p]) => `<div class="opt${k === a.choice ? " win" : ""}"><span class="on" title="${esc(optionLabel(q.name, k))}">${k === a.choice ? ic("check", "sm") + " " : ""}${esc(optionLabel(q.name, k))}</span><div class="bar"><div class="fill" style="width:${p * 100}%"></div></div><span class="pv">${pct(p)}</span></div>`).join("");
+    const bar = q.name === "email_type" ? th.email_type_confidence : q.name === "process" ? th.process_confidence : null;
+    foot = bar != null ? `Auto-routes when confidence is at least ${pct(bar)}.${a.confidence_estimated ? " Confidence computed from the probabilities." : ""}` : "";
+  } else if (a.type === "noul") {
+    const key = NOUL_BAR[q.name], bar = key ? th[key] : null;
+    head = `${pct(a.p)} yes`;
+    body = `<div class="opt win"><span class="on">Yes</span><div class="bar"><div class="fill" style="width:${a.p * 100}%"></div>${bar != null ? `<div class="tick" style="left:calc(${bar * 100}% - 1px)"></div>` : ""}</div><span class="pv">${pct(a.p)}</span></div>`;
+    if (bar != null) foot = q.name === "export_controlled" ? `Restricted queue at ${pct(bar)} or above (the tick).` : `Counts as yes at ${pct(bar)} or above (the tick).`;
+  } else if (a.type === "score") {
+    const levels = Object.keys(a.probabilities).map(Number).sort((x, y) => x - y);
+    const top = levels.reduce((m, l) => (a.probabilities[l] > a.probabilities[m] ? l : m), levels[0]);
+    head = `${a.score.toFixed(2)} of ${levels.length - 1} · confidence ${pct(a.confidence)}`;
+    body = levels.map((l) => `<div class="opt${l === top ? " win" : ""}"><span class="on" title="${esc((a.legend || {})[l] || "")}">${l}. ${esc(URGENCY_LEVELS[l] || "Level " + l)}</span><div class="bar"><div class="fill" style="width:${a.probabilities[l] * 100}%"></div></div><span class="pv">${pct(a.probabilities[l])}</span></div>`).join("");
+    foot = `Rush flag at ${th.rush_score} or above. The score is the probability-weighted level.`;
+  }
+  return `<div class="q"><div class="q-head"><span class="ql">${esc(q.label)}</span><span class="qt">${esc(a.type)}</span><span class="qa">${head}</span></div>${body}${foot ? `<div class="q-foot">${foot}</div>` : ""}</div>`;
+}
+
+function traceIcon(o) { return { pass: "check", stop: "arrow", warn: "alert", info: "info", done: "check", review: "eye" }[o] || "info"; }
+
+function renderEmailDrawer(force) {
+  const id = S.selected, e = S.emails[id];
+  if (!e) return;
+  const it = S.state.items[id], shown = it.status === "done" && it.decision && S.revealed.has(id);
+  const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey]);
+  if (!force && S.drawerVersion === version) return;
+  S.drawerVersion = version;
+  const d = shown ? it.decision : null, th = S.state.thresholds;
+  const att = (e.attachments || []).map((a) => {
+    const cad = d && d.cad_attachments.includes(a);
+    return `<span class="att${cad ? " cad" : ""}" title="${cad ? "Code recognized this as a drawing or CAD file" : ""}">${ic("clip", "sm")}${esc(a)}</span>`;
+  }).join("");
+  let decision = "";
+  if (d) {
+    const due = d.due ? ` · ${d.due.kind} due ${esc(d.due.label)}` : "";
+    const keyLine = S.showKey && d.expected_lane ? `<div class="note">${d.matches_expected ? ic("check", "sm") + " Matches" : ic("x", "sm") + " Differs from"} the answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}. ${esc((e.expected && e.expected.note) || "")}</div>` : "";
+    decision = `<div class="sec"><div class="sec-title">Routing decision</div>
+      <div class="decision">
+        <div class="dest">${marker(d.lane)}${esc(d.lane_name)}</div>
+        <div class="owner">${esc(d.owner)}${d.priority ? ` · <span class="prio ${d.priority}">${d.priority}</span> ${esc(d.priority_reason)}` : ""}${due}</div>
+        <div class="reason">${esc(d.reason)}</div>
+        <div class="badges">${d.flags.map(badgeHtml).join("")}${customerBadge(d)}</div>
+        <ol class="trace">${d.trace.map((t) => `<li><span class="tk ${t.outcome}">${ic(traceIcon(t.outcome), "sm")}</span><span><b>${esc(t.label)}</b> <span class="td">${esc(t.detail)}</span></span></li>`).join("")}</ol>
+        ${keyLine}
+      </div></div>`;
+    const act = d.action || {};
+    decision += `<div class="sec"><div class="sec-title">Suggested next step</div>
+      <div class="action-title">${esc(act.title || "")}</div>
+      ${act.draft ? `<textarea class="draft" id="draftText" readonly>${esc(act.draft)}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn small" id="copyDraft">${ic("copy", "sm")}Copy draft</button><span class="note" style="margin:0">To: ${esc(act.to || "")}. Written from a template by code; Jev makes decisions, it does not write text.</span></div>` : ""}
+    </div>`;
+    decision += `<div class="sec"><div class="sec-title">What Jev answered<span class="aside">${S.boot.questions.length} questions, one call</span></div>
+      ${S.boot.questions.map((q) => answerHtml(q, it.jev.answers[q.name], th)).join("")}</div>`;
+  } else if (it.status === "error") {
+    decision = `<div class="sec"><div class="err-box"><b>${esc(it.error && it.error.message)}</b><div class="note">${esc((it.error && it.error.hint) || "")}</div></div></div>`;
+  } else if (it.status === "queued" || it.status === "running" || it.status === "done") {
+    decision = `<div class="sec"><div class="status-box"><span class="spin"></span>${it.status === "queued" ? "Waiting in line for Jev" : "Asking Jev"}</div></div>`;
+  } else {
+    decision = `<div class="sec"><div class="status-box">${ic("info")}Not routed yet.<span class="spacer"></span><button class="btn small primary" id="routeOne">${ic("play", "sm play")}Route this email</button></div></div>`;
+  }
+  const meta = d && it.jev ? `<div class="sec"><div class="sec-title">Call details</div><dl class="kv">
+      <dt>Model</dt><dd>${esc(it.jev.model || "")}</dd>
+      <dt>Response time</dt><dd>${it.jev.latency_ms != null ? Math.round(it.jev.latency_ms) + " ms" : "n/a"}</dd>
+      <dt>Input tokens</dt><dd>${it.jev.input_tokens ?? "n/a"}</dd>
+      <dt>Cost</dt><dd>${money(it.jev.cost_usd)}${it.jev.cost_is_estimate ? " (estimated)" : " (reported)"}${!it.jev.cost_is_estimate && it.jev.cost_usd === 0 ? `, list price ${money(it.jev.list_price_usd)}` : ""}</dd>
+      <dt>Source</dt><dd>${it.source === "cache" ? `Saved result from ${esc(it.jev.saved_at || "")}` : "Live call"}</dd>
+      ${it.jev.request_id ? `<dt>Request ID</dt><dd>${esc(it.jev.request_id)}</dd>` : ""}
+    </dl>
+    <button class="btn small" id="rerun" style="margin-top:10px">${ic("refresh", "sm")}Ask Jev again (live call)</button></div>` : "";
+  $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1;min-width:0"><h2>${esc(e.subject || "(no subject)")}</h2>
+      <div class="meta">${esc(e.from_name || "Unknown sender")} &lt;${esc(e.from_email)}&gt; · ${esc(e.received || "")}${e.live ? " · pasted live" : ""}</div></div>
+      <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
+    <div class="dbody">${decision}
+      <div class="sec"><div class="sec-title">Email</div><div class="email-body">${esc(e.body)}</div>${att ? `<div class="atts">${att}</div>` : `<div class="note">No attachments</div>`}</div>
+      ${meta}
+    </div>`;
+  $("#closeDrawer").onclick = closeOverlays;
+  const ta = $("#draftText");
+  if (ta) { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 4) + "px"; }
+  const copy = $("#copyDraft");
+  if (copy) copy.onclick = async () => { try { await navigator.clipboard.writeText($("#draftText").value); toast("Draft copied"); } catch (err) { $("#draftText").select(); document.execCommand("copy"); toast("Draft copied"); } };
+  const rerun = $("#rerun");
+  if (rerun) rerun.onclick = async () => { rerun.disabled = true; const r = await api("/api/run", { ids: [id], use_cache: false, front: true }); applyState(r.state, true); renderEmailDrawer(true); };
+  const one = $("#routeOne");
+  if (one) one.onclick = async () => { one.disabled = true; const r = await api("/api/run", { ids: [id], use_cache: S.useCache, front: true }); applyState(r.state, true); renderEmailDrawer(true); };
+}
+
+/* ---------------------------------------------------------------- settings */
+function testLineHtml() {
+  const test = S.testResult;
+  if (!test) return "";
+  return test.ok
+    ? `<div class="note" style="color:var(--good-text)">${ic("check", "sm")} Jev answered in ${Math.round(test.latency_ms)} ms (model ${esc(test.model)}).</div>`
+    : `<div class="note" style="color:var(--critical)">${ic("alert", "sm")} ${esc(test.error.message)} ${esc(test.error.hint || "")}</div>`;
+}
+
+function updateSettings() {
+  const th = S.state.thresholds;
+  const cc = $("#cacheCount"); if (cc) cc.textContent = S.state.stats.cache_size;
+  const ab = $("#autoBar"), ib = $("#itarBar");
+  if (ab && document.activeElement !== ab) { ab.value = Math.min(th.email_type_confidence, th.process_confidence); $("#autoBarV").textContent = pct(parseFloat(ab.value)); }
+  if (ib && document.activeElement !== ib) { ib.value = th.export_control_restrict; $("#itarBarV").textContent = pct(parseFloat(ib.value)); }
+}
+
+function renderSettings() {
+  const th = S.state.thresholds, j = S.boot.jev;
+  S.drawerVersion = null;
+  const auto = Math.min(th.email_type_confidence, th.process_confidence);
+  $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1"><h2>Rules and settings</h2><div class="meta">Changes apply instantly to everything already routed. No new Jev calls needed.</div></div>
+      <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
+    <div class="dbody">
+      <div class="sec"><div class="sec-title">Routing rules</div>
+        <div class="set-row"><label for="autoBar">Auto-route confidence bar</label>
+          <div class="help">Below this confidence, Jev's pick goes to ${esc(S.lanes.review.owner)} for a human look instead of straight to an estimator.</div>
+          <div class="range"><input type="range" id="autoBar" min="0.2" max="0.95" step="0.05" value="${auto}"><span class="rv" id="autoBarV">${pct(auto)}</span></div></div>
+        <div class="set-row"><label for="itarBar">Export-control bar</label>
+          <div class="help">ITAR / CUI likelihood that sends an email to the restricted queue. Kept low on purpose: a miss costs far more than a false alarm.</div>
+          <div class="range"><input type="range" id="itarBar" min="0.1" max="0.9" step="0.05" value="${th.export_control_restrict}"><span class="rv" id="itarBarV">${pct(th.export_control_restrict)}</span></div></div>
+      </div>
+      <div class="sec"><div class="sec-title">Demo options</div>
+        <div class="set-row"><label class="switch"><input type="checkbox" id="useCache" ${S.useCache ? "checked" : ""}>Replay saved Jev results when available</label>
+          <div class="help"><span id="cacheCount">${S.state.stats.cache_size}</span> saved results. Replays are instant and free. Turn this off to make every email a fresh live call.</div></div>
+        <div class="set-row"><label class="switch"><input type="checkbox" id="showKey" ${S.showKey ? "checked" : ""}>Show the answer key</label>
+          <div class="help">Marks each card with a check or an X against the expected route for the 20 sample emails.</div></div>
+      </div>
+      <div class="sec"><div class="sec-title">Jev connection</div>
+        ${j.configured ? `<dl class="kv"><dt>Provider</dt><dd>${esc(j.provider)}</dd><dt>Model</dt><dd>${esc(j.model)}</dd><dt>Endpoint</dt><dd>${esc(j.endpoint)}</dd><dt>Key</dt><dd>${esc(j.key_env)} = ${esc(j.key_hint)}</dd><dt>Loaded from</dt><dd>${esc((j.env_files || []).join(", ") || "environment")}</dd></dl>`
+          : `<div class="err-box">No API key found. Looked in ${esc((j.searched || []).join(" and "))}.</div>`}
+        <button class="btn small" id="testConn" style="margin-top:10px" ${j.configured ? "" : "disabled"}>${ic("plug", "sm")}Test connection (1 call)</button>
+        <div id="testLine">${testLineHtml()}</div>
+      </div>
+      <div class="sec"><div class="sec-title">What Jev is asked about every email</div>
+        <div class="qlist">${S.boot.questions.map((q) => `<div class="qi"><div class="qn">${esc(q.label)} <span class="qt" style="font-size:10px;color:var(--muted);text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:1px 5px">${esc(q.type)}</span></div>
+          <div class="qins">${esc(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}</div>
+          ${q.criteria ? `<details><summary>Criteria</summary><ul>${Array.isArray(q.criteria) ? q.criteria.map((c, i) => `<li><b>${i}</b>: ${esc(c)}</li>`).join("") : Object.entries(q.criteria).map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join("")}</ul></details>` : ""}</div>`).join("")}</div>
+        <div class="note">Edit the questions in <code>router.py</code> and the lanes, owners, and customers in <code>shop_config.json</code>.</div>
+      </div>
+    </div>`;
+  $("#closeDrawer").onclick = closeOverlays;
+  let t1;
+  $("#autoBar").oninput = (ev) => {
+    const v = parseFloat(ev.target.value); $("#autoBarV").textContent = pct(v);
+    clearTimeout(t1); t1 = setTimeout(async () => { const r = await api("/api/thresholds", { email_type_confidence: v, process_confidence: v }); applyState(r.state, true); }, 120);
+  };
+  let t2;
+  $("#itarBar").oninput = (ev) => {
+    const v = parseFloat(ev.target.value); $("#itarBarV").textContent = pct(v);
+    clearTimeout(t2); t2 = setTimeout(async () => { const r = await api("/api/thresholds", { export_control_restrict: v }); applyState(r.state, true); }, 120);
+  };
+  $("#useCache").onchange = (ev) => { S.useCache = ev.target.checked; try { localStorage.setItem("rfq.useCache", S.useCache ? "1" : "0"); } catch (e) {} };
+  $("#showKey").onchange = (ev) => { S.showKey = ev.target.checked; try { localStorage.setItem("rfq.showKey", S.showKey ? "1" : "0"); } catch (e) {} renderAll(); };
+  const tc = $("#testConn");
+  if (tc) tc.onclick = async () => {
+    const label = tc.innerHTML; tc.disabled = true; tc.innerHTML = `<span class="spin"></span>Testing`;
+    try { S.testResult = await api("/api/test", {}); } catch (e) { S.testResult = { ok: false, error: { message: e.message } }; }
+    tc.disabled = false; tc.innerHTML = label; $("#testLine").innerHTML = testLineHtml();
+  };
+}
+
+/* ---------------------------------------------------------------- paste */
+function buildPasteExamples() {
+  const sel = $("#pExample");
+  sel.innerHTML = `<option value="">Blank</option>` + (S.boot.paste_examples || []).map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join("");
+}
+function fillExample() {
+  const x = (S.boot.paste_examples || [])[parseInt($("#pExample").value, 10)];
+  $("#pName").value = x ? x.from_name : ""; $("#pEmail").value = x ? x.from_email : "";
+  $("#pSubject").value = x ? x.subject : ""; $("#pBody").value = x ? x.body : "";
+  $("#pAtt").value = x ? (x.attachments || []).join(", ") : "";
+}
+function openPaste() {
+  $("#pasteModal").classList.add("show"); $("#scrim").classList.add("show");
+  setTimeout(() => $("#pName").focus(), 50);
+}
+function closePaste() {
+  $("#pasteModal").classList.remove("show");
+  if (!S.drawer) $("#scrim").classList.remove("show");
+}
+async function submitPaste(ev) {
+  ev.preventDefault();
+  const payload = { from_name: $("#pName").value, from_email: $("#pEmail").value, subject: $("#pSubject").value, body: $("#pBody").value, attachments: $("#pAtt").value };
+  if (!payload.subject.trim() && !payload.body.trim()) { toast("Add a subject or a body first."); return; }
+  const btn = $("#pasteForm button[type=submit]");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/emails", payload);
+    S.emails[r.id] = r.email;
+    closePaste();
+    applyState(r.state, true);
+    select(r.id);
+    const row = document.querySelector(`#inboxList [data-id="${r.id}"]`);
+    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  } catch (e) { toast(e.message); }
+  finally { btn.disabled = false; }
+}
+
+init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="banner show bad" style="display:flex">Could not load the demo: ${esc(e.message)}</div>`); });
+</script>
+</body>
+</html>

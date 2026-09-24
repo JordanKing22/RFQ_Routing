@@ -1,0 +1,10 @@
+# Your Jev / AI Gateway key lives here. Never commit it.
+.env
+.env.*
+
+# Saved Jev answers (created on first run) and the key-check marker
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
