@@ -1,0 +1,16 @@
+# Render Blueprint: deploys the demo to render.com from this repository.
+# Open https://render.com/deploy?repo=https://github.com/JordanKing22/RFQ_Routing
+# Render asks for the two values below, builds the Dockerfile, and gives you an HTTPS URL.
+# Keep a single instance: the board and the Jev worker live in memory.
+services:
+  - type: web
+    name: rfq-router-demo
+    runtime: docker
+    plan: free  # sleeps after 15 idle minutes; the paid "starter" plan stays awake
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: AI_GATEWAY_API_KEY  # your Vercel AI Gateway key, vck_...
+        sync: false
+      - key: RFQ_DEMO_PASSWORD  # the password people type to open the demo
+        sync: false

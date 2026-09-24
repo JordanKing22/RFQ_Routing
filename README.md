@@ -35,6 +35,17 @@ The demo runs anywhere that has Python 3.10 or newer, or that runs a Docker imag
 
 These can also go in `.env` next to `server.py`.
 
+**Render, in one click**
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/JordanKing22/RFQ_Routing)
+
+1. Click the button and sign in to Render (a free account works).
+2. When Render asks, paste your AI Gateway key into `AI_GATEWAY_API_KEY` and choose a password for `RFQ_DEMO_PASSWORD`.
+3. Click **Deploy Blueprint**. The first build takes a few minutes.
+4. Open the `https://....onrender.com` address on the service page.
+
+`render.yaml` holds these settings. The free plan sleeps after 15 idle minutes and takes up to a minute to wake, so open the demo a minute before a meeting. The Starter plan stays awake.
+
 **Docker**
 
 ```
@@ -109,6 +120,7 @@ For each email:
 | `run_demo.sh` | The same start for macOS and Linux |
 | `check_jev.bat` / `check_jev.py` | Key check: routes sample email E01 with one real call |
 | `Dockerfile` | Container image for cloud hosts (see Run it in the cloud) |
+| `render.yaml` | One-click deploy settings for Render |
 | `server.py` | Local web server and background Jev worker (rate limits, retries, cache) |
 | `jev_client.py` | Standard-library Jev client (AI Gateway or TypeSafe direct) |
 | `router.py` | The 8 questions and the routing policy |
