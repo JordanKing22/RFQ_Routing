@@ -4,7 +4,9 @@ RFQ routing for a CNC job shop.
 Two halves, on purpose:
   1. JEV decides the judgment calls. Every email gets one Jev request with eight
      questions (what kind of email, which estimator, export-controlled or not,
-     urgency, and so on). Jev answers all of them in parallel with probabilities.
+     urgency, and so on). Jev reads the email and the text of its attachments
+     (drawing notes, title blocks, legends, RFQ forms) and answers all of the
+     questions in parallel with probabilities.
   2. CODE decides what happens. Thresholds, customer lookups, attachment checks,
      priorities, SLAs, and reply templates are plain Python you can read and change.
 
@@ -17,7 +19,9 @@ import datetime as dt
 import re
 from typing import Any, Dict, List, Optional
 
-QUESTION_SET_VERSION = "rfq-cnc-v1"
+import attachments as att_mod
+
+QUESTION_SET_VERSION = "rfq-cnc-v2"
 
 # --------------------------------------------------------------------------- #
 # What we ask Jev about every email
@@ -104,19 +108,22 @@ def build_questions(shop: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         "process": {
             "type": "choice",
             "instructions": "Which estimator at the machine shop should quote the parts in this email? "
-                            "Decide from the part names, descriptions, materials, and drawing file names.",
+                            "Decide from the part names, descriptions, materials, drawing file names, "
+                            "and the attached drawings.",
             "criteria": process_options,
         },
         "export_controlled": {
             "type": "noul",
-            "instructions": "Does this email say the parts, drawings, or technical data are "
-                            "export-controlled, ITAR, or controlled unclassified information (CUI)?",
+            "instructions": "Do the email or its attachments say the parts, drawings, or technical data "
+                            "are export-controlled, ITAR, or controlled unclassified information (CUI)? "
+                            "Check the drawing legends, title blocks, and RFQ forms as well as the email text.",
             "criteria": {
-                "true": "The email mentions ITAR, EAR or export control, CUI, DFARS 252.204-7012, "
-                        "controlled technical data, U.S. persons only, or defense drawings with "
-                        "access restrictions.",
-                "false": "The email does not mention export control, ITAR, CUI, or limits on who "
-                         "may see the technical data.",
+                "true": "The email or an attachment mentions ITAR, EAR or export control, an ECCN, CUI, "
+                        "DFARS 252.204-7012, controlled technical data, U.S. persons only, or defense "
+                        "drawings with access restrictions.",
+                "false": "Neither the email nor its attachments mention export control, ITAR, EAR, CUI, "
+                         "or limits on who may see the technical data. An ordinary proprietary or "
+                         "confidentiality notice alone does not count.",
             },
         },
         "urgency": {
@@ -131,29 +138,35 @@ def build_questions(shop: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         },
         "quantity_given": {
             "type": "noul",
-            "instructions": "Does the email state how many parts to quote?",
+            "instructions": "Do the email or its attachments state how many parts to quote? "
+                            "Check an attached RFQ form or purchase order as well as the email text.",
             "criteria": {
-                "true": "A quantity, quantity breaks (for example 10 / 25 / 50), or an annual usage is given.",
-                "false": "No quantity is given for the parts.",
+                "true": "A quantity, quantity breaks (for example 10 / 25 / 50), or an annual usage is "
+                        "given in the email or in an attachment.",
+                "false": "Neither the email nor its attachments give a quantity for the parts.",
             },
         },
         "drawings_provided": {
             "type": "noul",
-            "instructions": "Does the email provide part drawings or CAD models?",
+            "instructions": "Do the email or its attachments provide part drawings or CAD models?",
             "criteria": {
                 "true": "Drawings, prints, or CAD models (PDF, STEP, IGES, SolidWorks) are attached, "
                         "linked, or shared through a portal.",
-                "false": "No drawings are provided yet, for example the drawing will follow later "
-                         "or drawings are not mentioned.",
+                "false": "No drawings are provided yet, for example the drawing will follow later, "
+                         "drawings are not mentioned, or the only attachments are forms, orders, or "
+                         "other documents.",
             },
         },
         "outside_processing": {
             "type": "noul",
-            "instructions": "Does the request need a finish or outside processing after machining?",
+            "instructions": "Do the email or its attachments call for a finish or outside processing "
+                            "after machining? Check the finish block and notes on attached drawings.",
             "criteria": {
                 "true": "Anodizing, plating, passivation, heat treating, painting, powder coating, "
-                        "chem film, or another finish or treatment is required.",
-                "false": "No finish or post-machining treatment is mentioned.",
+                        "chem film, or another finish or treatment is required by the email or an "
+                        "attachment.",
+                "false": "Neither the email nor its attachments call for a finish or post-machining "
+                         "treatment (a drawing finish of NONE counts as no finish).",
             },
         },
         "volume": {
@@ -170,8 +183,12 @@ def build_questions(shop: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def jev_state(email: Dict[str, Any]) -> Dict[str, Any]:
-    """Only what the questions need: sender, subject, body, attachment names."""
-    attachments = email.get("attachments") or []
+    """Only what the questions need: sender, subject, body, and each attachment's name and text.
+
+    Attachment text comes from attachments.py: sample files from their specs (title block, notes,
+    legends, RFQ-form quantities), uploaded PDFs from pypdf. It has its own size budget.
+    """
+    entries = att_mod.jev_entries(email.get("attachments") or [])
     body = (email.get("body") or "").strip()
     if len(body) > 8000:  # keep the state small; Jev accuracy drops with filler
         body = body[:8000] + " [truncated]"
@@ -179,7 +196,7 @@ def jev_state(email: Dict[str, Any]) -> Dict[str, Any]:
         "from": f"{email.get('from_name', '').strip()} <{email.get('from_email', '').strip()}>".strip(),
         "subject": (email.get("subject") or "").strip(),
         "body": body,
-        "attachments": attachments if attachments else "none",
+        "attachments": entries if entries else "none",
     }
 
 
@@ -188,17 +205,42 @@ def jev_state(email: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 CAD_EXTENSIONS = {".step", ".stp", ".igs", ".iges", ".sldprt", ".sldasm", ".x_t", ".x_b",
                   ".dxf", ".dwg", ".prt", ".ipt", ".iam", ".stl", ".3mf", ".par", ".catpart"}
-NOT_A_DRAWING = re.compile(r"(^|[^a-z])(po|purchase|invoice|cert|coc|resume|cv|brochure|catalog|quote_form)([^a-z]|$)",
+NOT_A_DRAWING = re.compile(r"(^|[^a-z])(po|purchase|invoice|cert|certs|coc|resume|cv|brochure|catalog|quote_form|"
+                           r"rfq|form|linecard|newsletter|packing|slip|statement|remit|ncr|rma|terms)([^a-z]|$)",
                            re.IGNORECASE)
+EXPORT_MARKINGS = re.compile(r"\b(itar|arms export control|export administration regulations|eccn|cui|"
+                             r"controlled unclassified|dfars 252\.204-7012|u\.s\. persons only)\b", re.IGNORECASE)
 
 
-def cad_attachments(attachments: List[str]) -> List[str]:
+def cad_attachments(attachments: List[Any]) -> List[str]:
+    """Attachments that code recognizes as drawings or CAD. Sample files know their kind;
+    plain file names and uploads are judged by extension and name."""
     found = []
-    for name in attachments or []:
+    for raw in attachments or []:
+        att = att_mod.normalize(raw)
+        name, kind = att["name"], att.get("kind")
+        if kind in ("drawing", "model"):
+            found.append(name)
+            continue
+        if kind in ("rfq_form", "po", "document"):
+            continue
+        if kind == "upload" and att.get("media") != "pdf":
+            continue
         lower = name.lower().strip()
         ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
         if ext in CAD_EXTENSIONS or (ext == ".pdf" and not NOT_A_DRAWING.search(lower)):
             found.append(name)
+    return found
+
+
+def export_marked_attachments(attachments: List[Any]) -> List[str]:
+    """Attachments whose text carries an export-control marking. Code uses this only to explain
+    a decision ("the marking is on the drawing"); Jev makes the call."""
+    found = []
+    for raw in attachments or []:
+        att = att_mod.normalize(raw)
+        if EXPORT_MARKINGS.search(att_mod.jev_text(att)):
+            found.append(att["name"])
     return found
 
 
@@ -296,9 +338,13 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
     restricted = ex["p"] >= th["export_control_restrict"] and not (
         et_conf >= max(th["itar_exempt_confidence"], th["email_type_confidence"])
         and et["choice"] in ("vendor_or_solicitation", "other"))
+    marked = export_marked_attachments(email.get("attachments") or [])
+    where = ""
+    if marked and ex["p"] >= th["export_control_warn"]:
+        where = " Marking found in the attachment" + ("s " if len(marked) > 1 else " ") + ", ".join(marked) + "."
     step("Export-controlled?",
          f"Jev: {pct(ex['p'])} likely ITAR / CUI. Restricted queue at "
-         f"{pct(th['export_control_restrict'])} or above.",
+         f"{pct(th['export_control_restrict'])} or above.{where}",
          "stop" if restricted else "pass")
 
     # 2. What kind of email is it?
@@ -436,6 +482,7 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
         "due": due,
         "customer": customer,
         "cad_attachments": cad,
+        "export_marked": marked,
         "process_guess": {"choice": pr["choice"], "label": process_labels.get(pr["choice"], pr["choice"]),
                           "p": pr.get("p")},
         "trace": trace,

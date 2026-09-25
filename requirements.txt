@@ -1,0 +1,4 @@
+# The demo server itself is standard library only. pypdf lets Jev read the text of PDFs
+# that people upload in "Paste an RFQ"; without it the demo still runs and Jev sees only
+# the file names of uploaded PDFs.
+pypdf==6.19.0
