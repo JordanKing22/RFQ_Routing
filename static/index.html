@@ -863,8 +863,9 @@ function renderEmailDrawer(force) {
   S.drawerVersion = version;
   const d = shown ? it.decision : null, th = S.state.thresholds;
   const att = (e.attachments || []).map((a) => {
-    const cad = d && d.cad_attachments.includes(a);
-    return `<span class="att${cad ? " cad" : ""}" title="${cad ? "Code recognized this as a drawing or CAD file" : ""}">${ic("clip", "sm")}${esc(a)}</span>`;
+    const name = typeof a === "string" ? a : a.name;
+    const cad = d && d.cad_attachments.includes(name);
+    return `<span class="att${cad ? " cad" : ""}" title="${cad ? "Code recognized this as a drawing or CAD file" : ""}">${ic("clip", "sm")}${esc(name)}</span>`;
   }).join("");
   let decision = "";
   if (d) {
@@ -1002,7 +1003,7 @@ function fillExample() {
   const x = (S.boot.paste_examples || [])[parseInt($("#pExample").value, 10)];
   $("#pName").value = x ? x.from_name : ""; $("#pEmail").value = x ? x.from_email : "";
   $("#pSubject").value = x ? x.subject : ""; $("#pBody").value = x ? x.body : "";
-  $("#pAtt").value = x ? (x.attachments || []).join(", ") : "";
+  $("#pAtt").value = x ? (x.attachments || []).map((a) => (typeof a === "string" ? a : a.name)).join(", ") : "";
 }
 function openPaste() {
   $("#pasteModal").classList.add("show"); $("#scrim").classList.add("show");

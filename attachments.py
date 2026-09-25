@@ -212,7 +212,7 @@ def jev_text(att: Dict[str, Any]) -> str:
         if att.get("text_error"):
             return f"(PDF file; its text could not be read: {att['text_error']})"
         return "(PDF file with no text layer, for example a scan; there is no text to read)"
-    return "(file name only; the file itself was not provided)"
+    return "(attached to the email; only the file name is available, not its contents)"
 
 
 def _squeeze(text: str) -> str:
