@@ -86,38 +86,42 @@ Create `.env` next to `server.py` with `AI_GATEWAY_API_KEY=vck_...` and `RFQ_DEM
 ## A 5-minute demo
 
 1. **The problem.** Every RFQ lands in one inbox. Someone senior triages it each morning. ITAR mail gets forwarded around, and missing drawings get noticed days later.
-2. **Click Route inbox.** Twenty emails get sorted in seconds. Each one is a single Jev call with 8 questions, answered in a few hundred milliseconds.
-3. **Open an ITAR card.** Export control is checked first, at a deliberately low bar. The email skips the shared queues, and the reply draft avoids technical details.
-4. **Open the heat sink RFQ.** Jev caught the missing quantity. The estimator gets the RFQ with the missing-info request already drafted.
-5. **Open Needs Human Review.** Jev says when it's unsure, and you can see the probabilities split. In Settings, slide the confidence bar up and more mail goes to a person. Slide it down and more is automated. The shop picks the risk level.
-6. **Paste a live RFQ.** Use the prospect's own email, or pick the example "ITAR notice hidden in the signature."
-7. **Close:** "Jev makes the calls, your rules route them. Every decision has a probability and a paper trail, and there's no text for a model to make up."
+2. **Click Route inbox.** A hundred emails get sorted in seconds. Each one is a single Jev call with 8 questions about the email and its attachments, answered in a few hundred milliseconds.
+3. **Open an email with attachments.** The files sit under the body as thumbnail tiles. Click the drawing to read its title block, material, finish, and notes, and click the STEP file to turn the part in 3D. The panel beside each file shows exactly what Jev read from it.
+4. **Open the Corvane housing RFQ (E61).** The email reads like any commercial RFQ. The ITAR warning is printed only on the attached drawing, and Jev still sent it to the restricted queue. The trace names the file the warning came from. E72 (marking only on the RFQ form) and E52 (a CUI banner on the drawing) show the same catch.
+5. **Open the Kestrel manifold RFQ (E32).** The email has no quantities. They are on the attached RFQ form, so nothing gets flagged as missing. Compare the heat sink RFQ (E07), where Jev caught the missing quantity and the estimator gets the RFQ with the missing-info request already drafted.
+6. **Open Needs Human Review.** Jev says when it's unsure, and you can see the probabilities split. In Settings, slide the confidence bar up and more mail goes to a person. Slide it down and more is automated. The shop picks the risk level.
+7. **Paste a live RFQ.** Use the prospect's own email and drop in their PDF drawing or a photo (up to 5 files, 10 MB each), or pick the example "ITAR notice hidden in the signature."
+8. **Close:** "Jev makes the calls, your rules route them. Every decision has a probability and a paper trail, and there's no text for a model to make up."
 
-Turn on **Show the answer key** in Settings to score Jev against the expected routes for the 20 sample emails.
+Turn on **Show the answer key** in Settings to score Jev against the expected routes for the 100 sample emails. One tricky case on purpose: E25 is a plating vendor that proudly says it is ITAR registered. It belongs in Filtered, because a vendor pitch is not controlled technical data.
 
 ## How it works
 
 For each email:
 
-1. **One Jev call.** It sends the state (sender, subject, body, attachment file names) with 8 questions:
+1. **One Jev call.** It sends the state (sender, subject, body, and each attachment's file name and text) with 8 questions:
 
    | Question | Type |
    | --- | --- |
    | What kind of email is this? (new RFQ, quote revision, PO, order follow-up, vendor, other) | choice |
    | Which estimator should quote it? (3-axis, 5-axis, turning, mixed or unclear) | choice |
-   | Is it export-controlled (ITAR / CUI)? | yes/no |
+   | Do the email or its attachments say it is export-controlled (ITAR, EAR, CUI)? | yes/no |
    | How urgent is it? (0 to 3) | score |
-   | Is a quantity stated? | yes/no |
-   | Are drawings or CAD provided? | yes/no |
-   | Does it need finishing or outside processing? | yes/no |
+   | Do the email or its attachments state a quantity? | yes/no |
+   | Do the email or its attachments provide drawings or CAD? | yes/no |
+   | Do the email or its attachments call for a finish or outside processing? | yes/no |
    | What production volume? | choice |
+
+   **Attachment text.** Sample files are built from specs in `data/sample_emails.json`, so Jev reads the same title block, notes, legends, and RFQ-form quantities you see in the viewer. Uploaded PDFs are read with pypdf. Images are passed by file name only, because Jev reads text. Each file gets up to 1,800 characters and all attachments together up to 6,000, so one long PDF cannot crowd out the email.
 
 2. **Code decides the route** (`router.py`, `decide()`):
    - If ITAR / CUI likelihood is 50% or more, the email goes to the **restricted queue**. This check runs first.
-   - If Jev's confidence on the email type is below the bar, the email goes to **Needs Human Review**.
+   - If Jev's confidence on the email type is below the bar, the email goes to **Needs Human Review**. When Jev splits between two types that go to the same place (a PO or an order follow-up, a new RFQ or a quote revision), their combined probability counts. A split between vendor and "other" does not, because filtering archives an email with no reply.
    - Vendor pitches and job seekers are **filtered**. POs and order questions go to **Orders & CS**.
    - RFQs go to the **estimator** Jev picked. If the work is mixed or Jev isn't confident enough, the RFQ goes to review.
    - **Flags:** missing drawings (code checks attachment types, Jev checks for links and "drawing to follow"), missing quantity, rush, outside processing, and volume.
+   - **Paper trail:** when an attachment carries export-control wording, the trace names the file, so a reviewer can see the marking was on the drawing and not in the email.
    - **Priority and quote-by date:** based on rush, customer tier (looked up in `shop_config.json`), volume, and `sla_business_days`.
    - **Reply draft:** filled in from a template by code.
 
@@ -130,12 +134,18 @@ For each email:
 | `check_jev.bat` / `check_jev.py` | Key check: routes sample email E01 with one real call |
 | `Dockerfile` | Container image for cloud hosts (see Run it in the cloud) |
 | `render.yaml` | One-click deploy settings for Render |
-| `server.py` | Local web server and background Jev worker (rate limits, retries, cache) |
+| `server.py` | Local web server and background Jev worker (rate limits, retries, cache, attachment and upload endpoints) |
 | `jev_client.py` | Standard-library Jev client (AI Gateway or TypeSafe direct) |
 | `router.py` | The 8 questions and the routing policy |
+| `attachments.py` | Sample files from specs, the text Jev reads from each file, and in-memory uploads |
+| `drawings.py` | Engineering drawing sheets, 3D meshes, isometric views, and STEP files |
+| `docgen.py` | A small page canvas that writes the same layout as a PDF and as an SVG thumbnail |
+| `requirements.txt` | pypdf, for reading uploaded PDFs (optional when running locally) |
 | `shop_config.json` | Lanes, owners, customer tiers, thresholds, SLAs |
-| `data/sample_emails.json` | 20 fictional emails, the answer key, and paste examples |
+| `data/sample_emails.json` | 100 fictional emails with attachment specs, the answer key, and paste examples |
+| `data/saved_results.json` | Saved Jev answers you commit (Settings, Download saved results), loaded at startup |
 | `static/index.html` | The dashboard |
+| `tests/` | `test_demo.py` (the test suite) and `mock_jev.py` (a stand-in Jev endpoint) |
 | `cache/` | Saved Jev results (created on first run) |
 
 ## Customize
@@ -143,6 +153,7 @@ For each email:
 - **Another shop** (for example sheet metal): edit the `estimating` lanes in `shop_config.json`. Each lane's `jev_description` is the text Jev uses to pick it.
 - **Different questions:** edit `build_questions()` in `router.py`. The cache is keyed on the exact question text, so an edit triggers fresh calls automatically.
 - **Customers and tiers:** edit `customers` in `shop_config.json`. Senders are matched by email domain.
+- **Sample emails and attachments:** edit `data/sample_emails.json`. Each attachment is a spec (`drawing`, `model`, `rfq_form`, `po`, or `document`) that the demo turns into the file, its thumbnail, and the text Jev reads. Drawings take a `shape`, a `size`, `notes`, and an optional `legend` (`itar`, `ear`, `cui`, or `proprietary`).
 - **Thresholds:** use the Settings panel for live changes, or set defaults under `thresholds` in `shop_config.json`.
 - **Direct TypeSafe key:** put `TYPESAFE_API_KEY=...` in `.env` and remove `AI_GATEWAY_API_KEY`. The client switches to `https://api.typesafe.ai` with model `jev-latest`.
 - **Port:** `run_demo.bat --port 9000`
@@ -187,5 +198,19 @@ print(result.answers["is_rfq"].noul, result.answers["machine"].choice)
 | The browser asks for a user name and password | The demo is password protected. Type any user name and the `RFQ_DEMO_PASSWORD` value |
 | "Set RFQ_DEMO_PASSWORD before serving on ..." | Set it, or listen on 127.0.0.1 only |
 | `forbidden host` | You reached a server that listens on 127.0.0.1 through a proxy or a forwarded port. Set `RFQ_DEMO_PASSWORD`, which switches the server to password checks |
+| An uploaded PDF shows "no text to read" | It is a scan (pictures of pages, no text layer), or pypdf is not installed. Run `pip install -r requirements.txt` |
+| Replays are slow again after a cloud restart | Commit a fresh `data/saved_results.json` (Settings, Download saved results). Saved answers only match the exact emails, attachments, and questions they were made with |
 
-Jev reads only the text of each email. Attachments are passed as file names, so Jev never sees what's inside a drawing. All companies, people, and emails in the sample inbox are fictional.
+## Test it without a key
+
+`tests/mock_jev.py` stands in for the Jev endpoint with rough keyword rules, so you can rehearse the demo or run the tests without spending calls:
+
+```
+python tests/mock_jev.py --port 8799
+JEV_BASE_URL=http://127.0.0.1:8799 AI_GATEWAY_API_KEY=mock python server.py
+python -m unittest discover -s tests -v
+```
+
+The mock's answers are guesses, not Jev's, so do not judge accuracy with it.
+
+Jev reads text: the email and the text of its attachments (sample files from their specs, uploaded PDFs through pypdf). It never sees pixels, so an uploaded photo counts only by its file name. All companies, people, and emails in the sample inbox are fictional.

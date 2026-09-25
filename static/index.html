@@ -29,20 +29,26 @@
   --good-text: #006300;
   --serious: #ec835a;
   --critical: #d03b3b;
+  --indigo: #5856d6;
+  --img-green: #1e8e4e;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(22,24,28,.06), 0 1px 1px rgba(22,24,28,.04);
   --shadow-lg: 0 18px 50px rgba(22,24,28,.18), 0 2px 6px rgba(22,24,28,.08);
   --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--page); color: var(--ink); font: 14px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+body.viewing { overflow: hidden; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
+[hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 svg.i.sm { width: 13px; height: 13px; }
 svg.i.lg { width: 20px; height: 20px; }
+.thin-scroll { scrollbar-width: thin; scrollbar-color: #cfccc4 transparent; }
 
 /* ---------- top bar ---------- */
 .top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: rgba(255,255,255,.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
@@ -63,9 +69,9 @@ svg.i.lg { width: 20px; height: 20px; }
 .dot.live { background: var(--orange); animation: pulse 1.1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
 .actions { display: flex; gap: 8px; }
-.btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--ink); text-decoration: none; }
 .btn:hover { background: #f3f2ee; }
-.btn:focus-visible, .card:focus-visible, .row:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.btn:focus-visible, .card:focus-visible, .row:focus-visible, .ftile:focus-visible, .ftile-x:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
 .btn.primary:hover { background: #2a2d33; }
 .btn.primary .play { color: var(--orange); fill: var(--orange); stroke: var(--orange); }
@@ -91,9 +97,9 @@ svg.i.lg { width: 20px; height: 20px; }
 
 /* ---------- stats ---------- */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; padding: 16px 24px 0; }
-.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; box-shadow: var(--shadow); min-width: 0; }
 .tile .label { font-size: 12px; color: var(--muted); font-weight: 500; }
-.tile .value { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin-top: 2px; white-space: nowrap; }
+.tile .value { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin-top: 1px; white-space: nowrap; }
 .tile .value small { font-size: 14px; color: var(--muted); font-weight: 500; }
 .tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile.hidden { display: none; }
@@ -101,33 +107,41 @@ svg.i.lg { width: 20px; height: 20px; }
 /* ---------- layout ---------- */
 .main { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; padding: 16px 24px 24px; align-items: start; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
-.panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
 .panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .panel-head .count { font-size: 12px; color: var(--muted); }
 .panel-head .addr { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- inbox ---------- */
-.inbox { position: sticky; top: 76px; max-height: calc(100vh - 92px); display: flex; flex-direction: column; }
-.inbox-list { overflow-y: auto; }
-.row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; background: var(--surface); width: 100%; text-align: left; border-left: 0; border-right: 0; border-top: 0; }
+.inbox { position: sticky; top: 76px; max-height: calc(100vh - 92px); display: flex; flex-direction: column; overflow: hidden; }
+.inbox-list { overflow-y: auto; overscroll-behavior: contain; }
+.row { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 9px; padding: 7px 12px 8px; border-bottom: 1px solid var(--line); cursor: pointer; background: var(--surface); width: 100%; text-align: left; border-left: 0; border-right: 0; border-top: 0; }
 .row:hover { background: #f9f8f5; }
+/* Off-screen rows are not rendered, so 100+ spinners during a replay cost only the visible ones. */
+.inbox-list .row { content-visibility: auto; contain-intrinsic-size: auto 70px; }
+.row:focus-visible { outline-offset: -2px; }
 .row.sel { background: #eef5fd; }
-.row .st { margin-top: 4px; display: grid; place-items: center; }
-.row .line1 { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--ink-2); }
-.row .line1 .who { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .line1 .org { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-.row .line1 .time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-.row .subj { font-size: 13px; font-weight: 600; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .snip { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.row .dest { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--ink-2); min-width: 0; }
+.row .st { margin-top: 4px; display: grid; place-items: center; height: 13px; }
+.row .rmain { min-width: 0; display: block; }
+.row .line1 { display: flex; gap: 8px; align-items: baseline; font-size: 12px; line-height: 16px; color: var(--ink-2); }
+.row .line1 .who { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.row .line1 .org { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); flex: 1 1 0; min-width: 0; }
+.row .line1 .time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; display: inline-flex; gap: 6px; align-items: center; }
+.row .subj { display: block; font-size: 13px; line-height: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .snip { display: block; font-size: 12px; line-height: 16px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .dest { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--ink-2); min-width: 0; }
 .row .dest .lname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .dest .prio { margin: 0; padding: 1px 4px; font-size: 9.5px; line-height: 11px; }
+.row .dest.err { color: var(--critical); }
+.row .dest.err .lname { white-space: nowrap; }
 .row.done .subj { font-weight: 500; }
 .st-idle { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--line-2); }
 .st-queued { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); animation: pulse 1.1s infinite; }
-.spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--blue-track); border-top-color: var(--blue); animation: spin .7s linear infinite; }
+.spin { display: inline-block; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--blue-track); border-top-color: var(--blue); animation: spin .7s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.st-err { color: var(--critical); }
+.st-err { color: var(--critical); display: grid; }
 .clip { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 11px; flex: none; }
+.clip svg.i.sm { width: 12px; height: 12px; }
 
 /* lane markers */
 .mk { width: 9px; height: 9px; border-radius: 2px; flex: none; background: var(--muted); }
@@ -138,37 +152,47 @@ svg.i.lg { width: 20px; height: 20px; }
 .mk.filtered { background: #b7b4ab; }
 
 /* ---------- board ---------- */
-.board { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 8px; }
-.group-head h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
-.group-head span { font-size: 12px; color: var(--muted); }
+.board { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.group { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 7px; flex: none; min-width: 0; }
+.group-head h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; }
+.group-head span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lanes { display: grid; gap: 12px; }
 .lanes.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.lane { background: #efeee9; border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 170px; min-width: 0; }
+.lane { background: #efeee9; border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 150px; min-width: 0; overflow: hidden; }
 .lane.itar { background: #ebecee; border-color: #d6d8dc; }
-.lane-head { padding: 10px 12px 8px; }
+.lane-head { padding: 9px 11px 4px; flex: none; }
 .lane-title { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; min-width: 0; }
 .lane-title .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lane-title .n { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; min-width: 22px; text-align: center; }
+.lane-title .n { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; min-width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
 .lane-owner { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cards { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
-.empty { font-size: 12px; color: var(--muted); padding: 14px 8px; text-align: center; border: 1px dashed var(--line-2); border-radius: 8px; margin: 0 8px 8px; }
+.cards { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding: 7px 8px 8px; scrollbar-width: thin; scrollbar-color: #cbc8bf transparent; }
+.lane.itar .cards { scrollbar-color: #c3c6cc transparent; }
+.empty { font-size: 12px; color: var(--muted); padding: 14px 8px; text-align: center; border: 1px dashed var(--line-2); border-radius: 8px; margin: 7px 8px 8px; flex: none; }
 
-.card { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 10px 9px; box-shadow: var(--shadow); cursor: pointer; text-align: left; width: 100%; }
+.card { position: relative; flex: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px 5px; box-shadow: var(--shadow); cursor: pointer; text-align: left; width: 100%; }
 .card:hover { border-color: var(--line-2); box-shadow: 0 3px 10px rgba(22,24,28,.08); }
 .card.sel { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
-.card.fresh { animation: arrive .55s cubic-bezier(.2,.8,.2,1), glow 1.6s ease-out; }
-.card.moved { animation: glow 1.4s ease-out; }
-@keyframes arrive { from { opacity: 0; transform: translateX(-14px) scale(.98); } to { opacity: 1; transform: none; } }
-@keyframes glow { 0% { box-shadow: 0 0 0 3px rgba(235,104,52,.45); } 100% { box-shadow: var(--shadow); } }
-.card .ctop { display: flex; gap: 6px; align-items: flex-start; }
-.card .csubj { font-size: 13px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card .corg { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; gap: 6px; align-items: center; min-width: 0; }
-.card .corg .o { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.card .cfoot { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--muted); }
-.key-mark { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface); }
+/* The glow is a pseudo-element whose opacity animates, so a 100-card reveal stays on the compositor. */
+.card::after { content: ""; position: absolute; inset: -1px; border-radius: 8px; box-shadow: 0 0 0 3px rgba(235,104,52,.5); opacity: 0; pointer-events: none; }
+.card.fresh { animation: arrive .32s cubic-bezier(.2,.8,.2,1); }
+.card.fresh::after, .card.moved::after { animation: glow .75s ease-out; }
+@keyframes arrive { from { opacity: 0; transform: translateX(-10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes glow { from { opacity: 1; } to { opacity: 0; } }
+.card .csubj { font-size: 12.5px; font-weight: 600; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .cmeta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; line-height: 15px; color: var(--muted); margin-top: 1px; min-width: 0; }
+.card .cmeta .o { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .cmeta .prio { margin: 0; padding: 1px 4px; font-size: 9.5px; line-height: 11px; }
+.card .cfoot { display: flex; align-items: center; gap: 8px; margin-top: 4px; height: 16px; }
+.card .badges { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 3px; height: 16px; overflow: hidden; }
+.card .badge { font-size: 10px; line-height: 10px; padding: 2px 4px; border-radius: 4px; gap: 3px; }
+.card .badge svg.i.sm { width: 10px; height: 10px; }
+.card .cm { flex: 0 0 72px; display: flex; align-items: center; gap: 5px; font-size: 10.5px; }
+.card .meter { height: 5px; }
+.card .meter .tick { top: -2px; bottom: -2px; }
+.key-mark { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; border: 2px solid var(--surface); z-index: 1; }
+.key-mark svg.i.sm { width: 11px; height: 11px; stroke-width: 3; }
 .key-mark.ok { background: var(--good); }
 .key-mark.bad { background: var(--critical); }
 
@@ -192,10 +216,10 @@ svg.i.lg { width: 20px; height: 20px; }
 .mval { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink-2); flex: none; }
 
 /* how-it-works (empty board) */
-.how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.how .step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); }
+.how { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; flex: none; }
+.how .step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
 .how .num { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
-.how h4 { margin: 10px 0 4px; font-size: 14px; }
+.how h4 { margin: 8px 0 3px; font-size: 14px; }
 .how p { margin: 0; color: var(--ink-2); font-size: 13px; }
 
 /* ---------- drawer ---------- */
@@ -204,8 +228,8 @@ svg.i.lg { width: 20px; height: 20px; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 50; transform: translateX(104%); transition: transform .22s cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; }
 .drawer.show { transform: none; }
 .dhead { display: flex; gap: 12px; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
-.dhead h2 { margin: 0; font-size: 17px; line-height: 1.3; letter-spacing: -.01em; }
-.dhead .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.dhead h2 { margin: 0; font-size: 17px; line-height: 1.3; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.dhead .meta { font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
 .dbody { overflow-y: auto; padding: 16px 20px 28px; flex: 1; }
 .sec { margin-top: 18px; }
 .sec:first-child { margin-top: 0; }
@@ -246,20 +270,78 @@ svg.i.lg { width: 20px; height: 20px; }
 .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .action-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
 .email-body { white-space: pre-wrap; font-size: 13px; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-wrap: anywhere; }
-.atts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.att { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--surface); }
-.att.cad { border-color: #c9dcf6; background: #f1f6fd; }
 .kv { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 6px 12px; font-size: 12px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .status-box { display: flex; gap: 10px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-size: 13px; }
 .err-box { padding: 12px 14px; border: 1px solid #f0b9b9; background: #fdf0f0; border-radius: var(--radius); font-size: 13px; }
 
+/* ---------- attachment tiles ---------- */
+.att-head { display: flex; align-items: baseline; gap: 10px; margin-top: 14px; font-size: 12px; flex-wrap: wrap; }
+.att-count { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink); font-size: 13px; }
+.att-hint { color: var(--muted); }
+.ftiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 9px; }
+.ftiles:empty { display: none; }
+.ftile-wrap { position: relative; min-width: 0; }
+.ftile { position: relative; display: flex; flex-direction: column; width: 100%; height: 128px; padding: 0; margin: 0; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); overflow: hidden; text-align: left; box-shadow: var(--shadow); color: var(--ink); font: inherit; transition: box-shadow .15s, border-color .15s; }
+button.ftile:hover { border-color: #c4c0b6; box-shadow: 0 4px 14px rgba(22,24,28,.12); }
+button.ftile:hover .fprev::after { opacity: 1; }
+.fprev { position: relative; display: block; flex: 1 1 auto; min-height: 0; overflow: hidden; background: #ebe9e3; }
+.fprev::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(22,24,28,.12), rgba(22,24,28,0) 55%); opacity: 0; transition: opacity .15s; pointer-events: none; }
+.fprev.page img, .fpaper { position: absolute; left: 11px; right: 11px; top: 9px; width: calc(100% - 22px); height: calc(100% - 9px); background: #fff; box-shadow: 0 1px 3px rgba(22,24,28,.22), 0 0 0 .5px rgba(22,24,28,.08); }
+.fprev.page img { object-fit: cover; object-position: top center; display: block; }
+.fpaper { overflow: hidden; padding: 6px 7px; }
+.fpaper-in { display: block; width: 200%; transform: scale(.5); transform-origin: 0 0; font: 10px/12.5px var(--font); color: #50535b; white-space: pre-line; overflow-wrap: anywhere; }
+.fpages { position: absolute; right: 6px; bottom: 5px; font-size: 10px; font-weight: 600; color: var(--ink-2); background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.fprev.model { background: linear-gradient(155deg, #eef0fb 0%, #dfe2f5 100%); }
+.fprev.model img { position: absolute; inset: 4px 8px 2px; width: calc(100% - 16px); height: calc(100% - 6px); object-fit: contain; mix-blend-mode: multiply; display: block; }
+.f3d { position: absolute; left: 7px; top: 7px; font-size: 10px; font-weight: 700; letter-spacing: .04em; color: #fff; background: var(--indigo); border-radius: 4px; padding: 2px 5px; line-height: 1.2; }
+.fschema { position: absolute; left: 8px; bottom: 5px; font-size: 9.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #4b4a9c; }
+.fprev.image { background: #e9e8e3; }
+.fprev.image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fprev.center { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-size: 11.5px; color: var(--muted); text-align: center; padding: 6px 10px; }
+.fprev.center svg.i { width: 22px; height: 22px; }
+.fprev.center.pdf svg.i { color: var(--critical); }
+.fprev.none { background: transparent; }
+.fprev.busy { background: var(--surface-2); color: var(--ink-2); }
+.fprev.busy img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .28; }
+.fprev.busy > span { position: relative; }
+.fprev.err { background: #fdf0f0; color: var(--critical); font-weight: 500; }
+.fprev.broken img { display: none; }
+.fprev.broken::before { content: "Preview unavailable"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 11.5px; color: var(--muted); }
+.fprog { position: absolute; left: 12px; right: 12px; bottom: 9px; height: 4px; border-radius: 2px; background: var(--blue-track); overflow: hidden; }
+.fprog i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .15s; }
+.ffoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 9px 8px; border-top: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.ficon { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; flex: none; background: var(--muted); color: #fff; }
+.ficon svg.i { width: 11px; height: 11px; stroke-width: 2.4; }
+.ficon.pdf { background: var(--critical); }
+.ficon.step { background: var(--indigo); }
+.ficon.image { background: var(--img-green); }
+.ftext { min-width: 0; display: flex; flex-direction: column; }
+.fname { font-size: 12px; font-weight: 600; line-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fmeta { font-size: 11px; line-height: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flegend { position: absolute; top: 6px; right: 6px; z-index: 2; font-size: 10px; padding: 3px 5px; gap: 3px; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.flegend svg.i.sm { width: 10px; height: 10px; }
+.ftile-wrap.removable .flegend { right: 20px; }
+.ftile.nofile { border-style: dashed; background: var(--surface-2); box-shadow: none; }
+.ftile.nofile .ffoot { background: transparent; border-top-style: dashed; }
+.ftile.err { border-color: #f0b9b9; }
+.ftile-wrap.marked .ftile { border-color: var(--ink); box-shadow: 0 0 0 1.5px var(--ink), 0 4px 14px rgba(22,24,28,.14); }
+.fmark { position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; display: flex; align-items: center; gap: 4px; background: var(--ink); color: #fff; font-size: 10.5px; font-weight: 600; padding: 3px 8px; }
+.fmark svg.i.sm { width: 11px; height: 11px; }
+.ftile-x { position: absolute; top: -7px; right: -7px; z-index: 3; width: 22px; height: 22px; border-radius: 50%; padding: 0; display: grid; place-items: center; background: var(--ink); color: #fff; border: 2px solid var(--surface); box-shadow: var(--shadow); }
+.ftile-x:hover { background: #2f3238; }
+.ftile-x svg.i.sm { width: 11px; height: 11px; stroke-width: 2.6; }
+.mark-note { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: #ebecee; border: 1px solid #d6d8dc; font-size: 12.5px; color: var(--ink); }
+.mark-note svg { margin-top: 2px; }
+
 /* settings */
 .set-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .set-row:last-child { border-bottom: 0; }
-.set-row label { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.set-row label, .set-row .set-label { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; }
 .set-row .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.set-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.set-line .btn { margin-left: auto; }
 .range { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .range input[type=range] { flex: 1; accent-color: var(--ink); }
 .range .rv { font-variant-numeric: tabular-nums; font-weight: 700; width: 44px; text-align: right; }
@@ -271,23 +353,81 @@ svg.i.lg { width: 20px; height: 20px; }
 .qlist .qins { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 .qlist details { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .qlist details li { margin: 2px 0; }
-code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; background: #f1f0ec; padding: 1px 5px; border-radius: 4px; }
+code { font-family: var(--mono); font-size: 12px; background: #f1f0ec; padding: 1px 5px; border-radius: 4px; }
 
 /* modal */
-.modal { position: fixed; left: 50%; top: 50%; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; transform: translate(-50%, -48%) scale(.98); opacity: 0; pointer-events: none; transition: all .18s; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 60; }
-.modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+.modal { position: fixed; left: 50%; top: 50%; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; transform: translate(-50%, -48%) scale(.98); opacity: 0; pointer-events: none; transition: all .18s; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 60; visibility: hidden; }
+.modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); visibility: visible; }
 .mhead { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .mhead h2 { margin: 0; font-size: 16px; }
 .mbody { padding: 16px 20px; display: grid; gap: 12px; }
-.field label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.field { min-width: 0; }
+.field > label, .flabel { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
 .field input, .field textarea, .field select { width: 100%; border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
-.field textarea { min-height: 170px; resize: vertical; line-height: 1.5; }
+.field textarea { min-height: 150px; resize: vertical; line-height: 1.5; }
+.flabel-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.flabel-row .flabel { margin: 0; }
+.flabel-row .note { margin: 0 0 0 auto; }
+.dropzone { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border: 1.5px dashed var(--line-2); border-radius: 10px; padding: 11px 12px 11px 14px; background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; transition: background .15s, border-color .15s; }
+.dropzone.over { border-color: var(--blue); background: #eef5fd; }
+.dropzone .dz-i { color: var(--muted); }
+.dropzone .dz-t { flex: 1; min-width: 180px; }
+.dropzone .dz-t b { color: var(--ink); font-weight: 600; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.mfoot { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 20px; border-top: 1px solid var(--line); }
+.mfoot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 14px 20px; border-top: 1px solid var(--line); }
+.mfoot .note { margin: 0 auto 0 0; }
 
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow-lg); transition: all .2s; z-index: 70; pointer-events: none; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow-lg); transition: all .2s; z-index: 90; pointer-events: none; max-width: calc(100vw - 32px); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+
+/* ---------- file viewer ---------- */
+.viewer { position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column; background: #1c1e23; color: #fff; }
+.vbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; min-height: 58px; border-bottom: 1px solid rgba(255,255,255,.09); flex: none; }
+.vbar .ficon { width: 26px; height: 26px; border-radius: 6px; }
+.vbar .ficon svg.i { width: 15px; height: 15px; }
+.vtitle { flex: 1 1 auto; min-width: 0; }
+.vname { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vmeta { font-size: 12px; color: rgba(255,255,255,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.vactions { display: flex; align-items: center; gap: 8px; flex: none; }
+.vnav { display: flex; align-items: center; gap: 4px; font-size: 12px; color: rgba(255,255,255,.72); font-variant-numeric: tabular-nums; margin-right: 4px; }
+.vnav span { min-width: 46px; text-align: center; }
+.vbtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; min-width: 34px; padding: 0 11px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: #fff; font-weight: 600; font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+.vbtn:hover { background: rgba(255,255,255,.14); }
+.vbtn.icon { padding: 0; width: 34px; }
+.vbtn[aria-pressed="true"] { background: rgba(255,255,255,.92); color: var(--ink); border-color: transparent; }
+.vbtn:focus-visible { outline: 2px solid var(--blue-soft); outline-offset: 2px; }
+.vbody { flex: 1 1 auto; min-height: 0; display: flex; }
+.vstage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.vpdf { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; border-radius: 6px; background: #fff; }
+.vimg { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.vimg img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 10px 40px rgba(0,0,0,.45); background: #fff; }
+.v3d { position: relative; flex: 1 1 auto; min-height: 240px; border-radius: 10px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #fbfcfe 0%, #e6e9f1 62%, #d5dae4 100%); }
+.v3d canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; outline: none; }
+.v3d canvas.grabbing { cursor: grabbing; }
+.v3d canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--blue); }
+.v3d-hint { position: absolute; left: 12px; bottom: 10px; max-width: calc(100% - 100px); font-size: 11.5px; color: var(--ink-2); background: rgba(255,255,255,.8); padding: 3px 8px; border-radius: 6px; pointer-events: none; }
+.v3d-tools { position: absolute; right: 10px; top: 10px; display: flex; gap: 6px; }
+.v3d-tools .btn { height: 30px; background: rgba(255,255,255,.92); }
+.v3d-load { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.vprops { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 18px; margin: 0; padding: 12px 14px; background: #25282e; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; flex: none; }
+.vprops div { min-width: 0; }
+.vprops dt { font-size: 10.5px; color: rgba(255,255,255,.55); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.vprops dd { margin: 2px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vpanel { width: 340px; flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--surface); color: var(--ink); }
+.vpanel.collapsed { display: none; }
+.vpanel-head { display: flex; align-items: center; gap: 8px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.vpanel-head h3 { margin: 0; font-size: 14px; flex: 1; }
+.vpanel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; scrollbar-width: thin; }
+.vp-note { font-size: 12px; color: var(--muted); margin: 0; }
+.vp-note + .vp-note { margin-top: 6px; }
+.vp-warn { font-size: 12px; color: #6f4b00; background: #fff5d9; border: 1px solid #f1d690; border-radius: 6px; padding: 7px 9px; margin-top: 10px; }
+.jtext { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.6 var(--mono); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0 0; color: var(--ink); }
+.vp-loading { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.vmsg { margin: auto; max-width: 460px; text-align: center; background: var(--surface); color: var(--ink); border-radius: 12px; padding: 24px 22px; box-shadow: var(--shadow-lg); }
+.vmsg .vmsg-i { width: 42px; height: 42px; border-radius: 10px; margin: 0 auto 10px; display: grid; place-items: center; background: #f3f2ee; color: var(--ink-2); }
+.vmsg h3 { margin: 0 0 6px; font-size: 16px; }
+.vmsg p { margin: 0; color: var(--ink-2); font-size: 13px; }
 
 @media (min-width: 981px) {
   html, body { height: 100%; }
@@ -296,27 +436,53 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .main { flex: 1; min-height: 0; align-items: stretch; padding-bottom: 12px; }
   .inbox { position: static; max-height: none; height: 100%; min-height: 0; }
   .inbox-list { flex: 1; min-height: 0; }
-  .board { height: 100%; min-height: 0; overflow-y: auto; padding: 0 6px 12px 0; }
+  .board { height: 100%; min-height: 0; overflow-y: auto; padding: 0 4px 2px 0; scrollbar-width: thin; }
+  .group { flex: 1 1 0; min-height: 230px; }
+  .lanes { flex: 1 1 auto; min-height: 0; grid-auto-rows: minmax(0, 1fr); }
+  .lane { min-height: 0; }
   footer { padding: 0 24px 10px; }
 }
 @media (max-width: 1180px) { .lanes.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); } .conn .long { display: none; } }
+@media (min-width: 981px) and (max-width: 1180px) { .group.est { flex-grow: 2; min-height: 440px; } }
 @media (max-width: 980px) {
   .main { grid-template-columns: minmax(0, 1fr); }
   .inbox { position: static; max-height: 420px; }
   .how { grid-template-columns: minmax(0, 1fr); }
   .lanes.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lane { max-height: 420px; }
   .top { flex-wrap: wrap; }
   .conn { display: none; }
+}
+@media (max-width: 760px) {
+  .vbar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+  .vtitle { flex-basis: calc(100% - 90px); }
+  #vClose { order: 2; }
+  .vactions { order: 3; width: 100%; }
+  .vactions .vnav { margin-right: auto; }
+  .vbtn .label { display: none; }
+  .vbtn { padding: 0; width: 34px; }
+  .vbody { flex-direction: column; overflow-y: auto; }
+  .vstage { flex: none; height: 62vh; padding: 10px; }
+  .vstage.model { height: auto; }
+  .vstage.model .v3d { flex: none; height: 48vh; }
+  .vpanel { width: auto; flex: none; }
+  .vpanel-body { overflow: visible; }
 }
 @media (max-width: 640px) {
   .top, .stats, .main, footer { padding-left: 16px; padding-right: 16px; }
   .banner { margin-left: 16px; margin-right: 16px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lanes.four, .lanes.three { grid-template-columns: minmax(0, 1fr); }
+  .lane { max-height: 360px; }
   .brand-sep, .shop { display: none; }
   .actions .label { display: none; }
   .two { grid-template-columns: 1fr; }
   .opt { grid-template-columns: 96px minmax(0, 1fr) 36px; }
+  .dbody { padding: 14px 16px 24px; }
+  .dhead { padding: 16px 16px 12px; }
+  .ftiles { gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mbody, .mhead, .mfoot { padding-left: 16px; padding-right: 16px; }
+  .group-head span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
@@ -353,7 +519,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
       <h2>Inbox</h2><span class="count" id="inboxCount"></span>
       <span class="addr" id="inboxAddr"></span>
     </div>
-    <div class="inbox-list" id="inboxList"></div>
+    <div class="inbox-list thin-scroll" id="inboxList"></div>
   </section>
   <section class="board" id="board" aria-label="Routing board"></section>
 </main>
@@ -367,7 +533,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
     <svg class="i lg"><use href="#i-paste"/></svg>
     <h2 id="pasteTitle">Paste an RFQ</h2>
     <div class="spacer"></div>
-    <button class="btn ghost icon" data-close="paste" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    <button class="btn ghost icon" type="button" data-close="paste" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
   </div>
   <form id="pasteForm">
     <div class="mbody">
@@ -381,15 +547,53 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
       </div>
       <div class="field"><label for="pSubject">Subject</label><input id="pSubject" autocomplete="off" placeholder="RFQ: bracket, 6061-T6, qty 50"></div>
       <div class="field"><label for="pBody">Email body</label><textarea id="pBody" placeholder="Paste the email text here"></textarea></div>
-      <div class="field"><label for="pAtt">Attachment file names (comma separated)</label><input id="pAtt" autocomplete="off" placeholder="part_revA.pdf, part_revA.step"></div>
+      <div class="field" id="pFilesField">
+        <div class="flabel-row"><span class="flabel" id="pFilesLabel">Attachments</span><span class="note" id="pFilesCount"></span></div>
+        <div class="dropzone" id="pDrop" aria-labelledby="pFilesLabel">
+          <svg class="i lg dz-i" aria-hidden="true"><use href="#i-upload"/></svg>
+          <span class="dz-t" id="pDropText"><b>Drop files here</b> or add them. PDF, PNG, or JPG.</span>
+          <button type="button" class="btn small" id="pAddFiles"><svg class="i sm"><use href="#i-clip"/></svg>Add files</button>
+          <input type="file" id="pFileInput" multiple accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" hidden>
+        </div>
+        <div class="note" id="pPdfNote" hidden>This server cannot read PDF text (pypdf is not installed), so Jev will only see the file names of PDFs.</div>
+        <div class="ftiles" id="pFiles"></div>
+      </div>
+      <div class="field"><label for="pAtt">Other attachment names, no file (optional)</label><input id="pAtt" autocomplete="off" placeholder="part_revA.step, bracket_notes.pdf"></div>
     </div>
     <div class="mfoot">
+      <span class="note" id="pFootNote"></span>
       <button type="button" class="btn ghost" data-close="paste">Cancel</button>
-      <button type="submit" class="btn primary"><svg class="i play"><use href="#i-play"/></svg>Route with Jev</button>
+      <button type="submit" class="btn primary" id="pSubmit"><svg class="i play"><use href="#i-play"/></svg>Route with Jev</button>
     </div>
   </form>
 </div>
-<div class="toast" id="toast"></div>
+
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-labelledby="vName" hidden>
+  <div class="vbar">
+    <span class="ficon" id="vIcon" aria-hidden="true"></span>
+    <div class="vtitle"><div class="vname" id="vName"></div><div class="vmeta" id="vMeta"></div></div>
+    <div class="vactions">
+      <div class="vnav" id="vNav">
+        <button class="vbtn icon" id="vPrev" type="button" aria-label="Previous file"><svg class="i"><use href="#i-chev-left"/></svg></button>
+        <span id="vPos" aria-live="polite"></span>
+        <button class="vbtn icon" id="vNext" type="button" aria-label="Next file"><svg class="i"><use href="#i-chev-right"/></svg></button>
+      </div>
+      <button class="vbtn" id="vPanelBtn" type="button" aria-pressed="true" aria-controls="vPanel" title="What Jev reads from this file"><svg class="i"><use href="#i-panel"/></svg><span class="label">Jev text</span></button>
+      <a class="vbtn" id="vOpen" target="_blank" rel="noopener" title="Open in a new tab"><svg class="i"><use href="#i-external"/></svg><span class="label">Open</span></a>
+      <a class="vbtn" id="vDownload" title="Download"><svg class="i"><use href="#i-download"/></svg><span class="label">Download</span></a>
+    </div>
+    <button class="vbtn icon" id="vClose" type="button" aria-label="Close viewer"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="vbody">
+    <div class="vstage" id="vStage"></div>
+    <aside class="vpanel" id="vPanel" aria-labelledby="vPanelTitle">
+      <div class="vpanel-head"><h3 id="vPanelTitle">What Jev reads from this file</h3><button class="btn ghost icon small" id="vPanelClose" type="button" aria-label="Hide what Jev reads"><svg class="i"><use href="#i-x"/></svg></button></div>
+      <div class="vpanel-body" id="vPanelBody"></div>
+    </aside>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -416,6 +620,14 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
     <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8"/><path d="M8 17h5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
+    <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
   </defs>
 </svg>
 
@@ -425,28 +637,42 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pct = (x) => (x == null || isNaN(x) ? "n/a" : Math.round(x * 100) + "%");
 const ic = (name, cls = "") => `<svg class="i ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const reducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const URGENCY_LEVELS = ["No deadline", "Normal", "Soon", "Emergency"];
 const LANE_ICON = { itar: "lock", orders: "package", review: "eye", filtered: "archive" };
 const NOUL_BAR = { export_controlled: "export_control_restrict", quantity_given: "quantity_given", drawings_provided: "drawings_provided", outside_processing: "outside_processing" };
+// Same markings router.py looks for, used only to explain where a marking was found.
+const EXPORT_RE = /\b(itar|arms export control|export administration regulations|eccn|cui|controlled unclassified|dfars 252\.204-7012|u\.s\. persons only)\b/i;
+const LEGENDS = { itar: "ITAR", ear: "EAR", cui: "CUI" };
+const TYPE_ICON = { pdf: "file", step: "cube", image: "image", generic: "file" };
 
 const S = {
   boot: null, state: null, lanes: {}, emails: {}, selected: null, drawer: null,
-  revealed: new Set(), queue: [], revealedAt: {}, movedAt: {}, laneOf: {},
-  useCache: true, showKey: false, lastVersion: -1, revealTimer: null, clockOffset: 0,
-  offline: false, testResult: null, drawerVersion: null,
+  revealed: new Set(), queue: [], queued: new Set(), laneOf: {}, fresh: new Set(),
+  revealInterval: 170, revealRaf: 0, revealAcc: 0, revealLast: 0,
+  useCache: true, showKey: false, clockOffset: 0, offline: false, testResult: null, drawerVersion: null,
+  pollTimer: 0, renderRaf: 0, rebooting: false, fetchingEmails: false, routeLock: 0,
+  dom: { lanes: {}, cards: new Map(), rows: new Map(), statsHtml: "", routeBusy: null },
 };
 
 async function api(path, body) {
-  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  let opts = {};
+  if (body !== undefined) {
+    // POSTs ask for a delta too: only what changed since the version this page already has.
+    const payload = S.state ? Object.assign({}, body, { since: S.state.version, boot: S.state.boot_id }) : body;
+    opts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+  }
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok && !data.ok) throw Object.assign(new Error(data?.error?.message || data?.error || res.statusText), { data });
+  if (!res.ok && !data.ok) throw Object.assign(new Error((data && data.error && data.error.message) || (typeof data.error === "string" ? data.error : "") || res.statusText || "Request failed"), { data, status: res.status });
   return data;
 }
 
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.classList.add("show");
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 3200);
 }
 
 function money(v) {
@@ -455,6 +681,15 @@ function money(v) {
   if (v < 0.01) return "$" + v.toFixed(5);
   return "$" + v.toFixed(3);
 }
+
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function withParam(url, param) { return url + (url.includes("?") ? "&" : "?") + param; }
 
 function orgOf(email, decision) {
   if (decision && decision.customer) return decision.customer.name;
@@ -475,23 +710,67 @@ function marker(laneId) {
 
 /* ---------------------------------------------------------------- init */
 async function init() {
+  try { S.useCache = localStorage.getItem("rfq.useCache") !== "0"; S.showKey = localStorage.getItem("rfq.showKey") === "1"; } catch (e) { /* storage blocked */ }
   const boot = await api("/api/bootstrap");
+  loadBoot(boot);
+  bindEvents();
+  applyState(boot.state);
+  schedulePoll(1200);
+}
+
+function loadBoot(boot) {
   S.boot = boot;
   boot.customers = boot.customers || {};
-  for (const lane of boot.lanes) S.lanes[lane.id] = lane;
-  for (const e of boot.emails) S.emails[e.id] = e;
-  try { S.useCache = localStorage.getItem("rfq.useCache") !== "0"; S.showKey = localStorage.getItem("rfq.showKey") === "1"; } catch (e) {}
+  boot.uploads = boot.uploads || { max_files: 5, max_bytes: 10485760, types: ["application/pdf", "image/png", "image/jpeg"], pdf_text: false };
+  S.lanes = {}; for (const lane of boot.lanes) S.lanes[lane.id] = lane;
+  S.emails = {}; for (const e of boot.emails) S.emails[e.id] = e;
   $("#product").textContent = boot.brand.product || "RFQ Router";
   $("#shopName").textContent = boot.shop.name;
   $("#shopSub").textContent = `${boot.shop.location} · ${boot.shop.inbox}`;
   $("#inboxAddr").textContent = boot.shop.inbox;
   document.title = `${boot.brand.product || "RFQ Router"} · ${boot.shop.name}`;
   $("#footer").innerHTML = `<span><b>Jev</b> (TypeSafe AI) makes the judgment calls. Plain code applies the routing rules.</span><span>${esc(boot.shop.disclaimer || "")}</span><span>Built by ${esc(boot.brand.by || "")}</span>`;
+  $("#pPdfNote").hidden = !!boot.uploads.pdf_text;
+  const mb = Math.round(boot.uploads.max_bytes / 1048576);
+  $("#pDropText").innerHTML = `<b>Drop files here</b> or add them. PDF, PNG, or JPG, up to ${boot.uploads.max_files} files, ${mb} MB each.`;
   buildPasteExamples();
+  buildBoard();
+  $("#inboxList").textContent = ""; S.dom.rows.clear();
+  S.dom.statsHtml = ""; S.dom.routeBusy = null;
   renderConn();
-  applyState(boot.state, true);
-  poll();
-  bindEvents();
+}
+
+async function rebootstrap() {
+  // The server restarted (a Render redeploy or a sleep): its boot id changed and pasted emails are gone.
+  if (S.rebooting) return;
+  S.rebooting = true;
+  try {
+    const boot = await api("/api/bootstrap");
+    const hadEmail = S.selected;
+    closeViewer();
+    resetReveal();
+    S.state = null;
+    loadBoot(boot);
+    clearPasteFiles();
+    applyState(boot.state);
+    if (hadEmail && !S.emails[hadEmail]) closeOverlays();
+    else if (S.drawer === "email") renderEmailDrawer(true);
+    else if (S.drawer === "settings") renderSettings();
+    toast("The demo server restarted, so the board was reloaded. Route the inbox to replay saved results.");
+  } catch (e) {
+    /* still restarting: the next poll tries again */
+  } finally { S.rebooting = false; }
+}
+
+async function fetchMissingEmails() {
+  if (S.fetchingEmails || S.rebooting) return;
+  S.fetchingEmails = true;
+  try {
+    const boot = await api("/api/bootstrap");
+    if (S.state && boot.state.boot_id !== S.state.boot_id) { S.fetchingEmails = false; rebootstrap(); return; }
+    for (const e of boot.emails) if (!S.emails[e.id]) S.emails[e.id] = e;
+    scheduleRender();
+  } catch (e) { /* try again on the next change */ } finally { S.fetchingEmails = false; }
 }
 
 function renderConn() {
@@ -499,28 +778,32 @@ function renderConn() {
   const dot = $("#connDot"), text = $("#connText"), conn = $("#conn");
   const w = S.state ? S.state.worker : null;
   if (S.offline) { dot.className = "dot bad"; text.textContent = "Demo server not responding"; return; }
-  if (!j.configured) { dot.className = "dot warn"; text.innerHTML = "No Jev key found"; conn.title = "Add AI_GATEWAY_API_KEY to Jev_Test/.env"; return; }
+  if (!j.configured) { dot.className = "dot warn"; text.textContent = "No Jev key found"; conn.title = "Add AI_GATEWAY_API_KEY to Jev_Test/.env"; return; }
   conn.title = `${j.provider}\n${j.endpoint}\nKey ${j.key_env}: ${j.key_hint}`;
-  let cls = "dot ok", label = `Jev <span class="long">· ${esc(j.provider)} · </span>${esc(j.model)}`;
+  let cls = "dot ok";
+  const label = `Jev <span class="long">· ${esc(j.provider)} · </span>${esc(j.model)}`;
   if (w && w.state === "running") cls = "dot live";
   else if (w && w.state === "waiting") cls = "dot warn";
   else if (w && w.state === "stopped") cls = "dot bad";
   else if (!(w && w.calls)) cls = "dot";
-  dot.className = cls; text.innerHTML = label;
+  if (dot.className !== cls) dot.className = cls;
+  if (text.dataset.label !== label) { text.innerHTML = label; text.dataset.label = label; }
 }
 
 function bindEvents() {
   $("#routeBtn").addEventListener("click", onRoute);
   $("#pasteBtn").addEventListener("click", openPaste);
   $("#resetBtn").addEventListener("click", async () => {
-    const st = await api("/api/reset", {});
-    S.revealed.clear(); S.queue = []; S.revealedAt = {}; S.movedAt = {}; S.laneOf = {};
-    applyState(st.state, true);
-    toast("Board cleared. Route inbox again to replay.");
+    try {
+      const st = await api("/api/reset", {});
+      resetReveal();
+      applyState(st.state);
+      toast("Board cleared. Route inbox again to replay.");
+    } catch (e) { toast(e.message); }
   });
   $("#settingsBtn").addEventListener("click", () => openDrawer("settings"));
   $("#scrim").addEventListener("click", closeOverlays);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlays(); });
+  document.addEventListener("keydown", onKeydown);
   document.querySelectorAll("[data-close=paste]").forEach((b) => b.addEventListener("click", closePaste));
   $("#pasteForm").addEventListener("submit", submitPaste);
   $("#pExample").addEventListener("change", fillExample);
@@ -529,73 +812,166 @@ function bindEvents() {
   const keySelect = (e) => { if (e.key !== "Enter" && e.key !== " ") return; const t = e.target.closest("[data-id]"); if (t) { e.preventDefault(); select(t.dataset.id); } };
   $("#inboxList").addEventListener("keydown", keySelect);
   $("#board").addEventListener("keydown", keySelect);
+  $("#board").addEventListener("animationend", (e) => {
+    if (e.animationName === "glow" && e.target.classList.contains("card")) e.target.classList.remove("fresh", "moved");
+  });
+  $("#drawer").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-att]");
+    if (!t || !S.selected) return;
+    const email = S.emails[S.selected];
+    if (email) openViewer(email.attachments || [], Number(t.dataset.att), t, (i) => `#drawer [data-att="${i}"]`);
+  });
+  // A preview image that fails to load (for example an upload the server dropped) gets a quiet placeholder.
+  document.addEventListener("error", (e) => {
+    const t = e.target;
+    if (t && t.tagName === "IMG" && t.closest(".fprev")) t.closest(".fprev").classList.add("broken");
+  }, true);
+  bindPasteFiles();
+  bindViewer();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(50); });
+}
+
+function onKeydown(e) {
+  if (!$("#viewer").hidden) {
+    if (e.key === "Escape") { e.preventDefault(); closeViewer(); }
+    else if (e.key === "ArrowLeft" && !e.altKey) { e.preventDefault(); moveViewer(-1); }
+    else if (e.key === "ArrowRight" && !e.altKey) { e.preventDefault(); moveViewer(1); }
+    else if (e.key === "Tab") trapFocus(e, $("#viewer"));
+    return;
+  }
+  if (e.key === "Escape") closeOverlays();
+}
+
+function trapFocus(e, root) {
+  const items = [...root.querySelectorAll("button, a[href], iframe, canvas[tabindex], [tabindex='0']")]
+    .filter((el) => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden");
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
 }
 
 /* ---------------------------------------------------------------- state */
+function schedulePoll(ms) {
+  clearTimeout(S.pollTimer);
+  S.pollTimer = setTimeout(poll, ms);
+}
+
 async function poll() {
   try {
-    const st = await api("/api/state");
-    if (S.offline) { S.offline = false; }
+    const q = S.state ? `?since=${encodeURIComponent(S.state.version)}&boot=${encodeURIComponent(S.state.boot_id)}` : "";
+    const st = await api("/api/state" + q);
+    if (S.offline) { S.offline = false; renderBanner(); }
     applyState(st);
   } catch (e) {
     S.offline = true; renderConn(); renderBanner();
   }
   const w = S.state && S.state.worker;
-  const active = (w && (w.state === "running" || w.state === "waiting")) || S.queue.length;
-  setTimeout(poll, active ? 400 : 1500);
+  const active = (w && (w.state === "running" || w.state === "waiting" || w.queue_length > 0)) || S.queue.length;
+  schedulePoll(document.hidden ? 5000 : active ? 400 : 1500);
 }
 
-function applyState(st, force) {
-  S.state = st;
-  S.clockOffset = st.worker.now * 1000 - Date.now();
-  if (st.order.some((id) => !S.emails[id])) { refreshEmails(); }
-  if (force || st.version !== S.lastVersion) {
-    S.lastVersion = st.version;
-    for (const id of st.order) {
-      const it = st.items[id];
-      const done = it && it.status === "done" && it.decision;
-      if (done && !S.revealed.has(id) && !S.queue.includes(id)) S.queue.push(id);
-      if (!done && S.revealed.has(id)) { S.revealed.delete(id); delete S.laneOf[id]; }
-      if (done && S.revealed.has(id)) {
-        const lane = it.decision.lane;
-        if (S.laneOf[id] && S.laneOf[id] !== lane) S.movedAt[id] = performance.now();
-        S.laneOf[id] = lane;
-      }
-    }
-    S.queue = S.queue.filter((id) => st.items[id] && st.items[id].status === "done");
-    renderAll();
+/* Merge a state from the server. A delta carries only the items that changed since the version we
+   sent; a full state (first load, or the server lost track of us) carries everything. */
+function applyState(st) {
+  if (!st || !st.worker) return;
+  const prev = S.state;
+  if (prev && st.boot_id !== prev.boot_id) { rebootstrap(); return; }
+  if (prev && st.version < prev.version) return;  // an older answer that arrived late
+  let ids;
+  if (!prev || st.full) {
+    S.state = Object.assign({}, st, { order: st.order || (prev ? prev.order : []), items: Object.assign({}, st.items) });
+    ids = S.state.order;
+  } else {
+    const items = prev.items;
+    Object.assign(items, st.items);
+    S.state = Object.assign({}, st, { order: st.order || prev.order, items });
+    ids = Object.keys(st.items || {});
   }
+  if (st.emails) for (const e of st.emails) S.emails[e.id] = e;
+  if (S.state.order.some((id) => !S.emails[id])) fetchMissingEmails();
+  S.clockOffset = st.worker.now * 1000 - Date.now();
+
+  const idle = !S.queue.length && !S.revealRaf;
+  let added = 0;
+  for (const id of ids) {
+    const it = S.state.items[id];
+    if (!it) continue;
+    const done = it.status === "done" && !!it.decision;
+    if (done && !S.revealed.has(id)) {
+      if (!S.queued.has(id)) { S.queue.push(id); S.queued.add(id); added++; }
+    } else if (!done && S.revealed.has(id)) {
+      S.revealed.delete(id); delete S.laneOf[id];
+    } else if (done) {
+      S.laneOf[id] = it.decision.lane;
+    }
+  }
+  if (S.queue.length) {
+    S.queue = S.queue.filter((id) => {
+      const it = S.state.items[id];
+      const ok = !!(it && it.status === "done" && it.decision);
+      if (!ok) S.queued.delete(id);
+      return ok;
+    });
+  }
+  if (added && S.queue.length) {
+    // A long queue lands in about 2.6 seconds; a short one at a readable pace.
+    const iv = Math.min(170, 2600 / S.queue.length);
+    S.revealInterval = idle ? iv : Math.min(S.revealInterval, iv);
+  }
+  scheduleRender();
   renderBanner();
   renderConn();
   pumpReveal();
 }
 
-async function refreshEmails() {
-  if (S.refreshing) return;
-  S.refreshing = true;
-  try {
-    const boot = await api("/api/bootstrap");
-    for (const e of boot.emails) S.emails[e.id] = e;
-    renderAll();
-  } finally { S.refreshing = false; }
+function resetReveal() {
+  S.revealed.clear(); S.queue = []; S.queued.clear(); S.laneOf = {}; S.fresh.clear();
+  if (S.revealRaf) cancelAnimationFrame(S.revealRaf);
+  S.revealRaf = 0; S.revealAcc = 0; S.revealInterval = 170;
 }
 
 function pumpReveal() {
-  if (S.revealTimer || !S.queue.length) return;
-  const step = () => {
+  if (!S.queue.length || S.revealRaf) return;
+  if (reducedMotion()) { revealSome(S.queue.length); renderAll(); return; }
+  S.revealLast = performance.now();
+  S.revealAcc = S.revealInterval;  // the first card lands on the next frame
+  S.revealRaf = requestAnimationFrame(revealFrame);
+}
+
+function revealFrame(now) {
+  S.revealRaf = 0;
+  S.revealAcc = Math.min(S.revealAcc + Math.max(0, now - S.revealLast), S.revealInterval * 4 + 40);
+  S.revealLast = now;
+  const n = Math.floor(S.revealAcc / S.revealInterval);
+  if (n > 0) {
+    S.revealAcc -= n * S.revealInterval;
+    if (revealSome(n)) renderAll();
+  }
+  if (S.queue.length) S.revealRaf = requestAnimationFrame(revealFrame);
+  else { S.revealAcc = 0; S.revealInterval = 170; }
+}
+
+function revealSome(n) {
+  let any = false;
+  while (n > 0 && S.queue.length) {
     const id = S.queue.shift();
-    if (id) {
-      S.revealed.add(id); S.revealedAt[id] = performance.now();
-      S.laneOf[id] = S.state.items[id].decision.lane;
-      renderAll();
-    }
-    if (S.queue.length) S.revealTimer = setTimeout(step, S.queue.length > 8 ? 110 : 190);
-    else S.revealTimer = null;
-  };
-  step();
+    S.queued.delete(id);
+    const it = S.state.items[id];
+    if (!it || it.status !== "done" || !it.decision) continue;
+    S.revealed.add(id); S.laneOf[id] = it.decision.lane; S.fresh.add(id);
+    any = true; n--;
+  }
+  return any;
+}
+
+function scheduleRender() {
+  if (!S.renderRaf) S.renderRaf = requestAnimationFrame(() => { S.renderRaf = 0; renderAll(); });
 }
 
 function renderAll() {
+  if (S.renderRaf) { cancelAnimationFrame(S.renderRaf); S.renderRaf = 0; }
+  if (!S.state) return;
   renderRouteBtn(); renderStats(); renderInbox(); renderBoard();
   if (S.drawer === "email") renderEmailDrawer(false);
   if (S.drawer === "settings") updateSettings();
@@ -605,21 +981,23 @@ function renderAll() {
 function renderRouteBtn() {
   const w = S.state.worker, b = $("#routeBtn");
   const busy = w.state === "running" || w.state === "waiting" || w.queue_length > 0;
+  if (S.dom.routeBusy === busy) return;
+  S.dom.routeBusy = busy;
   b.innerHTML = busy ? `${ic("stop")}<span class="label">Stop</span>` : `${ic("play", "play")}<span class="label">Route inbox</span>`;
   b.className = busy ? "btn" : "btn primary";
   b.dataset.busy = busy ? "1" : "";
 }
 
 async function onRoute() {
-  if (Date.now() < (S.routeLock || 0)) return;  // a double-click must not start and then stop
+  if (Date.now() < S.routeLock) return;  // a double-click must not start and then stop
   S.routeLock = Date.now() + 800;
   const b = $("#routeBtn");
-  if (b.dataset.busy) { const st = await api("/api/stop", {}); applyState(st.state, true); toast("Stopped. Everything routed so far is saved."); return; }
-  const ids = S.state.order.filter((id) => ["idle", "error"].includes(S.state.items[id].status));
-  if (!ids.length) { toast("Everything is routed. Press Reset to replay the demo."); return; }
   try {
+    if (b.dataset.busy) { const st = await api("/api/stop", {}); applyState(st.state); toast("Stopped. Everything routed so far is saved."); return; }
+    const ids = S.state.order.filter((id) => S.state.items[id] && ["idle", "error"].includes(S.state.items[id].status));
+    if (!ids.length) { toast("Everything is routed. Press Reset to replay the demo."); return; }
     const r = await api("/api/run", { ids, use_cache: S.useCache });
-    applyState(r.state, true);
+    applyState(r.state);
     if (r.cached && !r.queued) toast(`Replaying ${r.cached} saved Jev results`);
     else if (r.queued) toast(`Sending ${r.queued} email${r.queued === 1 ? "" : "s"} to Jev${r.cached ? `, replaying ${r.cached} saved` : ""}`);
   } catch (e) { toast(e.message); }
@@ -627,7 +1005,7 @@ async function onRoute() {
 
 /* ---------------------------------------------------------------- stats */
 function visibleDone() {
-  return S.state.order.filter((id) => S.revealed.has(id) && S.state.items[id].decision);
+  return S.state.order.filter((id) => S.revealed.has(id) && S.state.items[id] && S.state.items[id].decision);
 }
 
 function renderStats() {
@@ -657,42 +1035,79 @@ function renderStats() {
     { label: "Jev cost so far", value: ids.length ? money(reported && cost === 0 ? 0 : (cost || listPrice)) : "$0.00", sub: costSub },
     { label: "Answer key", value: graded ? `${match}<small> / ${graded}</small>` : "n/a", sub: graded ? "matches the expected route" : "Scored against the demo key", hidden: !S.showKey },
   ];
-  $("#stats").innerHTML = tiles.map((t) => `<div class="tile${t.hidden ? " hidden" : ""}"><div class="label">${t.label}</div><div class="value">${t.value}</div><div class="sub">${esc(t.sub)}</div></div>`).join("");
+  const html = tiles.map((t) => `<div class="tile${t.hidden ? " hidden" : ""}"><div class="label">${t.label}</div><div class="value">${t.value}</div><div class="sub">${esc(t.sub)}</div></div>`).join("");
+  if (html !== S.dom.statsHtml) { $("#stats").innerHTML = html; S.dom.statsHtml = html; }
 }
 
 /* ---------------------------------------------------------------- inbox */
-function statusIcon(id) {
+function rowState(id) {
   const it = S.state.items[id];
-  if (!it) return `<span class="st-idle"></span>`;
-  if (it.status === "done" && S.revealed.has(id)) return marker(it.decision.lane);
-  if (it.status === "running" || (it.status === "done" && !S.revealed.has(id))) return `<span class="spin" aria-label="Routing"></span>`;
-  if (it.status === "queued") return `<span class="st-queued" aria-label="Queued"></span>`;
-  if (it.status === "error") return `<span class="st-err">${ic("alert", "sm")}</span>`;
+  if (!it) return "idle";
+  if (it.status === "done" && S.revealed.has(id) && it.decision) return "shown";
+  if (it.status === "running" || it.status === "done") return "asking";
+  return it.status;  // idle, queued, error
+}
+
+function statusIcon(id, state) {
+  const it = S.state.items[id];
+  if (state === "shown") return marker(it.decision.lane);
+  if (state === "asking") return `<span class="spin" aria-label="Routing"></span>`;
+  if (state === "queued") return `<span class="st-queued" aria-label="Queued"></span>`;
+  if (state === "error") return `<span class="st-err" aria-label="Error">${ic("alert", "sm")}</span>`;
   return `<span class="st-idle" aria-label="Not routed"></span>`;
 }
 
+function rowSig(id) {
+  const e = S.emails[id], it = S.state.items[id] || {}, state = rowState(id);
+  const d = state === "shown" ? it.decision : null;
+  return [state, d ? d.lane + d.lane_name + (d.priority || "") + (d.customer ? d.customer.name : "") : "",
+    state === "error" ? (it.error && it.error.message) || "" : "", (e.attachments || []).length].join("|");
+}
+
+function rowInner(id) {
+  const e = S.emails[id], it = S.state.items[id] || {}, state = rowState(id);
+  const d = state === "shown" ? it.decision : null;
+  const att = (e.attachments || []).length;
+  let dest;
+  if (d) dest = `<span class="dest">${ic("arrow", "sm")}${marker(d.lane)}<span class="lname">${esc(d.lane_name)}</span>${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}</span>`;
+  else if (state === "error") dest = `<span class="dest err"><span class="lname">${esc((it.error && it.error.message) || "Error")}</span></span>`;
+  else if (state === "queued") dest = `<span class="snip">Queued for Jev</span>`;
+  else if (state === "asking") dest = `<span class="snip">Asking Jev</span>`;
+  else dest = `<span class="snip">${esc((e.body || "").replace(/\s+/g, " ").slice(0, 110))}</span>`;
+  return `<span class="st">${statusIcon(id, state)}</span>
+    <span class="rmain">
+      <span class="line1"><span class="who">${esc(e.from_name || "Unknown sender")}</span><span class="org">${esc(orgOf(e, d))}</span><span class="time">${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}${esc(e.received || "")}</span></span>
+      <span class="subj">${esc(e.subject || "(no subject)")}</span>
+      ${dest}
+    </span>`;
+}
+
 function renderInbox() {
-  const st = S.state;
-  $("#inboxCount").textContent = `${st.order.length}`;
-  $("#inboxList").innerHTML = st.order.map((id) => {
-    const e = S.emails[id]; if (!e) return "";
-    const it = st.items[id], shown = it.status === "done" && S.revealed.has(id);
-    const d = shown ? it.decision : null;
-    const att = (e.attachments || []).length;
-    let dest = "";
-    if (d) dest = `<span class="dest">${ic("arrow", "sm")}${marker(d.lane)}<span class="lname">${esc(d.lane_name)}</span>${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}</span>`;
-    else if (it.status === "error") dest = `<span class="dest" style="color:var(--critical)">${esc((it.error && it.error.message) || "Error")}</span>`;
-    else if (it.status === "queued") dest = `<span class="snip">Queued for Jev</span>`;
-    else if (it.status === "running" || it.status === "done") dest = `<span class="snip">Asking Jev</span>`;
-    else dest = `<span class="snip">${esc((e.body || "").replace(/\s+/g, " ").slice(0, 110))}</span>`;
-    return `<div class="row${shown ? " done" : ""}${S.selected === id ? " sel" : ""}" data-id="${esc(id)}" role="button" tabindex="0" aria-label="${esc(e.subject)}">
-      <span class="st">${statusIcon(id)}</span>
-      <span style="min-width:0;display:block">
-        <span class="line1"><span class="who">${esc(e.from_name || "Unknown sender")}</span><span class="org">${esc(orgOf(e, d))}</span><span class="time">${att ? `<span class="clip">${ic("clip", "sm")}${att}</span> ` : ""}${esc(e.received || "")}</span></span>
-        <span class="subj" style="display:block">${esc(e.subject || "(no subject)")}</span>
-        ${dest}
-      </span></div>`;
-  }).join("");
+  const st = S.state, list = $("#inboxList");
+  const count = String(st.order.length);
+  if ($("#inboxCount").textContent !== count) $("#inboxCount").textContent = count;
+  let ref = list.firstElementChild;
+  for (const id of st.order) {
+    const e = S.emails[id];
+    if (!e) continue;
+    let r = S.dom.rows.get(id);
+    if (!r) {
+      const el = document.createElement("div");
+      el.className = "row"; el.dataset.id = id; el.setAttribute("role", "button"); el.tabIndex = 0;
+      el.setAttribute("aria-label", e.subject || "No subject");
+      r = { el, sig: null }; S.dom.rows.set(id, r);
+    }
+    const sig = rowSig(id);
+    if (r.sig !== sig) {
+      r.el.innerHTML = rowInner(id);
+      r.el.classList.toggle("done", rowState(id) === "shown");
+      r.sig = sig;
+    }
+    r.el.classList.toggle("sel", S.selected === id);
+    if (r.el !== ref) list.insertBefore(r.el, ref);
+    else ref = ref.nextElementSibling;
+  }
+  while (ref) { const next = ref.nextElementSibling; if (!st.order.includes(ref.dataset.id)) { S.dom.rows.delete(ref.dataset.id); ref.remove(); } ref = next; }
 }
 
 /* ---------------------------------------------------------------- board */
@@ -707,61 +1122,111 @@ function customerBadge(d) {
   return "";
 }
 
+function cardBadges(d) {
+  const f = d.flags.filter((x) => x.id !== "volume");
+  const vol = d.flags.find((x) => x.id === "volume");
+  const toned = ["restricted", "serious", "warning"];
+  const list = toned.flatMap((tone) => f.filter((x) => x.tone === tone)).map(badgeHtml);
+  const cb = customerBadge(d);
+  if (cb) list.push(cb);
+  if (d.lane === "itar" && d.is_rfq) list.push(`<span class="badge">Likely ${esc(d.process_guess.label)}</span>`);
+  else if (vol) list.push(badgeHtml(vol));
+  list.push(...f.filter((x) => !toned.includes(x.tone)).map(badgeHtml));
+  return list.slice(0, 3).join("");
+}
+
 function meterHtml(m, lane) {
   if (!m || m.value == null) return "";
   const ink = lane === "itar";
-  return `<div class="meter${ink ? " ink" : ""}" title="${esc(m.label)} ${pct(m.value)}; bar at ${pct(m.threshold)}"><div class="fill" style="width:${Math.max(2, m.value * 100)}%"></div><div class="tick" style="left:calc(${m.threshold * 100}% - 1px)"></div></div><span class="mval">${ink ? "ITAR " : ""}${pct(m.value)}</span>`;
+  return `<div class="cm" title="${esc(m.label)} ${pct(m.value)}; bar at ${pct(m.threshold)}"><div class="meter${ink ? " ink" : ""}"><div class="fill" style="width:${Math.max(2, m.value * 100)}%"></div><div class="tick" style="left:calc(${m.threshold * 100}% - 1px)"></div></div><span class="mval">${pct(m.value)}</span></div>`;
 }
 
-function cardHtml(id) {
-  const e = S.emails[id], it = S.state.items[id], d = it.decision;
-  const cls = ["card"], now = performance.now();
-  const sinceReveal = S.revealedAt[id] != null ? now - S.revealedAt[id] : Infinity;
-  const sinceMove = S.movedAt[id] != null ? now - S.movedAt[id] : Infinity;
-  let anim = "";
-  if (sinceReveal < 1600) { cls.push("fresh"); anim = ` style="animation-delay:-${Math.round(sinceReveal)}ms"`; }
-  else if (sinceMove < 1400) { cls.push("moved"); anim = ` style="animation-delay:-${Math.round(sinceMove)}ms"`; }
-  if (S.selected === id) cls.push("sel");
-  const flags = d.flags.filter((f) => f.id !== "volume").slice(0, 4).map(badgeHtml).join("");
-  const vol = d.flags.find((f) => f.id === "volume");
+function cardSig(id) {
+  const e = S.emails[id], d = S.state.items[id].decision;
+  return [d.lane, d.priority, d.flags.map((f) => f.id + ":" + f.label).join(","), d.customer ? d.customer.tier + d.customer.name : "",
+    d.meter ? `${d.meter.value}/${d.meter.threshold}/${d.meter.label}` : "", d.lane === "itar" && d.is_rfq ? d.process_guess.label : "",
+    S.showKey && d.matches_expected != null ? `${d.matches_expected}${d.expected_lane}` : "", (e.attachments || []).length].join("|");
+}
+
+function cardInner(id) {
+  const e = S.emails[id], d = S.state.items[id].decision;
+  const att = (e.attachments || []).length;
   const key = S.showKey && d.matches_expected != null
     ? `<span class="key-mark ${d.matches_expected ? "ok" : "bad"}" title="Answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}">${ic(d.matches_expected ? "check" : "x", "sm")}</span>` : "";
-  const extra = d.lane === "itar" && d.is_rfq ? `<span class="badge">Likely ${esc(d.process_guess.label)}</span>` : (vol ? badgeHtml(vol) : "");
-  return `<div class="${cls.join(" ")}"${anim} data-id="${esc(id)}" role="button" tabindex="0" aria-label="${esc(e.subject || "No subject")}">
-    ${key}
-    <div class="ctop">${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}<div class="csubj">${esc(e.subject || "(no subject)")}</div></div>
-    <div class="corg"><span class="o">${esc(orgOf(e, d))}</span></div>
-    <div class="badges">${flags}${customerBadge(d)}${extra}</div>
-    <div class="cfoot">${meterHtml(d.meter, d.lane)}</div>
-  </div>`;
+  return `${key}<div class="csubj">${esc(e.subject || "(no subject)")}</div>
+    <div class="cmeta">${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}<span class="o">${esc(orgOf(e, d))}</span>${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}</div>
+    <div class="cfoot"><div class="badges">${cardBadges(d)}</div>${meterHtml(d.meter, d.lane)}</div>`;
 }
 
-function laneHtml(lane) {
-  const ids = S.state.order.filter((id) => S.revealed.has(id) && S.state.items[id].decision && S.state.items[id].decision.lane === lane.id);
+function laneShell(lane) {
   const icon = LANE_ICON[lane.id] ? ic(LANE_ICON[lane.id], "sm") : "";
-  return `<div class="lane ${lane.id === "itar" ? "itar" : ""}">
+  return `<div class="lane${lane.id === "itar" ? " itar" : ""}" data-lane="${esc(lane.id)}">
     <div class="lane-head">
-      <div class="lane-title">${marker(lane.id)}${icon}<span class="nm">${esc(lane.name)}</span><span class="n">${ids.length}</span></div>
+      <div class="lane-title">${marker(lane.id)}${icon}<span class="nm">${esc(lane.name)}</span><span class="n">0</span></div>
       <div class="lane-owner">${esc(lane.owner)}${lane.role ? " · " + esc(lane.role) : ""}</div>
     </div>
-    ${ids.length ? `<div class="cards">${ids.map(cardHtml).join("")}</div>` : `<div class="empty">No emails yet</div>`}
+    <div class="empty">No emails yet</div>
+    <div class="cards" aria-label="${esc(lane.name)}"></div>
   </div>`;
 }
 
-function renderBoard() {
+function buildBoard() {
   const est = S.boot.lanes.filter((l) => l.group === "estimating");
   const other = S.boot.lanes.filter((l) => l.group !== "estimating");
-  const any = S.revealed.size > 0;
-  const how = any ? "" : `<div class="how">
-      <div class="step"><div class="num">1</div><h4>One Jev call per email</h4><p>Each email goes to Jev with ${S.boot.questions.length} questions at once: what it is, which estimator, ITAR or CUI, urgency, and what is missing.</p></div>
+  const n = S.boot.questions.length;
+  $("#board").innerHTML = `<div class="how" id="how">
+      <div class="step"><div class="num">1</div><h4>One Jev call per email</h4><p>The email and the text of its attachments (drawing notes, title blocks, RFQ forms) go to Jev with ${n} questions at once: what it is, which estimator, ITAR or CUI, urgency, and what is missing.</p></div>
       <div class="step"><div class="num">2</div><h4>Typed answers with probabilities</h4><p>Jev returns choices, yes/no probabilities, and scores in a few hundred milliseconds. No text to parse, nothing to hallucinate.</p></div>
       <div class="step"><div class="num">3</div><h4>Your rules route it</h4><p>Code checks ITAR first, sends low-confidence mail to a person, sets priority and quote dates, and drafts the reply from a template.</p></div>
-    </div>`;
-  $("#board").innerHTML = `${how}
-    <div><div class="group-head"><h3>Estimating</h3><span>Jev picks the estimator. Export control is checked first.</span></div>
-      <div class="lanes four">${est.map(laneHtml).join("")}</div></div>
-    <div><div class="group-head"><h3>Everything else</h3><span>Orders, review, and noise.</span></div>
-      <div class="lanes three">${other.map(laneHtml).join("")}</div></div>`;
+    </div>
+    <div class="group est"><div class="group-head"><h3>Estimating</h3><span>Jev picks the estimator. Export control is checked first.</span></div>
+      <div class="lanes four">${est.map(laneShell).join("")}</div></div>
+    <div class="group other"><div class="group-head"><h3>Everything else</h3><span>Orders, review, and noise.</span></div>
+      <div class="lanes three">${other.map(laneShell).join("")}</div></div>`;
+  S.dom.lanes = {}; S.dom.cards.clear();
+  for (const el of document.querySelectorAll("#board [data-lane]")) {
+    S.dom.lanes[el.dataset.lane] = { el, list: el.querySelector(".cards"), count: el.querySelector(".n"), empty: el.querySelector(".empty"), n: -1 };
+  }
+}
+
+/* Incremental: cards are keyed by email id, and only a card whose signature changed is rebuilt.
+   Lane lists are never replaced, so their scroll positions survive polls and reveals. */
+function renderBoard() {
+  const how = $("#how");
+  if (how) how.hidden = S.revealed.size > 0;
+  const perLane = {};
+  for (const id in S.dom.lanes) perLane[id] = [];
+  for (const id of S.state.order) {
+    if (!S.revealed.has(id)) continue;
+    const it = S.state.items[id], d = it && it.decision;
+    if (d && perLane[d.lane] && S.emails[id]) perLane[d.lane].push(id);
+  }
+  for (const [id, c] of S.dom.cards) {
+    const it = S.state.items[id];
+    if (!S.revealed.has(id) || !it || !it.decision || !S.emails[id]) { c.el.remove(); S.dom.cards.delete(id); }
+  }
+  for (const laneId in S.dom.lanes) {
+    const L = S.dom.lanes[laneId], ids = perLane[laneId];
+    if (L.n !== ids.length) { L.count.textContent = ids.length; L.empty.hidden = ids.length > 0; L.n = ids.length; }
+    let ref = L.list.firstElementChild;
+    for (const id of ids) {
+      let c = S.dom.cards.get(id);
+      if (!c) {
+        const el = document.createElement("div");
+        el.className = "card"; el.dataset.id = id; el.setAttribute("role", "button"); el.tabIndex = 0;
+        el.setAttribute("aria-label", S.emails[id].subject || "No subject");
+        c = { el, sig: null, lane: null }; S.dom.cards.set(id, c);
+      }
+      const sig = cardSig(id);
+      if (c.sig !== sig) { c.el.innerHTML = cardInner(id); c.sig = sig; }
+      if (S.fresh.has(id)) { S.fresh.delete(id); c.el.classList.remove("moved"); c.el.classList.add("fresh"); }
+      else if (c.lane && c.lane !== laneId) { c.el.classList.remove("fresh"); c.el.classList.add("moved"); }
+      c.lane = laneId;
+      c.el.classList.toggle("sel", S.selected === id);
+      if (c.el !== ref) L.list.insertBefore(c.el, ref);
+      else ref = ref.nextElementSibling;
+    }
+  }
 }
 
 /* ---------------------------------------------------------------- banner */
@@ -771,12 +1236,12 @@ function renderBanner() {
   const b = $("#banner"), w = S.state ? S.state.worker : null, j = S.boot ? S.boot.jev : null;
   let cls = "", html = "";
   if (S.offline) {
-    cls = "bad"; html = `<span class="bicon">${ic("plug", "lg")}</span><div class="bmain"><div class="btitle">The demo server stopped responding</div><div class="bbody">Check that the black command window is still open, or double-click run_demo.bat again.</div></div>`;
+    cls = "bad"; html = `<span class="bicon">${ic("plug", "lg")}</span><div class="bmain"><div class="btitle">The demo server stopped responding</div><div class="bbody">Check that the black command window is still open, or double-click run_demo.bat again. A cloud host may be restarting; the page reconnects on its own.</div></div>`;
   } else if (j && !j.configured) {
     cls = "warn"; html = `<span class="bicon">${ic("alert", "lg")}</span><div class="bmain"><div class="btitle">No Jev API key found</div><div class="bbody">Add <code>AI_GATEWAY_API_KEY=vck_...</code> to <code>Jev_Test\\.env</code> and restart the demo. Saved results can still be replayed.</div></div>`;
   } else if (w && w.state === "waiting" && (w.wait_reason === "rate_limit" || w.wait_reason === "pace")) {
     const left = w.resume_at ? w.resume_at - (Date.now() + S.clockOffset) / 1000 : 0;
-    const remaining = S.state.order.filter((id) => ["queued", "running"].includes(S.state.items[id].status)).length;
+    const remaining = S.state.order.filter((id) => S.state.items[id] && ["queued", "running"].includes(S.state.items[id].status)).length;
     cls = "warn"; html = `<span class="bicon">${ic("clock", "lg")}</span><div class="bmain"><div class="btitle">AI Gateway free tier: next Jev call in <span class="countdown" id="cd">${fmtClock(left)}</span> · ${remaining} left in the queue</div><div class="bbody">The free tier only allows a handful of Jev calls every few minutes, so the demo paces itself and keeps going on its own. Buying any amount of AI Gateway credits removes the limit. Every result is saved, so later runs replay instantly.</div></div><button class="btn small" id="bannerStop">${ic("stop", "sm")}Stop</button>`;
   } else if (w && w.state === "stopped" && w.last_error) {
     const e = w.last_error;
@@ -788,22 +1253,30 @@ function renderBanner() {
   const structure = html.replace(/<span class="countdown" id="cd">[^<]*<\/span>/, "");
   if (b.dataset.html === structure && html) {
     const cd = $("#cd"), m = html.match(/id="cd">([^<]*)</);
-    if (cd && m) cd.textContent = m[1];
+    if (cd && m && cd.textContent !== m[1]) cd.textContent = m[1];
     return;
   }
-  {
-    b.innerHTML = html; b.dataset.html = structure;
-    const stop = $("#bannerStop"); if (stop) stop.onclick = async () => { const st = await api("/api/stop", {}); applyState(st.state, true); };
-    const retry = $("#bannerRetry"); if (retry) retry.onclick = onRoute;
-  }
+  if (b.dataset.html === structure) return;
+  b.innerHTML = html; b.dataset.html = structure;
+  const stop = $("#bannerStop"); if (stop) stop.onclick = async () => { try { const st = await api("/api/stop", {}); applyState(st.state); } catch (e) { toast(e.message); } };
+  const retry = $("#bannerRetry"); if (retry) retry.onclick = onRoute;
 }
 setInterval(() => { if (S.state && S.state.worker.state === "waiting") renderBanner(); }, 1000);
 
 /* ---------------------------------------------------------------- drawer */
+function markSelected(prev, next) {
+  for (const id of [prev, next]) {
+    if (!id) continue;
+    const c = S.dom.cards.get(id); if (c) c.el.classList.toggle("sel", S.selected === id);
+    const r = S.dom.rows.get(id); if (r) r.el.classList.toggle("sel", S.selected === id);
+  }
+}
+
 function select(id) {
+  const prev = S.selected;
   S.selected = id;
+  markSelected(prev, id);
   openDrawer("email");
-  renderInbox(); renderBoard();
 }
 
 function openDrawer(mode) {
@@ -814,11 +1287,13 @@ function openDrawer(mode) {
 }
 
 function closeOverlays() {
+  if (!$("#viewer").hidden) return closeViewer();
   if ($("#pasteModal").classList.contains("show")) return closePaste();
+  const prev = S.selected;
   S.drawer = null; S.selected = null;
+  markSelected(prev, null);
   $("#drawer").classList.remove("show"); $("#drawer").setAttribute("aria-hidden", "true");
   $("#scrim").classList.remove("show");
-  renderInbox(); renderBoard();
 }
 
 function optionLabel(qname, key) {
@@ -854,23 +1329,116 @@ function answerHtml(q, a, th) {
 
 function traceIcon(o) { return { pass: "check", stop: "arrow", warn: "alert", info: "info", done: "check", review: "eye" }[o] || "info"; }
 
+/* ---------------------------------------------------------------- attachment tiles */
+function fileType(att) {
+  if (att.media === "pdf") return "pdf";
+  if (att.media === "step") return "step";
+  if (att.media === "png" || att.media === "jpg") return "image";
+  const ext = (att.name || "").toLowerCase().split(".").pop();
+  if (ext === "pdf") return "pdf";
+  if (["step", "stp"].includes(ext)) return "step";
+  if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) return "image";
+  return "generic";
+}
+
+function metaLine(att, long) {
+  const parts = [];
+  if (att.kind === "upload") parts.push(att.media === "pdf" ? "PDF" : att.media === "png" ? "PNG image" : "JPG image");
+  else if (att.kind === "name_only") parts.push("Name only");
+  else if (att.kind === "model") parts.push(long ? `3D model, STEP ${(att.model && att.model.schema) || "AP214"}` : "3D model");
+  else parts.push(att.label || "File");
+  if (att.size) parts.push(fmtBytes(att.size));
+  if (att.pages) parts.push(plural(att.pages, "page"));
+  if (att.kind === "upload" && att.width && att.height) parts.push(`${att.width} × ${att.height}`);
+  return parts.join(" · ");
+}
+
+function hasFile(att) { return !!att.url && att.available !== false; }
+
+function previewHtml(att, opts) {
+  const t = fileType(att);
+  if (opts.state === "uploading" || opts.state === "reading") {
+    const p = Math.round((opts.progress || 0) * 100);
+    const label = opts.state === "reading" ? (att.media === "pdf" || t === "pdf" ? "Reading the text" : "Finishing") : `Uploading ${p}%`;
+    return `<span class="fprev center busy">${opts.localUrl ? `<img src="${esc(opts.localUrl)}" alt="">` : ""}<span class="spin"></span><span>${label}</span><span class="fprog"><i style="width:${opts.state === "reading" ? 100 : p}%"></i></span></span>`;
+  }
+  if (opts.state === "error") return `<span class="fprev center err">${ic("alert")}<span>${esc(opts.error || "Upload failed")}</span></span>`;
+  if (att.kind === "name_only") return `<span class="fprev center none">${ic("file")}<span>Name only, no file</span></span>`;
+  if (att.kind === "model") {
+    return `<span class="fprev model">${att.thumb ? `<img src="${esc(att.thumb)}" alt="" loading="lazy">` : ""}<span class="f3d">3D</span><span class="fschema">STEP ${esc((att.model && att.model.schema) || "AP214")}</span></span>`;
+  }
+  if (att.thumb) return `<span class="fprev page"><img src="${esc(att.thumb)}" alt="" loading="lazy"></span>`;
+  if (att.kind === "upload" && t === "image") {
+    if (!hasFile(att)) return `<span class="fprev center">${ic("image")}<span>No longer in memory</span></span>`;
+    return `<span class="fprev image"><img src="${esc(att.url)}" alt="" loading="lazy"></span>`;
+  }
+  if (att.kind === "upload" && t === "pdf") {
+    const pages = att.pages ? `<span class="fpages">${plural(att.pages, "page")}</span>` : "";
+    if (att.preview) return `<span class="fprev page"><span class="fpaper"><span class="fpaper-in">${esc(att.preview)}</span></span>${pages}</span>`;
+    return `<span class="fprev center pdf">${ic("file")}<span>${att.text_error ? "Text could not be read" : "No text layer"}</span>${pages}</span>`;
+  }
+  return `<span class="fprev center">${ic(TYPE_ICON[t])}</span>`;
+}
+
+/* One tile, as a button that opens the viewer. opts: idx (viewer index, or null when not openable),
+   key, removable, marked, state (uploading|reading|error), progress, error, localUrl. */
+function tileHtml(att, opts) {
+  const t = fileType(att), meta = opts.state === "uploading" ? "Uploading" : opts.state === "reading" ? "Processing" : opts.state === "error" ? "Not attached" : metaLine(att);
+  const legendKey = LEGENDS[att.legend] ? att.legend : null;
+  const legendLabel = legendKey ? LEGENDS[legendKey] : opts.marked ? "Export marking" : "";
+  const legend = legendLabel ? `<span class="badge restricted flegend" title="${legendKey ? `${legendLabel} legend on this file` : "Export-control marking in this file"}">${ic("lock", "sm")}${esc(legendLabel)}</span>` : "";
+  const mark = opts.marked ? `<span class="fmark">${ic("lock", "sm")}Marking found here</span>` : "";
+  const openable = opts.idx != null && !opts.state;
+  const cls = `ftile${att.kind === "name_only" ? " nofile" : ""}${opts.state === "error" ? " err" : ""}`;
+  const aria = `${openable ? "Open " : ""}${att.name}, ${meta}${legendLabel ? `, ${legendLabel}` : ""}${opts.marked ? ", export-control marking found in this file" : ""}`;
+  const inner = `${previewHtml(att, opts).replace(/<\/span>$/, `${mark}</span>`)}${legend}
+      <span class="ffoot"><span class="ficon ${t}">${ic(TYPE_ICON[t])}</span><span class="ftext"><span class="fname">${esc(att.name)}</span><span class="fmeta">${esc(meta)}</span></span></span>`;
+  const tile = openable
+    ? `<button type="button" class="${cls}" data-att="${opts.idx}" title="${esc(att.name)}" aria-label="${esc(aria)}">${inner}</button>`
+    : `<div class="${cls}" role="group" title="${esc(att.name)}" aria-label="${esc(aria)}"${opts.state === "uploading" || opts.state === "reading" ? ' aria-busy="true"' : ""}>${inner}</div>`;
+  const x = opts.removable ? `<button type="button" class="ftile-x" data-remove="${esc(opts.key)}" aria-label="${opts.state === "uploading" ? "Cancel upload of" : "Remove"} ${esc(att.name)}" title="Remove">${ic("x", "sm")}</button>` : "";
+  return `<div class="ftile-wrap${opts.marked ? " marked" : ""}${opts.removable ? " removable" : ""}" data-key="${esc(opts.key)}">${tile}${x}</div>`;
+}
+
+function attachmentsHtml(e, d) {
+  const atts = e.attachments || [];
+  if (!atts.length) return `<div class="note">No attachments</div>`;
+  const marked = new Set(d ? d.export_marked || [] : []);
+  const withFile = atts.filter((a) => a.kind !== "name_only").length;
+  const tiles = atts.map((a, i) => tileHtml(a, { idx: i, key: "a" + i, marked: marked.has(a.name) })).join("");
+  let hint = withFile ? "Jev reads the text of each file" : "Jev sees the file names only";
+  if (withFile && withFile < atts.length) hint += "; for a name-only file, just the name";
+  let note = "";
+  if (d && marked.size) {
+    const names = [...marked].map((n) => `<b>${esc(n)}</b>`).join(", ");
+    const inText = EXPORT_RE.test(`${e.subject || ""}\n${e.body || ""}`);
+    const tail = inText ? "" : d.lane === "itar"
+      ? " The email text never mentions it: Jev caught it in the attachment and sent the email to the restricted queue."
+      : " The email text itself does not mention it.";
+    note = `<div class="mark-note">${ic("lock", "sm")}<span>Export-control marking found in ${names}.${tail}</span></div>`;
+  }
+  return `<div class="att-head"><span class="att-count">${ic("clip", "sm")}${plural(atts.length, "attachment")}</span><span class="att-hint">${hint}</span></div>
+    <div class="ftiles">${tiles}</div>${note}`;
+}
+
 function renderEmailDrawer(force) {
   const id = S.selected, e = S.emails[id];
   if (!e) return;
-  const it = S.state.items[id], shown = it.status === "done" && it.decision && S.revealed.has(id);
-  const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey]);
+  const it = S.state.items[id] || { status: "idle" };
+  const shown = it.status === "done" && it.decision && S.revealed.has(id);
+  const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.decision && it.decision.export_marked, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey, it.error && it.error.message]);
   if (!force && S.drawerVersion === version) return;
+  const oldBody = $("#drawer .dbody");
+  const keepScroll = S.drawerVersion && JSON.parse(S.drawerVersion)[0] === id && oldBody ? oldBody.scrollTop : 0;
+  const active = document.activeElement;
+  const focusAtt = active && $("#drawer").contains(active) && active.dataset ? active.dataset.att : undefined;
   S.drawerVersion = version;
   const d = shown ? it.decision : null, th = S.state.thresholds;
-  const att = (e.attachments || []).map((a) => {
-    const cad = d && d.cad_attachments.includes(a);
-    return `<span class="att${cad ? " cad" : ""}" title="${cad ? "Code recognized this as a drawing or CAD file" : ""}">${ic("clip", "sm")}${esc(a)}</span>`;
-  }).join("");
-  let decision = "";
+  let top = "", after = "";
   if (d) {
     const due = d.due ? ` · ${d.due.kind} due ${esc(d.due.label)}` : "";
     const keyLine = S.showKey && d.expected_lane ? `<div class="note">${d.matches_expected ? ic("check", "sm") + " Matches" : ic("x", "sm") + " Differs from"} the answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}. ${esc((e.expected && e.expected.note) || "")}</div>` : "";
-    decision = `<div class="sec"><div class="sec-title">Routing decision</div>
+    top = `<div class="sec"><div class="sec-title">Routing decision</div>
       <div class="decision">
         <div class="dest">${marker(d.lane)}${esc(d.lane_name)}</div>
         <div class="owner">${esc(d.owner)}${d.priority ? ` · <span class="prio ${d.priority}">${d.priority}</span> ${esc(d.priority_reason)}` : ""}${due}</div>
@@ -880,19 +1448,19 @@ function renderEmailDrawer(force) {
         ${keyLine}
       </div></div>`;
     const act = d.action || {};
-    decision += `<div class="sec"><div class="sec-title">Suggested next step</div>
+    after = `<div class="sec"><div class="sec-title">Suggested next step</div>
       <div class="action-title">${esc(act.title || "")}</div>
       ${act.draft ? `<textarea class="draft" id="draftText" readonly>${esc(act.draft)}</textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn small" id="copyDraft">${ic("copy", "sm")}Copy draft</button><span class="note" style="margin:0">To: ${esc(act.to || "")}. Written from a template by code; Jev makes decisions, it does not write text.</span></div>` : ""}
     </div>`;
-    decision += `<div class="sec"><div class="sec-title">What Jev answered<span class="aside">${S.boot.questions.length} questions, one call</span></div>
-      ${S.boot.questions.map((q) => answerHtml(q, it.jev.answers[q.name], th)).join("")}</div>`;
+    after += `<div class="sec"><div class="sec-title">What Jev answered<span class="aside">${S.boot.questions.length} questions, one call</span></div>
+      ${S.boot.questions.map((q) => answerHtml(q, it.jev && it.jev.answers[q.name], th)).join("")}</div>`;
   } else if (it.status === "error") {
-    decision = `<div class="sec"><div class="err-box"><b>${esc(it.error && it.error.message)}</b><div class="note">${esc((it.error && it.error.hint) || "")}</div></div></div>`;
+    top = `<div class="sec"><div class="err-box"><b>${esc(it.error && it.error.message)}</b><div class="note">${esc((it.error && it.error.hint) || "")}</div></div></div>`;
   } else if (it.status === "queued" || it.status === "running" || it.status === "done") {
-    decision = `<div class="sec"><div class="status-box"><span class="spin"></span>${it.status === "queued" ? "Waiting in line for Jev" : "Asking Jev"}</div></div>`;
+    top = `<div class="sec"><div class="status-box"><span class="spin"></span>${it.status === "queued" ? "Waiting in line for Jev" : "Asking Jev"}</div></div>`;
   } else {
-    decision = `<div class="sec"><div class="status-box">${ic("info")}Not routed yet.<span class="spacer"></span><button class="btn small primary" id="routeOne">${ic("play", "sm play")}Route this email</button></div></div>`;
+    top = `<div class="sec"><div class="status-box">${ic("info")}Not routed yet.<span class="spacer"></span><button class="btn small primary" id="routeOne">${ic("play", "sm play")}Route this email</button></div></div>`;
   }
   const meta = d && it.jev ? `<div class="sec"><div class="sec-title">Call details</div><dl class="kv">
       <dt>Model</dt><dd>${esc(it.jev.model || "")}</dd>
@@ -903,22 +1471,22 @@ function renderEmailDrawer(force) {
       ${it.jev.request_id ? `<dt>Request ID</dt><dd>${esc(it.jev.request_id)}</dd>` : ""}
     </dl>
     <button class="btn small" id="rerun" style="margin-top:10px">${ic("refresh", "sm")}Ask Jev again (live call)</button></div>` : "";
+  const email = `<div class="sec"><div class="sec-title">Email</div><div class="email-body">${esc(e.body)}</div>${attachmentsHtml(e, d)}</div>`;
   $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1;min-width:0"><h2>${esc(e.subject || "(no subject)")}</h2>
       <div class="meta">${esc(e.from_name || "Unknown sender")} &lt;${esc(e.from_email)}&gt; · ${esc(e.received || "")}${e.live ? " · pasted live" : ""}</div></div>
       <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
-    <div class="dbody">${decision}
-      <div class="sec"><div class="sec-title">Email</div><div class="email-body">${esc(e.body)}</div>${att ? `<div class="atts">${att}</div>` : `<div class="note">No attachments</div>`}</div>
-      ${meta}
-    </div>`;
+    <div class="dbody thin-scroll">${top}${email}${after}${meta}</div>`;
   $("#closeDrawer").onclick = closeOverlays;
   const ta = $("#draftText");
   if (ta) { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 4) + "px"; }
+  if (keepScroll) $("#drawer .dbody").scrollTop = keepScroll;
+  if (focusAtt !== undefined) { const t = $(`#drawer [data-att="${focusAtt}"]`); if (t) t.focus({ preventScroll: true }); }
   const copy = $("#copyDraft");
   if (copy) copy.onclick = async () => { try { await navigator.clipboard.writeText($("#draftText").value); toast("Draft copied"); } catch (err) { $("#draftText").select(); document.execCommand("copy"); toast("Draft copied"); } };
   const rerun = $("#rerun");
-  if (rerun) rerun.onclick = async () => { rerun.disabled = true; const r = await api("/api/run", { ids: [id], use_cache: false, front: true }); applyState(r.state, true); renderEmailDrawer(true); };
+  if (rerun) rerun.onclick = async () => { rerun.disabled = true; try { const r = await api("/api/run", { ids: [id], use_cache: false, front: true }); applyState(r.state); } catch (err) { toast(err.message); } renderEmailDrawer(true); };
   const one = $("#routeOne");
-  if (one) one.onclick = async () => { one.disabled = true; const r = await api("/api/run", { ids: [id], use_cache: S.useCache, front: true }); applyState(r.state, true); renderEmailDrawer(true); };
+  if (one) one.onclick = async () => { one.disabled = true; try { const r = await api("/api/run", { ids: [id], use_cache: S.useCache, front: true }); applyState(r.state); } catch (err) { toast(err.message); } renderEmailDrawer(true); };
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -930,9 +1498,15 @@ function testLineHtml() {
     : `<div class="note" style="color:var(--critical)">${ic("alert", "sm")} ${esc(test.error.message)} ${esc(test.error.hint || "")}</div>`;
 }
 
+function savedCountHtml() {
+  const st = S.state.stats, n = st.cache_size || 0, seed = st.seed_size || 0;
+  return `<b>${n}</b> saved Jev ${n === 1 ? "answer" : "answers"}${seed ? `, ${seed} of them from the seed file` : ", none from a seed file yet"}.`;
+}
+
 function updateSettings() {
   const th = S.state.thresholds;
-  const cc = $("#cacheCount"); if (cc) cc.textContent = S.state.stats.cache_size;
+  const cc = $("#cacheCount"); if (cc && cc.textContent !== String(S.state.stats.cache_size)) cc.textContent = S.state.stats.cache_size;
+  const sc = $("#savedCount"); if (sc) { const h = savedCountHtml(); if (sc.dataset.h !== h) { sc.innerHTML = h; sc.dataset.h = h; } }
   const ab = $("#autoBar"), ib = $("#itarBar");
   if (ab && document.activeElement !== ab) { ab.value = Math.min(th.email_type_confidence, th.process_confidence); $("#autoBarV").textContent = pct(parseFloat(ab.value)); }
   if (ib && document.activeElement !== ib) { ib.value = th.export_control_restrict; $("#itarBarV").textContent = pct(parseFloat(ib.value)); }
@@ -942,12 +1516,13 @@ function renderSettings() {
   const th = S.state.thresholds, j = S.boot.jev;
   S.drawerVersion = null;
   const auto = Math.min(th.email_type_confidence, th.process_confidence);
+  const keyed = Object.values(S.emails).filter((e) => e.expected).length;
   $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1"><h2>Rules and settings</h2><div class="meta">Changes apply instantly to everything already routed. No new Jev calls needed.</div></div>
       <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
-    <div class="dbody">
+    <div class="dbody thin-scroll">
       <div class="sec"><div class="sec-title">Routing rules</div>
         <div class="set-row"><label for="autoBar">Auto-route confidence bar</label>
-          <div class="help">Below this confidence, Jev's pick goes to ${esc(S.lanes.review.owner)} for a human look instead of straight to an estimator.</div>
+          <div class="help">Below this confidence, Jev's pick goes to ${esc(S.lanes.review ? S.lanes.review.owner : "a person")} for a human look instead of straight to an estimator.</div>
           <div class="range"><input type="range" id="autoBar" min="0.2" max="0.95" step="0.05" value="${auto}"><span class="rv" id="autoBarV">${pct(auto)}</span></div></div>
         <div class="set-row"><label for="itarBar">Export-control bar</label>
           <div class="help">ITAR / CUI likelihood that sends an email to the restricted queue. Kept low on purpose: a miss costs far more than a false alarm.</div>
@@ -956,8 +1531,11 @@ function renderSettings() {
       <div class="sec"><div class="sec-title">Demo options</div>
         <div class="set-row"><label class="switch"><input type="checkbox" id="useCache" ${S.useCache ? "checked" : ""}>Replay saved Jev results when available</label>
           <div class="help"><span id="cacheCount">${S.state.stats.cache_size}</span> saved results. Replays are instant and free. Turn this off to make every email a fresh live call.</div></div>
+        <div class="set-row"><div class="set-line"><span class="set-label">Keep results across restarts</span>
+            <a class="btn small" id="downloadSaved" href="/api/saved_results" download="saved_results.json">${ic("download", "sm")}Download saved results</a></div>
+          <div class="help"><span id="savedCount">${savedCountHtml()}</span> A cloud host such as Render starts with an empty disk after every restart. Save this file as <code>data/saved_results.json</code> in the repository and redeploy: the server loads it at startup, so every saved answer replays instantly, even on the free tier.</div></div>
         <div class="set-row"><label class="switch"><input type="checkbox" id="showKey" ${S.showKey ? "checked" : ""}>Show the answer key</label>
-          <div class="help">Marks each card with a check or an X against the expected route for the 20 sample emails.</div></div>
+          <div class="help">Marks each card with a check or an X against the expected route. ${keyed} sample email${keyed === 1 ? " has" : "s have"} an answer key.</div></div>
       </div>
       <div class="sec"><div class="sec-title">Jev connection</div>
         ${j.configured ? `<dl class="kv"><dt>Provider</dt><dd>${esc(j.provider)}</dd><dt>Model</dt><dd>${esc(j.model)}</dd><dt>Endpoint</dt><dd>${esc(j.endpoint)}</dd><dt>Key</dt><dd>${esc(j.key_env)} = ${esc(j.key_hint)}</dd><dt>Loaded from</dt><dd>${esc((j.env_files || []).join(", ") || "environment")}</dd></dl>`
@@ -966,6 +1544,7 @@ function renderSettings() {
         <div id="testLine">${testLineHtml()}</div>
       </div>
       <div class="sec"><div class="sec-title">What Jev is asked about every email</div>
+        <div class="note" style="margin:0 0 4px">Jev reads the email and the text of its attachments: drawing notes and title blocks, export-control legends, and the quantities on RFQ forms.</div>
         <div class="qlist">${S.boot.questions.map((q) => `<div class="qi"><div class="qn">${esc(q.label)} <span class="qt" style="font-size:10px;color:var(--muted);text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:1px 5px">${esc(q.type)}</span></div>
           <div class="qins">${esc(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}</div>
           ${q.criteria ? `<details><summary>Criteria</summary><ul>${Array.isArray(q.criteria) ? q.criteria.map((c, i) => `<li><b>${i}</b>: ${esc(c)}</li>`).join("") : Object.entries(q.criteria).map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join("")}</ul></details>` : ""}</div>`).join("")}</div>
@@ -976,15 +1555,15 @@ function renderSettings() {
   let t1;
   $("#autoBar").oninput = (ev) => {
     const v = parseFloat(ev.target.value); $("#autoBarV").textContent = pct(v);
-    clearTimeout(t1); t1 = setTimeout(async () => { const r = await api("/api/thresholds", { email_type_confidence: v, process_confidence: v }); applyState(r.state, true); }, 120);
+    clearTimeout(t1); t1 = setTimeout(async () => { try { const r = await api("/api/thresholds", { email_type_confidence: v, process_confidence: v }); applyState(r.state); } catch (e) { toast(e.message); } }, 120);
   };
   let t2;
   $("#itarBar").oninput = (ev) => {
     const v = parseFloat(ev.target.value); $("#itarBarV").textContent = pct(v);
-    clearTimeout(t2); t2 = setTimeout(async () => { const r = await api("/api/thresholds", { export_control_restrict: v }); applyState(r.state, true); }, 120);
+    clearTimeout(t2); t2 = setTimeout(async () => { try { const r = await api("/api/thresholds", { export_control_restrict: v }); applyState(r.state); } catch (e) { toast(e.message); } }, 120);
   };
-  $("#useCache").onchange = (ev) => { S.useCache = ev.target.checked; try { localStorage.setItem("rfq.useCache", S.useCache ? "1" : "0"); } catch (e) {} };
-  $("#showKey").onchange = (ev) => { S.showKey = ev.target.checked; try { localStorage.setItem("rfq.showKey", S.showKey ? "1" : "0"); } catch (e) {} renderAll(); };
+  $("#useCache").onchange = (ev) => { S.useCache = ev.target.checked; try { localStorage.setItem("rfq.useCache", S.useCache ? "1" : "0"); } catch (e) { /* storage blocked */ } };
+  $("#showKey").onchange = (ev) => { S.showKey = ev.target.checked; try { localStorage.setItem("rfq.showKey", S.showKey ? "1" : "0"); } catch (e) { /* storage blocked */ } renderAll(); };
   const tc = $("#testConn");
   if (tc) tc.onclick = async () => {
     const label = tc.innerHTML; tc.disabled = true; tc.innerHTML = `<span class="spin"></span>Testing`;
@@ -994,41 +1573,581 @@ function renderSettings() {
 }
 
 /* ---------------------------------------------------------------- paste */
+const P = { example: null, exampleFiles: [], uploads: [], seq: 0, openable: [] };
+
 function buildPasteExamples() {
   const sel = $("#pExample");
   sel.innerHTML = `<option value="">Blank</option>` + (S.boot.paste_examples || []).map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join("");
+  P.example = null; P.exampleFiles = [];
 }
+
 function fillExample() {
-  const x = (S.boot.paste_examples || [])[parseInt($("#pExample").value, 10)];
+  const idx = parseInt($("#pExample").value, 10);
+  const x = (S.boot.paste_examples || [])[idx];
   $("#pName").value = x ? x.from_name : ""; $("#pEmail").value = x ? x.from_email : "";
   $("#pSubject").value = x ? x.subject : ""; $("#pBody").value = x ? x.body : "";
-  $("#pAtt").value = x ? (x.attachments || []).join(", ") : "";
+  const atts = x ? x.attachments || [] : [];
+  $("#pAtt").value = atts.filter((a) => !a.url).map((a) => a.name).join(", ");
+  P.example = x ? idx : null;
+  P.exampleFiles = atts.filter((a) => a.url);
+  renderPasteFiles();
 }
+
+function pasteOpen() { return $("#pasteModal").classList.contains("show"); }
+
 function openPaste() {
   $("#pasteModal").classList.add("show"); $("#scrim").classList.add("show");
+  renderPasteFiles();
   setTimeout(() => $("#pName").focus(), 50);
 }
+
 function closePaste() {
   $("#pasteModal").classList.remove("show");
   if (!S.drawer) $("#scrim").classList.remove("show");
 }
+
+function bindPasteFiles() {
+  const input = $("#pFileInput"), zone = $("#pDrop");
+  $("#pAddFiles").addEventListener("click", () => input.click());
+  input.addEventListener("change", () => { addFiles(input.files); input.value = ""; });
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+  let depth = 0;
+  zone.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; depth++; zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) zone.classList.remove("over"); });
+  // Dropping a file anywhere must never navigate away from the demo. Outside the modal it opens Paste an RFQ.
+  window.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; zone.classList.remove("over");
+    if (!$("#viewer").hidden) return;
+    if (!pasteOpen()) openPaste();
+    addFiles(e.dataTransfer.files);
+  });
+  $("#pFiles").addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-remove]");
+    if (rm) { removePasteFile(rm.dataset.remove); return; }
+    const t = e.target.closest("[data-att]");
+    if (t) openViewer(P.openable, Number(t.dataset.att), t, (i) => `#pFiles [data-att="${i}"]`);
+  });
+}
+
+function uploadType(file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (ext === "pdf" || file.type === "application/pdf") return "application/pdf";
+  if (ext === "png" || file.type === "image/png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg" || file.type === "image/jpeg") return "image/jpeg";
+  return null;
+}
+
+function addFiles(fileList) {
+  const lim = S.boot.uploads, files = [...(fileList || [])], skipped = [];
+  const mb = Math.round(lim.max_bytes / 1048576);
+  for (const file of files) {
+    const type = uploadType(file);
+    const base = { key: "u" + (++P.seq), name: file.name, size: file.size, media: type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : "jpg", progress: 0 };
+    if (!type || !lim.types.includes(type)) { P.uploads.push(Object.assign(base, { state: "error", error: "Only PDF, PNG, and JPG files can be attached." })); continue; }
+    if (file.size > lim.max_bytes) { P.uploads.push(Object.assign(base, { state: "error", error: `Over the ${mb} MB limit (${fmtBytes(file.size)}).` })); continue; }
+    if (!file.size) { P.uploads.push(Object.assign(base, { state: "error", error: "The file is empty." })); continue; }
+    if (P.uploads.filter((u) => u.state !== "error").length >= lim.max_files) { skipped.push(file.name); continue; }
+    const u = Object.assign(base, { state: "uploading", file, type });
+    if (type !== "application/pdf" && window.URL && URL.createObjectURL) u.localUrl = URL.createObjectURL(file);
+    P.uploads.push(u);
+    startUpload(u);
+  }
+  if (skipped.length) toast(`Up to ${lim.max_files} files per email. Not added: ${skipped.join(", ")}.`);
+  const bad = P.uploads.filter((u) => u.state === "error" && !u.toasted);
+  if (bad.length) { bad.forEach((u) => { u.toasted = true; }); if (!skipped.length) toast(bad.length === 1 ? `${bad[0].name}: ${bad[0].error}` : `${bad.length} files could not be attached. See the red tiles.`); }
+  renderPasteFiles();
+}
+
+function startUpload(u) {
+  const xhr = new XMLHttpRequest();
+  u.xhr = xhr;
+  xhr.open("POST", "/api/uploads");
+  xhr.setRequestHeader("Content-Type", u.type);
+  xhr.setRequestHeader("X-File-Name", encodeURIComponent(u.name));
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) { u.progress = e.loaded / e.total; updateUploadTile(u); } };
+  xhr.upload.onload = () => { if (u.state === "uploading") { u.state = "reading"; u.progress = 1; renderPasteFiles(); } };
+  xhr.onload = () => {
+    let data = {};
+    try { data = JSON.parse(xhr.responseText || "{}"); } catch (e) { /* not JSON */ }
+    u.xhr = null;
+    if (xhr.status >= 200 && xhr.status < 300 && data.ok && data.upload) { u.state = "done"; u.att = data.upload; }
+    else { u.state = "error"; u.error = (data.error && data.error.message) || (xhr.status === 401 ? "Sign in again, then retry." : `Upload failed (${xhr.status || "no response"}).`); toast(`${u.name}: ${u.error}`); u.toasted = true; }
+    renderPasteFiles();
+  };
+  xhr.onerror = () => { u.xhr = null; u.state = "error"; u.error = "The upload failed. Check the connection and try again."; u.toasted = true; toast(`${u.name}: ${u.error}`); renderPasteFiles(); };
+  xhr.send(u.file);
+}
+
+function updateUploadTile(u) {
+  const wrap = $(`#pFiles [data-key="${u.key}"]`);
+  if (!wrap) return;
+  const p = Math.round(u.progress * 100), bar = wrap.querySelector(".fprog i"), label = wrap.querySelector(".fprev.busy > span:not(.spin):not(.fprog)");
+  if (bar) bar.style.width = p + "%";
+  if (label && u.state === "uploading") label.textContent = `Uploading ${p}%`;
+}
+
+function removePasteFile(key) {
+  if (key.startsWith("x")) { P.exampleFiles.splice(Number(key.slice(1)), 1); }
+  else {
+    const i = P.uploads.findIndex((u) => u.key === key);
+    if (i >= 0) { const u = P.uploads[i]; if (u.xhr) u.xhr.abort(); if (u.localUrl) URL.revokeObjectURL(u.localUrl); P.uploads.splice(i, 1); }
+  }
+  renderPasteFiles();
+  const next = $("#pFiles [data-remove]") || $("#pAddFiles");
+  if (next) next.focus();
+}
+
+function clearPasteFiles() {
+  for (const u of P.uploads) { if (u.xhr) u.xhr.abort(); if (u.localUrl) URL.revokeObjectURL(u.localUrl); }
+  P.uploads = []; P.exampleFiles = [];
+  renderPasteFiles();
+}
+
+function uploadsBusy() { return P.uploads.some((u) => u.state === "uploading" || u.state === "reading"); }
+
+function renderPasteFiles() {
+  const items = [
+    ...P.exampleFiles.map((att, i) => ({ key: "x" + i, att })),
+    ...P.uploads.map((u) => ({ key: u.key, att: u.att || { name: u.name, kind: "upload", media: u.media, size: u.size }, u })),
+  ];
+  const openable = items.filter((it) => !it.u || it.u.state === "done");
+  P.openable = openable.map((it) => it.att);
+  $("#pFiles").innerHTML = items.map((it) => {
+    const vi = openable.indexOf(it);
+    const u = it.u;
+    return tileHtml(it.att, { idx: vi >= 0 ? vi : null, key: it.key, removable: true, state: u && u.state !== "done" ? u.state : null,
+      progress: u ? u.progress : 0, error: u ? u.error : "", localUrl: u ? u.localUrl : "" });
+  }).join("");
+  const lim = S.boot.uploads, n = P.uploads.filter((u) => u.state !== "error").length;
+  $("#pFilesCount").textContent = `${n} of ${lim.max_files} files${P.exampleFiles.length ? `, plus ${plural(P.exampleFiles.length, "sample file")}` : ""}`;
+  $("#pAddFiles").disabled = n >= lim.max_files;
+  const busy = uploadsBusy(), btn = $("#pSubmit");
+  if (!btn.dataset.sending) {
+    btn.disabled = busy;
+    btn.innerHTML = busy ? `<span class="spin"></span>Waiting for uploads` : `${ic("play", "play")}Route with Jev`;
+  }
+  const errs = P.uploads.filter((u) => u.state === "error").length;
+  $("#pFootNote").textContent = errs ? `${plural(errs, "file")} not attached. Remove ${errs === 1 ? "it" : "them"} or try again.` : "";
+}
+
 async function submitPaste(ev) {
   ev.preventDefault();
-  const payload = { from_name: $("#pName").value, from_email: $("#pEmail").value, subject: $("#pSubject").value, body: $("#pBody").value, attachments: $("#pAtt").value };
+  if (uploadsBusy()) { toast("Wait for the uploads to finish."); return; }
+  const payload = {
+    from_name: $("#pName").value, from_email: $("#pEmail").value, subject: $("#pSubject").value, body: $("#pBody").value,
+    attachments: $("#pAtt").value, uploads: P.uploads.filter((u) => u.state === "done" && u.att).map((u) => u.att.id),
+  };
+  if (P.example != null) { payload.example = P.example; payload.example_files = P.exampleFiles.map((a) => a.name); }
   if (!payload.subject.trim() && !payload.body.trim()) { toast("Add a subject or a body first."); return; }
-  const btn = $("#pasteForm button[type=submit]");
-  if (btn.disabled) return;
-  btn.disabled = true;
+  const btn = $("#pSubmit");
+  if (btn.dataset.sending) return;
+  btn.dataset.sending = "1"; btn.disabled = true;
   try {
     const r = await api("/api/emails", payload);
     S.emails[r.id] = r.email;
+    // Files are cleared after a send. The example resets to Blank too, so choosing it again brings its files back.
+    $("#pExample").value = ""; P.example = null;
+    clearPasteFiles();
     closePaste();
-    applyState(r.state, true);
+    applyState(r.state);
+    renderAll();
     select(r.id);
-    const row = document.querySelector(`#inboxList [data-id="${r.id}"]`);
-    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const row = S.dom.rows.get(r.id);
+    if (row) row.el.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
   } catch (e) { toast(e.message); }
-  finally { btn.disabled = false; }
+  finally { delete btn.dataset.sending; renderPasteFiles(); }
+}
+
+/* ---------------------------------------------------------------- file viewer */
+const VW = { list: [], idx: 0, returnEl: null, selFor: null, model: null, token: 0, texts: new Map(), meshes: new Map(), panelOpen: true };
+try { VW.panelOpen = localStorage.getItem("rfq.jevPanel") !== "0"; } catch (e) { /* storage blocked */ }
+
+function bindViewer() {
+  $("#vClose").addEventListener("click", closeViewer);
+  $("#vPrev").addEventListener("click", () => moveViewer(-1));
+  $("#vNext").addEventListener("click", () => moveViewer(1));
+  const toggle = (open) => {
+    VW.panelOpen = open;
+    try { localStorage.setItem("rfq.jevPanel", open ? "1" : "0"); } catch (e) { /* storage blocked */ }
+    $("#vPanel").classList.toggle("collapsed", !open);
+    $("#vPanelBtn").setAttribute("aria-pressed", open ? "true" : "false");
+  };
+  $("#vPanelBtn").addEventListener("click", () => toggle(!VW.panelOpen));
+  $("#vPanelClose").addEventListener("click", () => { toggle(false); $("#vPanelBtn").focus(); });
+}
+
+function openViewer(list, idx, returnEl, selFor) {
+  if (!list || !list.length || !(idx >= 0 && idx < list.length)) return;
+  VW.list = list.slice(); VW.idx = idx; VW.returnEl = returnEl || document.activeElement; VW.selFor = selFor || null;
+  $("#viewer").hidden = false;
+  document.body.classList.add("viewing");
+  renderViewer();
+  $("#vClose").focus();
+}
+
+function closeViewer() {
+  if ($("#viewer").hidden) return;
+  VW.token++;
+  destroyModel();
+  $("#vStage").innerHTML = ""; $("#vPanelBody").innerHTML = "";
+  $("#viewer").hidden = true;
+  document.body.classList.remove("viewing");
+  let el = VW.selFor ? document.querySelector(VW.selFor(VW.idx)) : null;
+  if (!el && VW.returnEl && VW.returnEl.isConnected) el = VW.returnEl;
+  if (el) el.focus({ preventScroll: false });
+}
+
+function moveViewer(step) {
+  if (VW.list.length < 2) return;
+  VW.idx = (VW.idx + step + VW.list.length) % VW.list.length;
+  renderViewer();
+}
+
+function destroyModel() { if (VW.model) { VW.model.destroy(); VW.model = null; } }
+
+function vmsg(title, text, icon) {
+  return `<div class="vmsg"><span class="vmsg-i">${ic(icon || "info", "lg")}</span><h3>${esc(title)}</h3><p>${esc(text)}</p></div>`;
+}
+
+const GONE_TEXT = "Uploaded files are kept in memory only, and the server no longer has this one (it restarted, or it needed the room). Jev already read its text when the email was routed.";
+
+function renderViewer() {
+  const att = VW.list[VW.idx], t = fileType(att), token = ++VW.token;
+  destroyModel();
+  const icon = $("#vIcon"); icon.className = "ficon " + t; icon.innerHTML = ic(TYPE_ICON[t]);
+  $("#vName").textContent = att.name; $("#vName").title = att.name;
+  const legend = LEGENDS[att.legend] ? ` · ${LEGENDS[att.legend]} legend` : "";
+  $("#vMeta").textContent = metaLine(att, true) + legend + (att.title ? ` · ${att.title}` : "");
+  $("#vNav").hidden = VW.list.length < 2;
+  $("#vPos").textContent = `${VW.idx + 1} of ${VW.list.length}`;
+  const file = hasFile(att);
+  const dl = $("#vDownload"); dl.hidden = !file;
+  if (file) { dl.href = withParam(att.url, "download=1"); dl.setAttribute("download", att.name); } else dl.removeAttribute("href");
+  const op = $("#vOpen"); op.hidden = !(file && (t === "pdf" || t === "image"));
+  if (!op.hidden) op.href = att.url; else op.removeAttribute("href");
+  $("#vPanel").classList.toggle("collapsed", !VW.panelOpen);
+  $("#vPanelBtn").setAttribute("aria-pressed", VW.panelOpen ? "true" : "false");
+
+  const stage = $("#vStage");
+  stage.className = "vstage";
+  const gone = () => {  // the server dropped this upload after the page learned about it
+    if (token !== VW.token) return;
+    stage.innerHTML = vmsg("This file is no longer in memory", GONE_TEXT, "alert");
+    dl.hidden = true; op.hidden = true;
+  };
+  if (att.kind === "name_only") {
+    stage.innerHTML = vmsg("Name only, no file", "The sender listed this file name, but the file itself did not come with the email. Jev sees only the name.", "file");
+  } else if (!file) {
+    stage.innerHTML = vmsg("This file is no longer in memory", GONE_TEXT, "alert");
+  } else if (t === "pdf") {
+    const show = () => { if (token === VW.token) stage.innerHTML = `<iframe class="vpdf" src="${esc(att.url)}" title="${esc(att.name)}"></iframe>`; };
+    if (att.kind === "upload") {
+      stage.innerHTML = `<div class="vmsg"><span class="spin"></span></div>`;
+      fetch(att.url, { method: "HEAD" }).then((r) => {
+        if (token !== VW.token) return;
+        if (r.status === 410 || r.status === 404) gone(); else show();
+      }).catch(show);
+    } else show();
+  } else if (t === "image") {
+    stage.innerHTML = `<div class="vimg"><img alt="${esc(att.name)}"></div>`;
+    const img = stage.querySelector("img");
+    img.onerror = () => {
+      if (att.kind === "upload") gone();
+      else if (token === VW.token) stage.innerHTML = vmsg("The image could not be loaded", "Try the Download button instead.", "alert");
+    };
+    img.src = att.url;
+  } else if (att.kind === "model" && att.mesh) {
+    stage.classList.add("model");
+    stage.innerHTML = `<div class="v3d"><canvas tabindex="0" role="img" aria-label="Interactive 3D view of ${esc(att.name)}. Drag to rotate, scroll or pinch to zoom, double-click to reset."></canvas>
+        <div class="v3d-load"><span class="spin"></span>Loading the model</div>
+        <div class="v3d-tools"><button type="button" class="btn small" id="vReset">${ic("reset", "sm")}Reset view</button></div>
+        <div class="v3d-hint">Drag to rotate · scroll or pinch to zoom · double-click to reset</div></div>${propsHtml(att)}`;
+    loadMesh(att.mesh).then((mesh) => {
+      if (token !== VW.token) return;
+      const load = stage.querySelector(".v3d-load"); if (load) load.remove();
+      VW.model = makeModelView(stage.querySelector("canvas"), mesh);
+      $("#vReset").onclick = () => VW.model && VW.model.reset();
+    }).catch(() => {
+      if (token !== VW.token) return;
+      const box = stage.querySelector(".v3d");
+      box.innerHTML = `${att.thumb ? `<img src="${esc(att.thumb)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;mix-blend-mode:multiply">` : ""}<div class="v3d-hint">The 3D preview could not be loaded. The Download button gets the STEP file.</div>`;
+    });
+  } else {
+    stage.innerHTML = vmsg("No preview for this file", "Use the Download button to open it.", "file");
+  }
+  renderJevPanel(att, token);
+}
+
+function propsHtml(att) {
+  const m = att.model || {};
+  const units = m.units === "mm" ? "Millimeters" : m.units === "in" ? "Inches" : m.units;
+  const rows = [["Part number", att.part_number], ["Rev", att.rev], ["Title", att.title], ["Units", units], ["Bounding box", m.bbox],
+    ["Format", `STEP ${m.schema || "AP214"}`], ["Originating system", m.system], ["File size", fmtBytes(att.size)]].filter((r) => r[1]);
+  return `<dl class="vprops">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+}
+
+function getJson(url, cache) {
+  if (!cache.has(url)) {
+    const p = fetch(url).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error((data && typeof data.error === "string" && data.error) || r.statusText), { status: r.status });
+      return data;
+    });
+    p.catch(() => cache.delete(url));
+    cache.set(url, p);
+  }
+  return cache.get(url);
+}
+const loadMesh = (url) => getJson(url, VW.meshes);
+
+function renderJevPanel(att, token) {
+  const body = $("#vPanelBody");
+  if (!att.text_url) {
+    body.innerHTML = `<p class="vp-note">This attachment is a file name with no file behind it, so Jev gets only the name.</p><pre class="jtext">${esc(att.name)}</pre>`;
+    return;
+  }
+  body.innerHTML = `<div class="vp-loading"><span class="spin"></span>Loading what Jev reads</div>`;
+  getJson(att.text_url, VW.texts).then((r) => {
+    if (token !== VW.token) return;
+    const trunc = r.truncated ? r.text.replace(/\s*\[truncated\]$/, "").length : 0;
+    let warn = "";
+    if (att.kind === "upload" && att.media === "pdf" && S.boot.uploads && !S.boot.uploads.pdf_text) warn = `<div class="vp-warn">This server cannot read PDF text (pypdf is not installed), so Jev sees only this file's name.</div>`;
+    else if (att.kind === "upload" && att.text_error) warn = `<div class="vp-warn">The text of this PDF could not be read (${esc(att.text_error)}). Jev sees the file name and this note.</div>`;
+    body.innerHTML = `<p class="vp-note">Jev gets this text with the email body, in the same single call, labeled with the file name <b>${esc(r.name || att.name)}</b>.</p>
+      ${warn}<pre class="jtext">${esc(r.text)}</pre>
+      ${r.truncated ? `<p class="vp-note" style="margin-top:8px">Shortened for Jev: it reads the first ${trunc.toLocaleString()} of ${Number(r.full_chars || 0).toLocaleString()} characters. Each email has a fixed text budget for its attachments.</p>` : ""}`;
+  }).catch((e) => {
+    if (token !== VW.token) return;
+    body.innerHTML = e.status === 410
+      ? `<p class="vp-note">This uploaded file is no longer in memory, so its text is not available here.</p>`
+      : `<p class="vp-note">Could not load the text (${esc(e.message)}).</p>`;
+  });
+}
+
+/* A small 3D viewer: orthographic view of a polygon mesh (z up, faces counterclockwise from outside),
+   flat shading, feature and silhouette edges, faces ordered by a painter's sort that respects
+   "this face is in front of that face's plane" before falling back to depth. */
+function makeModelView(canvas, mesh) {
+  const ctx = canvas.getContext("2d");
+  const P = mesh.vertices || [];
+  const nV = P.length;
+  const F = (mesh.faces || []).filter((f) => f.length >= 3 && f.every((i) => i >= 0 && i < nV));
+  const nF = F.length;
+  let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
+  for (const v of P) {
+    if (v[0] < mnx) mnx = v[0]; if (v[0] > mxx) mxx = v[0];
+    if (v[1] < mny) mny = v[1]; if (v[1] > mxy) mxy = v[1];
+    if (v[2] < mnz) mnz = v[2]; if (v[2] > mxz) mxz = v[2];
+  }
+  const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2, cz = (mnz + mxz) / 2;
+  const R = Math.max(1e-6, Math.hypot(mxx - mnx, mxy - mny, mxz - mnz) / 2);
+  const N = new Float64Array(nF * 3);
+  F.forEach((f, fi) => {  // Newell's method: robust for any planar polygon, points outward for CCW faces
+    let x = 0, y = 0, z = 0;
+    for (let k = 0; k < f.length; k++) {
+      const a = P[f[k]], b = P[f[(k + 1) % f.length]];
+      x += (a[1] - b[1]) * (a[2] + b[2]); y += (a[2] - b[2]) * (a[0] + b[0]); z += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    N[fi * 3] = x / l; N[fi * 3 + 1] = y / l; N[fi * 3 + 2] = z / l;
+  });
+  const NB = F.map((f) => new Int32Array(f.length).fill(-1));
+  const FE = F.map((f) => new Uint8Array(f.length));
+  const seen = new Map();
+  F.forEach((f, fi) => {
+    for (let k = 0; k < f.length; k++) {
+      const a = f[k], b = f[(k + 1) % f.length];
+      if (a === b) continue;
+      const key = a < b ? a * nV + b : b * nV + a;
+      const hit = seen.get(key);
+      if (hit === undefined) { seen.set(key, [fi, k]); continue; }
+      if (hit === null) { FE[fi][k] = 1; continue; }
+      const [g, j] = hit;
+      NB[fi][k] = g; NB[g][j] = fi;
+      const dot = N[fi * 3] * N[g * 3] + N[fi * 3 + 1] * N[g * 3 + 1] + N[fi * 3 + 2] * N[g * 3 + 2];
+      if (dot < 0.85) { FE[fi][k] = 1; FE[g][j] = 1; }  // a crease sharper than about 32 degrees
+      seen.set(key, null);
+    }
+  });
+  const VX = new Float64Array(nV), VY = new Float64Array(nV), VZ = new Float64Array(nV), SX = new Float64Array(nV), SY = new Float64Array(nV);
+  const FN = new Float64Array(nF * 3), FD = new Float64Array(nF), vis = new Uint8Array(nF);
+  const HOME = { yaw: -0.62, pitch: 0.5 };
+  const L = (() => { const x = -0.42, y = -0.62, z = 0.66, l = Math.hypot(x, y, z); return [x / l, y / l, z / l]; })();
+  const BASE = [176, 188, 206];
+  let yaw = HOME.yaw, pitch = HOME.pitch, zoom = 1, spinning = !reducedMotion(), raf = 0, lastT = 0, alive = true;
+
+  function order(list) {
+    const n = list.length;
+    if (n > 420) return list.sort((a, b) => FD[b] - FD[a]);
+    const x0 = new Float64Array(n), x1 = new Float64Array(n), y0 = new Float64Array(n), y1 = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+      for (const v of F[list[i]]) { if (SX[v] < a) a = SX[v]; if (SX[v] > b) b = SX[v]; if (SY[v] < c) c = SY[v]; if (SY[v] > d) d = SY[v]; }
+      x0[i] = a; x1[i] = b; y0[i] = c; y1[i] = d;
+    }
+    const eps = R * 1e-4;
+    const inFront = (fb, fa) => {  // every vertex of face fb lies on the viewer's side of face fa's plane
+      const p = F[fa][0], nx = FN[fa * 3], ny = FN[fa * 3 + 1], nz = FN[fa * 3 + 2];
+      for (const v of F[fb]) if ((VX[v] - VX[p]) * nx + (VY[v] - VY[p]) * ny + (VZ[v] - VZ[p]) * nz < -eps) return false;
+      return true;
+    };
+    const indeg = new Int32Array(n), succ = Array.from({ length: n }, () => []);
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (x1[i] <= x0[j] + 0.5 || x1[j] <= x0[i] + 0.5 || y1[i] <= y0[j] + 0.5 || y1[j] <= y0[i] + 0.5) continue;
+        const jf = inFront(list[j], list[i]), iff = inFront(list[i], list[j]);
+        if (jf && !iff) { succ[i].push(j); indeg[j]++; }
+        else if (iff && !jf) { succ[j].push(i); indeg[i]++; }
+      }
+    }
+    const out = [], done = new Uint8Array(n);
+    for (let c = 0; c < n; c++) {
+      let best = -1, bestD = -Infinity, alt = -1, altD = -Infinity;
+      for (let i = 0; i < n; i++) {
+        if (done[i]) continue;
+        const dd = FD[list[i]];
+        if (indeg[i] === 0) { if (dd > bestD) { bestD = dd; best = i; } } else if (dd > altD) { altD = dd; alt = i; }
+      }
+      if (best < 0) best = alt;  // a cycle: fall back to depth
+      done[best] = 1; out.push(list[best]);
+      for (const s of succ[best]) indeg[s]--;
+    }
+    return out;
+  }
+
+  function draw() {
+    if (!alive) return;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const W = Math.round(w * dpr), H = Math.round(h * dpr);
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const s = (Math.min(w, h) * 0.43 / R) * zoom, ox = w / 2, oy = h / 2 + Math.min(h * 0.02, 8);
+    for (let i = 0; i < nV; i++) {
+      const v = P[i], x = v[0] - cx, y = v[1] - cy, z = v[2] - cz;
+      const X = x * cyw - y * syw, Y1 = x * syw + y * cyw;
+      const Y = Y1 * cp - z * sp, Z = Y1 * sp + z * cp;
+      VX[i] = X; VY[i] = Y; VZ[i] = Z; SX[i] = ox + X * s; SY[i] = oy - Z * s;
+    }
+    const list = [];
+    for (let f = 0; f < nF; f++) {
+      const x = N[f * 3], y = N[f * 3 + 1], z = N[f * 3 + 2];
+      const X = x * cyw - y * syw, Y1 = x * syw + y * cyw;
+      const Y = Y1 * cp - z * sp, Z = Y1 * sp + z * cp;
+      FN[f * 3] = X; FN[f * 3 + 1] = Y; FN[f * 3 + 2] = Z;
+      vis[f] = Y < -1e-4 ? 1 : 0;  // the camera looks along +Y: a face is visible when it points back at it
+      if (vis[f]) { let dsum = 0; for (const v of F[f]) dsum += VY[v]; FD[f] = dsum / F[f].length; list.push(f); }
+    }
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    for (const f of order(list)) {
+      const face = F[f], nx = FN[f * 3], ny = FN[f * 3 + 1], nz = FN[f * 3 + 2];
+      const diff = Math.max(0, nx * L[0] + ny * L[1] + nz * L[2]), head = Math.max(0, -ny);
+      const k = 0.36 + 0.5 * diff + 0.2 * head;
+      const col = `rgb(${Math.min(255, BASE[0] * k) | 0},${Math.min(255, BASE[1] * k) | 0},${Math.min(255, BASE[2] * k) | 0})`;
+      ctx.beginPath();
+      ctx.moveTo(SX[face[0]], SY[face[0]]);
+      for (let i = 1; i < face.length; i++) ctx.lineTo(SX[face[i]], SY[face[i]]);
+      ctx.closePath();
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = col; ctx.lineWidth = 0.9; ctx.stroke();  // hides hairline seams between faces
+      let any = false;
+      ctx.beginPath();
+      for (let i = 0; i < face.length; i++) {
+        const g = NB[f][i];
+        if (FE[f][i] || g < 0 || !vis[g]) {
+          const a = face[i], b = face[(i + 1) % face.length];
+          ctx.moveTo(SX[a], SY[a]); ctx.lineTo(SX[b], SY[b]); any = true;
+        }
+      }
+      if (any) { ctx.strokeStyle = "rgba(30,36,50,.72)"; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    gizmo(w, h, cyw, syw, cp, sp);
+  }
+
+  function gizmo(w, h, cyw, syw, cp, sp) {
+    const ox = w - 34, oy = h - 34, len = 18;
+    const axes = [["X", 1, 0, 0, "#d03b3b"], ["Y", 0, 1, 0, "#0f8f3a"], ["Z", 0, 0, 1, "#2a78d6"]].map(([t, x, y, z, c]) => {
+      const X = x * cyw - y * syw, Y1 = x * syw + y * cyw;
+      return { t, c, X, Y: Y1 * cp - z * sp, Z: Y1 * sp + z * cp };
+    }).sort((a, b) => b.Y - a.Y);
+    ctx.lineWidth = 2; ctx.font = "600 10px Inter, system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    for (const a of axes) {
+      ctx.strokeStyle = a.c; ctx.fillStyle = a.c;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + a.X * len, oy - a.Z * len); ctx.stroke();
+      ctx.fillText(a.t, ox + a.X * (len + 8), oy - a.Z * (len + 8));
+    }
+  }
+
+  const SPIN = 0.00042;  // radians per millisecond
+  function frame(t) {
+    raf = 0;
+    if (!alive) return;
+    if (spinning) { if (lastT) yaw += Math.min(64, t - lastT) * SPIN; lastT = t; }
+    draw();
+    if (spinning) raf = requestAnimationFrame(frame);
+  }
+  function schedule() { if (!raf && alive) raf = requestAnimationFrame(frame); }
+  function stopSpin() { spinning = false; lastT = 0; }
+  function reset() { stopSpin(); yaw = HOME.yaw; pitch = HOME.pitch; zoom = 1; schedule(); }
+  const pts = new Map();
+  let pinch = null;
+  const onDown = (e) => {
+    stopSpin();
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointer */ }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: zoom }; }
+    canvas.classList.add("grabbing");
+  };
+  const onMove = (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    if (pts.size === 1) {
+      yaw += (e.clientX - p.x) * 0.0095;
+      pitch = clamp(pitch + (e.clientY - p.y) * 0.0095, -1.5, 1.5);
+    }
+    p.x = e.clientX; p.y = e.clientY;
+    if (pts.size >= 2 && pinch) { const [a, b] = [...pts.values()]; zoom = clamp(pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, 0.35, 8); }
+    schedule();
+  };
+  const onUp = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) canvas.classList.remove("grabbing"); };
+  const onWheel = (e) => {
+    e.preventDefault(); stopSpin();
+    zoom = clamp(zoom * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015)), 0.35, 8);
+    schedule();
+  };
+  const onKey = (e) => {
+    if (e.key === "+" || e.key === "=") { stopSpin(); zoom = clamp(zoom * 1.2, 0.35, 8); schedule(); }
+    else if (e.key === "-" || e.key === "_") { stopSpin(); zoom = clamp(zoom / 1.2, 0.35, 8); schedule(); }
+    else if (e.key === "0") reset();
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); stopSpin(); pitch = clamp(pitch + (e.key === "ArrowUp" ? 0.12 : -0.12), -1.5, 1.5); schedule(); }
+  };
+  canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointermove", onMove);
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointercancel", onUp);
+  canvas.addEventListener("wheel", onWheel, { passive: false });
+  canvas.addEventListener("dblclick", reset);
+  canvas.addEventListener("keydown", onKey);
+  const ro = window.ResizeObserver ? new ResizeObserver(schedule) : null;
+  if (ro) ro.observe(canvas); else window.addEventListener("resize", schedule);
+  schedule();
+  return {
+    reset,
+    get spinning() { return spinning; },
+    destroy() {
+      alive = false;
+      if (raf) cancelAnimationFrame(raf);
+      if (ro) ro.disconnect(); else window.removeEventListener("resize", schedule);
+      canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("pointercancel", onUp);
+      canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("dblclick", reset); canvas.removeEventListener("keydown", onKey);
+    },
+  };
 }
 
 init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="banner show bad" style="display:flex">Could not load the demo: ${esc(e.message)}</div>`); });

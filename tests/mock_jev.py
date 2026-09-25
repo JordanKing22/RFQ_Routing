@@ -53,8 +53,9 @@ def choice(options: List[str], winner: str, strength: float = 0.8) -> Dict[str, 
 def answer(name: str, question: Dict[str, Any], state: Any) -> Dict[str, Any]:
     t = text_of(state)
     kind = question.get("type")
-    body = t
+    body = subject = t
     if isinstance(state, dict):
+        subject = str(state.get("subject", "")).lower()
         body = " ".join(str(state.get(k, "")) for k in ("subject", "body")).lower()
     if kind == "noul":
         if name == "export_controlled":
@@ -77,6 +78,8 @@ def answer(name: str, question: Dict[str, Any], state: Any) -> Dict[str, Any]:
                 w = "vendor_or_solicitation"
             elif has(r"\bpo\b|purchase order|please proceed|award", body) and not has(r"quote|rfq|pricing", body):
                 w = "purchase_order"
+            elif has(r"\brfq\b|quote|pricing|price", subject) and not has(r"\bpo\b|status|tracking|invoice", subject):
+                w = "quote_revision" if has(r"\bre:|revis|rev [a-z]\b.*(update|now)|update", subject) else "new_rfq"
             elif has(r"status|tracking|ship date|shipped|certs|certification|invoice|fai report|on track|rma|nonconform|change order", body):
                 w = "order_followup"
             elif has(r"rev [a-z]\b.*(update|revise)|revised|revision|update(d)? quote", body):
@@ -88,16 +91,15 @@ def answer(name: str, question: Dict[str, Any], state: Any) -> Dict[str, Any]:
             strength = 0.45 if has(r"can you make|what would .* cost|can you do this", body) else 0.82
             return choice(options, w, strength)
         if name == "process":
-            if has(r"weld|fabricat|sheet metal|casting|foundry|3d print|injection mold|molded", t):
-                w = "mixed_or_unclear"
-            elif has(r"5-axis|five-axis|impeller|implant|contour|sculpt|compound|blade|vane|wing rib|structural fitting", t):
-                w = "milling_5axis"
-            elif has(r"shaft|pin\b|pins\b|bushing|spacer|lathe|turn(ed|ing)|swiss|thread|nozzle|gear blank|roller|stud", t):
-                w = "turning"
-            elif has(r"plate|bracket|block|housing|cover|manifold|heat sink|heatsink|fixture|enclosure", t):
-                w = "milling_3axis"
-            else:
-                w = "mixed_or_unclear"
+            rules = [
+                ("mixed_or_unclear", r"weld|fabricat|sheet metal|casting|foundry|3d print|injection mold|molded"),
+                ("milling_5axis", r"5-axis|five-axis|impeller|implant|contour|sculpt|compound|blade|vane|wing rib|structural fitting"),
+                ("turning", r"shaft|\bpins?\b|bushing|spacer|lathe|turn(ed|ing)|swiss|nozzle|gear blank|roller|\bstuds?\b"),
+                ("milling_3axis", r"plate|bracket|block|housing|cover|manifold|heat sink|heatsink|fixture|enclosure"),
+            ]
+            # The email text decides first; attachment text only breaks a tie.
+            w = next((lane for lane, rx in rules if has(rx, body)), None)
+            w = w or next((lane for lane, rx in rules if has(rx, t)), "mixed_or_unclear")
             return choice(options, w, 0.78)
         if name == "volume":
             nums = [int(n.replace(",", "")) for n in re.findall(r"\b(\d[\d,]{0,6})\s*(?:pcs|pieces|each|ea|/yr|per year|units)", t)]
