@@ -390,7 +390,8 @@ class ServerTests(unittest.TestCase):
     def start_server(cls, mock_port: int, cache_dir: str, seed: str, **env: str) -> int:
         port = free_port()
         environ = dict(os.environ, JEV_BASE_URL=f"http://127.0.0.1:{mock_port}", AI_GATEWAY_API_KEY="mock-key",
-                       RFQ_DEMO_PASSWORD="pw", RFQ_CACHE_DIR=cache_dir, RFQ_SEED_FILE=seed, **env)
+                       RFQ_DEMO_PASSWORD="pw", RFQ_CACHE_DIR=cache_dir, RFQ_SEED_FILE=seed,
+                       RFQ_EMAILS_FILE=str(ROOT / "data" / "sample_emails.json"), **env)
         environ.pop("TYPESAFE_API_KEY", None)
         proc = subprocess.Popen([sys.executable, str(ROOT / "server.py"), "--no-browser", "--port", str(port)],
                                 env=environ, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(ROOT))

@@ -1,0 +1,634 @@
+{
+  "about": "RFQ details beta inbox: 22 emails copied from sample_emails.json with 30 real attachment files. 13 files are uncopyable (image-only scans, a fax, a phone photo, a screenshot), so their text comes from OCR. Built by tools/make_rfq_beta.py. All companies and people are fictional; 'expected' is the answer key.",
+  "emails": [
+    {
+      "id": "E01",
+      "received": "06:02",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "RFQ 26-0412: Sensor mounting bracket, 6061-T6",
+      "body": "Hi team,\n\nPlease quote the attached sensor mounting bracket, P/N QA-41127 Rev B.\n\nMaterial: 6061-T6 aluminum\nFinish: Black anodize per MIL-A-8625 Type II, Class 2\nQuantities: 25 / 50 / 100\nInspection: standard, FAI on the first lot\n\nQuote due by October 3. Let me know if you have any questions on the tolerances.\n\nThanks,\nRachel Kim\nBuyer, Quillon Aerospace",
+      "attachments": [
+        {
+          "name": "QA-41127_RevB.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E01/QA-41127_RevB.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "QA-41127_RevB.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E01/QA-41127_RevB.step",
+          "media": "step"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Simple prismatic bracket, full info, anodize is outside processing."
+      }
+    },
+    {
+      "id": "E03",
+      "received": "06:47",
+      "from_name": "Greg Lindqvist",
+      "from_email": "glindqvist@halvorsenpv.com",
+      "subject": "RFQ: pump shaft HPV-3310, annual volume",
+      "body": "Morning,\n\nRequesting a quote on the attached pump shaft, HPV-3310 Rev C. 303 stainless, ground bearing journals, passivate per ASTM A967.\n\nRelease quantity is 500 pcs with an estimated annual usage of 6,000 pcs. Please show any tooling or NRE as a separate line.\n\nWe need the quote back within two weeks.\n\nGreg Lindqvist\nPurchasing Manager, Halvorsen Pump & Valve",
+      "attachments": [
+        {
+          "name": "HPV-3310_shaft_RevC.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E03/HPV-3310_shaft_RevC.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "turning",
+        "note": "Round shaft, production volume, passivation."
+      }
+    },
+    {
+      "id": "E04",
+      "received": "07:05",
+      "from_name": "Dana Whitcomb",
+      "from_email": "dwhitcomb@sablecreekdefense.com",
+      "subject": "RFQ SCD-7781: gimbal yoke, ITAR controlled",
+      "body": "Mesa Ridge team,\n\nSable Creek is requesting a quote for 12 gimbal yokes in 7075-T7351. The geometry is complex and will need 5-axis machining.\n\nThe technical data package is ITAR controlled and is available only to U.S. persons through our secure supplier portal:\nhttps://suppliers.sablecreekdefense.com/rfq/SCD-7781\n\nPlease include your ITAR registration number with your quote. Quote due in 10 business days.\n\nDana Whitcomb\nSubcontracts Administrator, Sable Creek Defense Systems",
+      "attachments": [],
+      "expected": {
+        "lane": "itar",
+        "note": "Explicit ITAR, drawings behind a U.S.-persons portal."
+      }
+    },
+    {
+      "id": "E05",
+      "received": "07:21",
+      "from_name": "Owen Marsh",
+      "from_email": "omarsh@tessaractoptics.com",
+      "subject": "Request for quote: lens cell TO-5520",
+      "body": "Hi,\n\nPlease quote 40 pcs of the attached lens cell, 6061-T6 with black anodize.\n\nThis drawing is marked CUI and the program flows down DFARS 252.204-7012, so please handle it per NIST SP 800-171 and confirm your compliance status in your reply.\n\nTarget quote date is next Friday.\n\nOwen Marsh\nSupply Chain, Tessaract Optics",
+      "attachments": [
+        {
+          "name": "TO-5520_lens_cell_CUI.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E05/TO-5520_lens_cell_CUI.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "itar",
+        "note": "CUI plus DFARS 7012 flowdown: restricted handling."
+      }
+    },
+    {
+      "id": "E06",
+      "received": "07:38",
+      "from_name": "Sam Patel",
+      "from_email": "spatel@cindervalehydraulics.com",
+      "subject": "Quote on spacers",
+      "body": "Hi there,\n\nFound you on Google. Can you quote 200 pcs of a steel spacer, part SP-1182? It's a simple round spacer, 1.25\" OD x 0.50\" ID x 0.75\" long, 1018 steel, zinc plated.\n\nI'll send the drawing tomorrow when our engineer is back in the office.\n\nThanks,\nSam",
+      "attachments": [],
+      "expected": {
+        "lane": "turning",
+        "note": "Round spacer, new prospect, drawing still to come."
+      }
+    },
+    {
+      "id": "E07",
+      "received": "07:54",
+      "from_name": "Lena Fischer",
+      "from_email": "lfischer@ferroviarobotics.com",
+      "subject": "RFQ: heat sink plate FR-2290",
+      "body": "Hello,\n\nAttached is a scan of our heat sink plate FR-2290 (sorry, it came off the old copier): 6063 aluminum, pocketed fins, clear anodize. Could you send pricing and lead time?\n\nWe're still finalizing the build plan, so I don't have quantities yet. Please quote your best price breaks.\n\nLena Fischer\nHardware Engineer, Ferrovia Robotics",
+      "attachments": [
+        {
+          "name": "FR-2290_heatsink.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E07/FR-2290_heatsink.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "FR-2290_heatsink.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E07/FR-2290_heatsink.step",
+          "media": "step"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Prismatic heat sink; quantity missing."
+      }
+    },
+    {
+      "id": "E09",
+      "received": "08:26",
+      "from_name": "Beth Okafor",
+      "from_email": "bokafor@halvorsenpv.com",
+      "subject": "RE: Quote Q-26-1187 manifold block, Rev D attached",
+      "body": "Hi,\n\nEngineering released Rev D of the valve manifold block HPV-2045. Changes: two ports moved and the bottom face tolerance opened up to +/-0.005.\n\nSame quantity as before, 30 pcs. Please update quote Q-26-1187 against Rev D.\n\nThanks,\nBeth Okafor\nSourcing, Halvorsen Pump & Valve",
+      "attachments": [
+        {
+          "name": "HPV-2045_manifold_RevD.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E09/HPV-2045_manifold_RevD.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "HPV-2045_manifold_RevD.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E09/HPV-2045_manifold_RevD.step",
+          "media": "step"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Revision to an open quote for a prismatic manifold."
+      }
+    },
+    {
+      "id": "E10",
+      "received": "08:41",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "PO 45521 status?",
+      "body": "Hi Priya,\n\nChecking on PO 45521 for the QA-40988 brackets, 100 pcs. Our system shows a promise date of 9/26. Are we still on track?\n\nPlease send tracking once it ships.\n\nThanks,\nRachel",
+      "attachments": [],
+      "expected": {
+        "lane": "orders",
+        "note": "Status request on an open PO."
+      }
+    },
+    {
+      "id": "E13",
+      "received": "09:32",
+      "from_name": "Kyle Brennan",
+      "from_email": "kbrennan@apexcuttingsupply.com",
+      "subject": "20% off carbide end mills this month",
+      "body": "Hi there,\n\nThis month only, Apex Cutting Supply is offering 20% off all solid carbide end mills and free shipping on orders over $250.\n\nReply to set up a quick call, or visit our online store.\n\nKyle Brennan\nTerritory Sales, Apex Cutting Supply",
+      "attachments": [],
+      "expected": {
+        "lane": "filtered",
+        "note": "Tooling vendor promotion."
+      }
+    },
+    {
+      "id": "E16",
+      "received": "10:24",
+      "from_name": "Ivy Chen",
+      "from_email": "ichen@arcwrightag.com",
+      "subject": "RFQ: welded frame with machined mounting plate",
+      "body": "Hi,\n\nWe need a quote on a welded steel frame assembly: A36 tube frame, MIG welded, then the mounting plate is machined after welding for flatness, then powder coated. Qty 20. Scanned drawing attached.\n\nCan you handle the fabrication and welding in-house, or would that be outsourced?\n\nIvy Chen\nArcwright Agriculture",
+      "attachments": [
+        {
+          "name": "AW-310_frame_assy.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E16/AW-310_frame_assy.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "review",
+        "note": "Mostly fabrication and welding: a person should decide."
+      }
+    },
+    {
+      "id": "E17",
+      "received": "10:41",
+      "from_name": "Brandon Lee",
+      "from_email": "blee@lumenfieldsolar.com",
+      "subject": "Can you make these?",
+      "body": "Hey,\n\nI have a few parts we need made, some aluminum and some plastic. Pictures are on our shared drive: https://share.lumenfieldsolar.com/parts-pics\n\nCan you do this kind of work? What would something like this cost?\n\nBrandon",
+      "attachments": [],
+      "expected": {
+        "lane": "review",
+        "note": "Vague capability question, no specs."
+      }
+    },
+    {
+      "id": "E19",
+      "received": "11:23",
+      "from_name": "Hannah Ortiz",
+      "from_email": "hortiz@northpeakenergy.com",
+      "subject": "Swiss-turned brass contact pins, 10k/yr",
+      "body": "Hello,\n\nWe're looking for a new source for a brass contact pin: C360 brass, 0.062\" diameter x 0.450\" long, with a small groove and a chamfer, gold flash plated.\n\nAnnual volume is around 10,000 pcs with a first release of 2,500. Drawing attached. Please quote with and without plating.\n\nHannah Ortiz\nSourcing Specialist, NorthPeak Energy",
+      "attachments": [
+        {
+          "name": "NPE-0062_pin.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E19/NPE-0062_pin.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "turning",
+        "note": "Swiss-type part, production volume, new prospect."
+      }
+    },
+    {
+      "id": "E20",
+      "received": "11:48",
+      "from_name": "Alicia Moreno",
+      "from_email": "amoreno@ferroviarobotics.com",
+      "subject": "Blanket pricing for 3 enclosure covers",
+      "body": "Hi,\n\nWe'd like 12-month blanket pricing for three aluminum enclosure covers (FR-3101, FR-3102, FR-3103). 6061-T6, machined on the top and bottom faces, clear chem film.\n\nAnnual usage is about 2,000 pcs each, released monthly. Drawings attached.\n\nAlicia Moreno\nBuyer, Ferrovia Robotics",
+      "attachments": [
+        {
+          "name": "FR-3101.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E20/FR-3101.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "FR-3102.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E20/FR-3102.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "FR-3103.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E20/FR-3103.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Production blanket on prismatic covers."
+      }
+    },
+    {
+      "id": "E22",
+      "received": "12:03",
+      "from_name": "Declan Foyle",
+      "from_email": "dfoyle@oxbowpackaging.com",
+      "subject": "LINE DOWN: need 4 knife holder blocks this week",
+      "body": "Mesa Ridge,\n\nOne of our cartoners at a customer plant in Mesa is down. The knife holder block cracked through the bolt boss and we have no spares on the shelf. I'm out at the plant with no scanner, so I took a photo of the print, OPM-22817 Rev B.\n\nNeed 4 pcs (2 to get the machine running, 2 for our spares stock). 4140 pre-hard 28-32 HRC, black oxide per the print. If the black oxide slows you down, leave them bare and oiled and we'll deal with it later.\n\nCan you quote today and tell me how fast you can have them? We need them this week: tomorrow if your shop runs Saturdays, Monday morning at the absolute latest. We'll pay expedite and overtime, and our field tech will pick them up at your dock.\n\nDeclan Foyle\nField Service Manager, Oxbow Packaging Machinery\nCell 480-555-0147",
+      "attachments": [
+        {
+          "name": "OPM-22817_RevB_photo.jpg",
+          "kind": "file",
+          "path": "rfq_beta/files/E22/OPM-22817_RevB_photo.jpg",
+          "media": "jpg"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Line-down rush on a prismatic steel block for an OEM field repair, needed this week."
+      }
+    },
+    {
+      "id": "E26",
+      "received": "12:20",
+      "from_name": "Caleb Mercer",
+      "from_email": "cmercer@pinecrestvac.com",
+      "subject": "RFQ: 316L gauge manifold block PV-5580",
+      "body": "Hi Mesa Ridge,\n\nWe're looking for a second source on a gauge manifold block, PV-5580 Rev B. It's a 316L stainless block, about 4.0 x 2.5 x 2.0, with five ports drilled from three faces. Two of the port faces have o-ring grooves.\n\nOur mail server strips CAD attachments, so the drawing and STEP are on our file share (link good through Oct 16):\nhttps://share.pinecrestvac.com/s/rfq-pv5580-revb\n\nPlease quote 25 and 60 pcs. Passivate per ASTM A967, then precision clean for high vacuum and double bag. EN 10204 3.1 material certs required.\n\nCaleb Mercer\nManufacturing Engineer, Pinecrest Vacuum Technologies",
+      "attachments": [],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Prismatic stainless manifold block; drawings are shared only through a link, with no attachment."
+      }
+    },
+    {
+      "id": "E32",
+      "received": "12:45",
+      "from_name": "Nora Castellanos",
+      "from_email": "ncastellanos@kestrelfluid.com",
+      "subject": "RFQ-26-0931: pilot manifold and end plate",
+      "body": "Hi Mesa Ridge team,\n\nKestrel is sourcing a new pilot valve manifold and its matching end plate for our KV series valve line. Please see the attached RFQ form for the quantity breaks, quality requirements, and response date.\n\nDrawings for both parts are attached, plus a STEP model of the manifold. Please quote each break on the form and show any NRE or first article charges as their own line.\n\nIf you can't quote this one, a quick no-bid reply is appreciated so I can close out the package.\n\nThank you,\nNora Castellanos\nBuyer, Kestrel Fluid Controls",
+      "attachments": [
+        {
+          "name": "RFQ-26-0931.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E32/RFQ-26-0931.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "KF-3408_RevB.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E32/KF-3408_RevB.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "KF-3408_RevB.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E32/KF-3408_RevB.step",
+          "media": "step"
+        },
+        {
+          "name": "KF-3412_RevA.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E32/KF-3412_RevA.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "milling_3axis",
+        "note": "Prismatic manifold and end plate; the quantities appear only on the attached RFQ form."
+      }
+    },
+    {
+      "id": "E52",
+      "received": "14:10",
+      "from_name": "Ada Lindgren",
+      "from_email": "alindgren@ashgroveinst.com",
+      "subject": "Quote request: 316L cover plate AGI-3052, 12 pcs",
+      "body": "Hi there,\n\nI'm looking for pricing on a small batch of cover plates for a sensor enclosure we're building. Drawing AGI-3052 Rev A is attached.\n\n316L stainless, 7 x 5 x .375 thick, an O-ring groove on one face, and 12 counterbored holes around the edge. Passivate per ASTM A967 after machining. The sealing face needs to be flat within .002.\n\nNeed 12 pcs now, possibly 40 more in the spring if the field trials go well. We'd like parts by mid November.\n\nThanks!\nAda Lindgren\nMechanical Engineer\nAshgrove Instruments",
+      "attachments": [
+        {
+          "name": "AGI-3052_RevA.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E52/AGI-3052_RevA.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "itar",
+        "note": "Marking only on the attached drawing: an ordinary cover plate RFQ from an instrument maker whose drawing carries a CUI banner and designation block."
+      }
+    },
+    {
+      "id": "E56",
+      "received": "14:25",
+      "from_name": "Amara Nwosu",
+      "from_email": "anwosu@brightwatermed.com",
+      "subject": "RFQ-26-0317: curved PEEK TLIF interbody cage BWM-3140",
+      "body": "Hi,\n\nPlease see the attached RFQ package for our TLIF lumbar interbody cage, BWM-3140 Rev A. Implant-grade PEEK per ASTM F2026 with tantalum marker pins pressed in after machining. The cage body is curved, the upper and lower surfaces are convex with 6° of lordosis, and the tooth pattern follows that curvature, so we're expecting 5-axis work.\n\nQuantities, heights, and terms are all on the RFQ form, including an option to quote with our furnished PEEK bar. Drawing and model attached. ISO 13485 required.\n\nPlease respond by the date on the form.\n\nThank you,\nAmara Nwosu\nBuyer, Brightwater Medical",
+      "attachments": [
+        {
+          "name": "RFQ-26-0317.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E56/RFQ-26-0317.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "BWM-3140_RevA.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E56/BWM-3140_RevA.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "BWM-3140_RevA.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E56/BWM-3140_RevA.step",
+          "media": "step"
+        }
+      ],
+      "expected": {
+        "lane": "milling_5axis",
+        "note": "Curved PEEK spinal cage; quantities appear only on the attached RFQ form, not in the email."
+      }
+    },
+    {
+      "id": "E61",
+      "received": "14:47",
+      "from_name": "Martin Achebe",
+      "from_email": "machebe@corvane-ind.com",
+      "subject": "Corvane RFQ 26-0914: electronics housing CI-10442 Rev C",
+      "body": "Hi,\n\nCould you quote the attached housing, CI-10442 Rev C? It's a machined 6061-T6511 box with a pocketed interior, a gasket groove on the open face, and tapped holes on all four sides. Electroless nickel per AMS 2404 after machining, with helical inserts installed after plating.\n\nQuantities: 20, 50, and 100 pcs. We'd need first parts about 6 weeks after order. Please break out setup and first article charges, and include material certs and a C of C with shipment.\n\nDrawing and STEP are attached. Quote by October 13 if possible.\n\nThanks,\nMartin Achebe\nPurchasing Agent\nCorvane Industries",
+      "attachments": [
+        {
+          "name": "CI-10442_RevC.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E61/CI-10442_RevC.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "CI-10442_RevC.step",
+          "kind": "file",
+          "path": "rfq_beta/files/E61/CI-10442_RevC.step",
+          "media": "step"
+        }
+      ],
+      "expected": {
+        "lane": "itar",
+        "note": "Marking only on the attached drawing: the email reads like a plain commercial housing RFQ and the ITAR warning is printed in the drawing legend alone, so Jev has to read the attachment text to catch it."
+      }
+    },
+    {
+      "id": "E62",
+      "received": "14:52",
+      "from_name": "Duncan Mireles",
+      "from_email": "dmireles@brightwatermed.com",
+      "subject": "Brightwater RFQ-26-0318: Swiss-turned pivot pin and PEEK spacer",
+      "body": "Good morning,\n\nBrightwater Medical is requesting a quotation on the Swiss-turned components below for our articulating grasper line.\n\nBWM-3105 Rev A, pivot pin, 17-4 PH stainless, condition H1025, passivated\nBWM-3106 Rev A, spacer, unfilled PEEK (implant grade not required)\n\nDrawings for both parts and our RFQ form are attached. Quantities, required dates, and quality requirements are listed on the form. Please quote each line at every quantity shown.\n\nResponses are due October 15.\n\nBest regards,\nDuncan Mireles\nProcurement Specialist, Brightwater Medical",
+      "attachments": [
+        {
+          "name": "RFQ-26-0318.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E62/RFQ-26-0318.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "BWM-3105_RevA.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E62/BWM-3105_RevA.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "BWM-3106_RevA.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E62/BWM-3106_RevA.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "turning",
+        "note": "Two Swiss-turned parts; quantities appear only on the attached RFQ form."
+      }
+    },
+    {
+      "id": "E71",
+      "received": "15:32",
+      "from_name": "Felix Durand",
+      "from_email": "fdurand@lucerneopto.com",
+      "subject": "RFQ: fold mirror mount LO-1186 Rev A, compound-angle seat",
+      "body": "Hello Mesa Ridge,\n\nCan you quote the fold mirror mount LO-1186 Rev A? The PDF is still stuck in our PDM release queue, so I attached a screenshot of the drawing. 6061-T651, black anodize per MIL-A-8625 Type II Class 2 with the pads and bores masked.\n\nNo model on this one; the drawing is fully dimensioned. The mirror seat is tilted 22.5° about X and 11.25° about Y, and the three kinematic pads, the beam bore, and the retainer holes are all normal to that compound face. Pads are .0002 flat and coplanar within .0003, so I'd expect a 5-axis or at least a 3+2 setup.\n\nQty 8, possibly 25 more later this year. C of C and material certs, nothing fancier.\n\nCould you get back to me by Oct 12?\n\nThanks,\nFelix Durand\nOptomechanical Engineer\nLucerne Optomechanics",
+      "attachments": [
+        {
+          "name": "LO-1186_RevA_screenshot.png",
+          "kind": "file",
+          "path": "rfq_beta/files/E71/LO-1186_RevA_screenshot.png",
+          "media": "png"
+        }
+      ],
+      "expected": {
+        "lane": "milling_5axis",
+        "note": "Compound-angle optical mount with no STEP; the drawing alone defines the 5-axis geometry."
+      }
+    },
+    {
+      "id": "E72",
+      "received": "15:38",
+      "from_name": "Trent Haverford",
+      "from_email": "thaverford@wexcombesys.com",
+      "subject": "RFQ WS-26-0388: output shaft WS-4471 Rev B",
+      "body": "Hello,\n\nPlease quote the output shaft on the attached RFQ, WS-4471 Rev B. 17-4 PH condition H1150, turned, two bearing journals held to .0003, a 3/16 keyway, and a 5/8-18 thread on the end. Passivate per AMS 2700.\n\nQuantity breaks and the response date are on the RFQ form. The drawing is attached too. Material certs and a first article report will be required on the first lot.\n\nBest regards,\nTrent Haverford\nBuyer | Wexcombe Systems\n(505) 555-0172",
+      "attachments": [
+        {
+          "name": "WS-RFQ-26-0388.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E72/WS-RFQ-26-0388.pdf",
+          "media": "pdf"
+        },
+        {
+          "name": "WS-4471_RevB.pdf",
+          "kind": "file",
+          "path": "rfq_beta/files/E72/WS-4471_RevB.pdf",
+          "media": "pdf"
+        }
+      ],
+      "expected": {
+        "lane": "itar",
+        "note": "Marking only on the attached RFQ form: the email and the shaft drawing are clean, and the ITAR legend is printed on the customer's RFQ form, which also holds the quantity breaks."
+      }
+    }
+  ],
+  "paste_examples": [
+    {
+      "label": "ITAR notice hidden in the signature",
+      "from_name": "Chris Novak",
+      "from_email": "cnovak@ridgebackuav.com",
+      "subject": "Quote: bracket set for new airframe",
+      "body": "Hi,\n\nCan you quote the attached bracket set, 6 unique brackets, 6061-T6, 10 of each? Nothing fancy, standard tolerances, clear anodize.\n\nThanks,\nChris Novak\nManufacturing Engineer, Ridgeback UAV\n\nWARNING: This email and its attachments contain technical data whose export is restricted by the Arms Export Control Act and the International Traffic in Arms Regulations (ITAR). Do not share with foreign persons without an export license.",
+      "attachments": [
+        {
+          "name": "RB-100_bracket_set.pdf",
+          "kind": "drawing",
+          "company": "Ridgeback UAV",
+          "title": "BRACKET SET, AIRFRAME, DETAILS -1 THRU -6",
+          "part_number": "RB-100",
+          "rev": "A",
+          "material": "ALUMINUM 6061-T6 PLATE PER AMS-QQ-A-250/11",
+          "finish": "CLEAR ANODIZE PER MIL-A-8625 TYPE II CLASS 1",
+          "shape": "bracket",
+          "size": [
+            4.25,
+            2.0,
+            1.5
+          ],
+          "units": "in",
+          "scale": "1:1",
+          "sheet": "1 OF 7",
+          "notes": [
+            "INTERPRET DRAWING PER ASME Y14.5-2018.",
+            "SIX DETAILS, -1 THRU -6, SHOWN ON SHEETS 2 THROUGH 7. EACH DASH NUMBER IS A SEPARATE PART.",
+            "ENVELOPE SHOWN IS LARGEST DETAIL (-4). ALL DETAILS MACHINED FROM PLATE.",
+            "BREAK ALL SHARP EDGES .010-.020.",
+            "INK MARK DASH NUMBER ON EACH PART, .06 HIGH CHARACTERS. BAG EACH DASH NUMBER SEPARATELY."
+          ],
+          "callouts": [
+            "-1 THRU -6 SEE SHEETS 2-7",
+            "Ø.201 THRU TYP",
+            "R.12 INSIDE CORNERS TYP"
+          ],
+          "tolerances": ".XX ±.01  .XXX ±.005  ANGLES ±1°",
+          "drawn_by": "C. NOVAK",
+          "date": "2026-09-18",
+          "revisions": [
+            {
+              "rev": "A",
+              "description": "INITIAL RELEASE",
+              "date": "2026-09-18"
+            }
+          ],
+          "legend": "itar"
+        },
+        {
+          "name": "RB-100_bracket_set.step",
+          "kind": "model",
+          "part_number": "RB-100",
+          "rev": "A",
+          "title": "BRACKET SET, AIRFRAME, DETAILS -1 THRU -6",
+          "shape": "bracket",
+          "size": [
+            4.25,
+            2.0,
+            1.5
+          ],
+          "units": "in",
+          "originating_system": "SolidWorks 2024",
+          "author": "cnovak",
+          "schema": "AP214"
+        }
+      ]
+    },
+    {
+      "label": "Status question with a new RFQ tucked inside",
+      "from_name": "Rachel Kim",
+      "from_email": "rkim@quillonaero.com",
+      "subject": "RE: PO 44810 shipped?",
+      "body": "Hi Priya,\n\nDid PO 44810 ship yesterday? I didn't see tracking come through.\n\nAlso, while I have you: could you quote 40 pcs of the attached 17-4 PH shaft? Drawing attached, H1025 heat treat. No rush on that one.\n\nThanks,\nRachel",
+      "attachments": [
+        {
+          "name": "QA-60112_shaft.pdf",
+          "kind": "drawing",
+          "company": "Quillon Aerospace",
+          "title": "SHAFT, ACTUATOR PIVOT",
+          "part_number": "QA-60112",
+          "rev": "A",
+          "material": "STAINLESS STEEL 17-4 PH (UNS S17400) BAR PER AMS 5643",
+          "finish": "PASSIVATE PER AMS 2700 METHOD 1 AFTER HEAT TREAT",
+          "shape": "shaft",
+          "size": [
+            6.5,
+            0.75
+          ],
+          "units": "in",
+          "scale": "1:1",
+          "notes": [
+            "INTERPRET DRAWING PER ASME Y14.5-2018.",
+            "HEAT TREAT TO CONDITION H1025 PER AMS 2759/3. HARDNESS 35 HRC MIN, REPORT ON CERT.",
+            "ROUGH MACHINE BEFORE AGING, FINISH MACHINE BEARING DIAMETERS AFTER AGING.",
+            "BEARING DIAMETERS 16 Ra MAX, 63 Ra ELSEWHERE. NO GRINDING BURN.",
+            "BREAK ALL SHARP EDGES .005-.015.",
+            "PART MARK P/N AND REV PER MIL-STD-130 BY ELECTROCHEMICAL ETCH, LOCATION SHOWN."
+          ],
+          "callouts": [
+            "2X Ø.6248/.6245 BEARING DIA",
+            "7/16-20 UNJF-3A THD BOTH ENDS",
+            "2X Ø.106 THRU, COTTER PIN",
+            "RUNOUT .0005 TO A-B"
+          ],
+          "tolerances": ".XX ±.01  .XXX ±.005  .XXXX ±.0005  ANGLES ±0.5°",
+          "drawn_by": "D. REYES",
+          "date": "2026-09-09",
+          "revisions": [
+            {
+              "rev": "A",
+              "description": "INITIAL RELEASE",
+              "date": "2026-09-09"
+            }
+          ],
+          "legend": "proprietary"
+        }
+      ]
+    },
+    {
+      "label": "Plain-language RFQ from a new prospect",
+      "from_name": "Maya Brooks",
+      "from_email": "maya@desertbloomcoffee.com",
+      "subject": "Parts for our espresso machines",
+      "body": "Hello! We build small-batch espresso machines here in Tempe. We need 150 stainless steel group head rings, basically a round ring with a thread on the inside. I've attached our CAD file. Could you give us a price? We'd love to have them in about a month.\n\nMaya",
+      "attachments": [
+        {
+          "name": "group_head_ring_v3.step",
+          "kind": "model",
+          "part_number": "group_head_ring",
+          "rev": "v3",
+          "title": "GROUP HEAD RING, 303 STAINLESS",
+          "shape": "ring",
+          "size": [
+            14.0,
+            72.0,
+            58.0
+          ],
+          "units": "mm",
+          "originating_system": "Autodesk Fusion",
+          "author": "mbrooks",
+          "schema": "AP214"
+        }
+      ]
+    }
+  ]
+}

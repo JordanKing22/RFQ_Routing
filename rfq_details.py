@@ -1,0 +1,2473 @@
+"""
+RFQ details: pull what a quoting manager needs out of each RFQ email and its files, and write it all
+to one consolidated file with one row per part line.
+
+    python rfq_details.py                  # beta inbox -> data/rfq_beta/rfq_details.csv and .json
+    python rfq_details.py --check          # field accuracy against tests/rfq_beta_fields_truth.json
+
+Standard library only. The text of each attachment comes from ocr.file_text (text layer, OCR, or
+STEP header); this module never runs tesseract itself. It reads four kinds of source:
+    the email       subject and body: quantities, dates, material and finish, requirements
+    RFQ forms       RFQ number, respond-by date, one table row per part, quote requirements
+    drawings        the title block (part number, rev, title, material, finish) and legends
+    STEP models     part number, title, and revision from the header
+When sources disagree the RFQ form wins for quantities and dates, the drawing title block wins for
+part number, rev, material, finish, and description, and the email counts when it is the only
+source. Every disagreement is written to "check" so a person can look. OCR text is noisy, so labels
+are matched loosely, O/0 and I/1 style confusions are folded before values are compared, and when a
+clean source (email, text layer, STEP) and an OCR reading agree up to those confusions, the clean
+spelling is kept. Nothing is invented: a value that is not found stays null.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import difflib
+import io
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+HERE = Path(__file__).resolve().parent
+DATA_DIR = HERE / "data"
+BETA_EMAILS = DATA_DIR / "rfq_beta" / "emails.json"
+BETA_OUT = DATA_DIR / "rfq_beta" / "rfq_details"
+BETA_CACHE = DATA_DIR / "rfq_beta" / "ocr_cache.json"
+FIELDS_TRUTH = HERE / "tests" / "rfq_beta_fields_truth.json"
+
+# The sample emails carry a time but no date; the demo's story is that they arrived today, on the
+# day the beta inbox was built. The CLI resolves "next Friday" and "within two weeks" against this
+# date so the committed CSV does not change from one day to the next.
+SAMPLE_INBOX_DATE = dt.date(2026, 9, 25)
+
+# Below this line confidence an OCR value that no other source confirms gets a "verify" note.
+LOW_OCR_CONF = 60.0
+
+FILE_TYPES = ("RFQ form", "drawing", "3D model", "photo", "screenshot", "other")
+
+# --------------------------------------------------------------------------- #
+# Text cleanup and fuzzy helpers
+# --------------------------------------------------------------------------- #
+_TRANS = str.maketrans({
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-",
+    "−": "-", "‘": "'", "’": "'", "‚": "'", "‛": "'", "“": '"',
+    "”": '"', " ": " ", "´": "'", "′": "'", "″": '"', "­": "",
+})
+
+
+def clean(text: Any) -> str:
+    """One line of text: dashes and quotes made plain (OCR loves em dashes), spaces collapsed."""
+    return re.sub(r"[ \t\f\v]+", " ", str(text or "").translate(_TRANS)).strip()
+
+
+def clean_block(text: Any) -> str:
+    return "\n".join(clean(line) for line in str(text or "").translate(_TRANS).splitlines())
+
+
+def norm(text: Any) -> str:
+    """Uppercase words only, for comparing wordings."""
+    return " ".join(re.sub(r"[^A-Z0-9./]+", " ", clean(text).upper()).split())
+
+
+def similar(a: Any, b: Any) -> float:
+    a, b = norm(a), norm(b)
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+# OCR swaps look-alike characters. Comparing keys with these folded makes "CI-10442", "Cl-10442",
+# and "C1-10442" the same part number without guessing which spelling is right.
+_FOLD = str.maketrans({"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "|": "1", "!": "1", "S": "5",
+                       "B": "8", "Z": "2", "G": "6", "T": "7"})
+
+
+def fold(text: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", clean(text).upper()).translate(_FOLD)
+
+
+_TO_DIGIT = {"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "|": "1", "!": "1", "S": "5", "B": "8",
+             "Z": "2", "G": "6"}
+_TO_LETTER = {"0": "O", "1": "I", "5": "S", "8": "B", "2": "Z", "6": "G"}
+
+
+def fix_part_number(token: str) -> str:
+    """Repair a part number read by OCR: letters in the prefix, digits in the numeric groups.
+    'C1-1O442' -> 'CI-10442', '8WM-3106' -> 'BWM-3106'. A lowercase l is almost always an I in an
+    uppercase prefix and a 1 among digits."""
+    token = clean(token).strip(".,;:|()[]{}'\"")
+    parts = token.split("-")
+    if len(parts) < 2:
+        return token.upper()
+    out = ["".join(_TO_LETTER.get(c, c) for c in parts[0].replace("l", "I").upper())]
+    for part in parts[1:]:
+        up = part.upper()
+        digits = sum(c.isdigit() for c in up)
+        if digits and digits >= len(up) / 2:
+            up = "".join(_TO_DIGIT.get(c, c) for c in part.replace("l", "1").upper())
+        out.append(up)
+    return "-".join(out)
+
+
+def ocr_fix_spec(text: str) -> str:
+    """Fix the OCR slips that change a material or finish callout: an aluminum temper read as
+    6061-16511 or 6061-7651, TYPE Ill for TYPE III, CLASS l for CLASS 1."""
+    text = re.sub(r"\b([1-7]\d{3})-[1I7l|]([0-9OIl]{1,4})\b",
+                  lambda m: f"{m.group(1)}-T{m.group(2).replace('O', '0').replace('I', '1').replace('l', '1')}", text)
+    text = re.sub(r"\bTYPE\s+([IlL1|]{1,3})\b", lambda m: "TYPE " + "I" * len(m.group(1)), text)
+    text = re.sub(r"\bCLASS\s+[lI|]\b", "CLASS 1", text)
+    text = re.sub(r"\b(ASTM|AMS|MIL)\s*[-]?\s*", lambda m: m.group(0), text)
+    return text
+
+
+def _num(token: str) -> Optional[int]:
+    """'1,000' -> 1000, '10k' -> 10000, '5O' -> 50 (OCR letter O). None when it is not a count."""
+    t = clean(token).upper().replace(",", "").rstrip(".")
+    t = "".join(_TO_DIGIT.get(c, c) if c in "OIlLSB|" else c for c in t) if re.search(r"\d", t) else t
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*K", t)
+    if m:
+        return int(round(float(m.group(1)) * 1000))
+    if re.fullmatch(r"\d{1,7}", t):
+        return int(t)
+    return None
+
+
+def _tokens(text: str) -> List[str]:
+    return [t for t in re.split(r"[^A-Z0-9]+", clean(text).upper()) if t]
+
+
+_STOP = {"THE", "A", "AN", "AND", "OR", "OF", "TO", "FOR", "ON", "IN", "WITH", "BY", "PER", "IS", "ARE", "BE",
+         "WILL", "YOUR", "OUR", "ANY", "EACH", "AS", "AT", "IT", "PLEASE", "WE", "YOU", "THIS", "THAT", "IF"}
+
+
+def _content(text: str) -> set:
+    return {t for t in _tokens(text) if t not in _STOP}
+
+
+def overlap(a: str, b: str) -> float:
+    """Share of the shorter phrase's content words found in the other one."""
+    ta, tb = _content(a), _content(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / min(len(ta), len(tb))
+
+
+# --------------------------------------------------------------------------- #
+# Patterns
+# --------------------------------------------------------------------------- #
+# Part numbers look like QA-41127, HPV-2045, BWM-3140-08, TO-5520. The lookbehind keeps spec
+# numbers out (MIL-A-8625 must not give "A-8625", BWM-QS-0412 must not give "QS-0412").
+PN_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?)(?![A-Za-z0-9-])")
+# The same with OCR slack: digits allowed in the prefix, look-alike letters in the digits.
+PN_OCR_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9|]{1,5}-[0-9OIlSBZ|]{2,6}(?:-[A-Za-z0-9]{1,4})?)(?![A-Za-z0-9-])")
+# Standards that are written like part numbers. "SP", "MS", and "AN" stay out of this list: they are
+# real part number prefixes too, and the standards that use them are written with a space.
+SPEC_PREFIXES = {"MIL", "AMS", "ASTM", "SAE", "NAS", "ISO", "DFARS", "NIST", "UNC", "UNF", "UNS", "ANSI", "ASME",
+                 "QQ", "DTL", "STD", "AWS", "RAL", "NASM", "PRF"}
+RFQ_NO_RE = re.compile(r"\bRFQ(?:[-\s#:]*(?:NO\.?|NUMBER|#))?[\s#:]*((?:[A-Z]{1,5}-)?\d{2}-\d{3,5}|[A-Z]{2,5}-\d{3,6})\b",
+                       re.IGNORECASE)
+RFQ_ID_RE = re.compile(r"\b((?:RFQ|RF[O0Q]|[A-Z]{1,4})-?[0-9OISB]{2}-[0-9OISB]{3,5})\b")
+QUOTE_REF_RE = re.compile(r"\b(Q(?:T|UOTE)?-?\d{2}-\d{3,6}|Q\d{5,8})\b", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+MATERIAL_STRONG = re.compile(
+    r"\b(?:[1-7]\d{3}-T\d{1,4}(?:\s*OR\s*T\d{1,4})?|[1-7]\d{3}\s+(?:ALUMINUM|ALUMINIUM|AL)\b|(?:AL|ALUMINUM)\s+[1-7]\d{3}"
+    r"|(?:17-4|15-5|13-8)\s?PH|30[34]L?\s+(?:STAINLESS|SS|SST|CRES)|31[06]L\b|31[06]\s+(?:STAINLESS|SS|SST)"
+    r"|STAINLESS(?:\s+STEEL)?\s+\d{3}L?|(?:AISI\s+)?(?:4140|4340|8620|12L14)\b|(?:1018|1020|1045|1215)\s+STEEL"
+    r"|A36\b|C3[46]\d{1,3}\b|(?:IMPLANT[- ]GRADE\s+)?PEEK\b|(?:UNFILLED\s+)?PEEK\b|DELRIN|ACETAL|ULTEM|PTFE|TITANIUM"
+    r"|TI-?6AL-?4V|6AL-?4V|INCONEL\s*\d*|BRASS|BRONZE|COPPER)",
+    re.IGNORECASE)
+MATERIAL_WORD = re.compile(r"\b(?:ALUMINUM|ALUMINIUM|STAINLESS|STEEL|SST|CRES|BRASS|BRONZE|COPPER|TITANIUM|PEEK|"
+                           r"PLASTIC|NYLON|DELRIN|ACETAL|INCONEL|AL)\b", re.IGNORECASE)
+FINISH_RE = re.compile(
+    r"\b(?:(?:HARD|BLACK|CLEAR|COLOR|RED|BLUE|GOLD)\s+)?ANODI[ZS](?:E|ED|ING)\b|\bPASSIVAT(?:E|ED|ION)\b"
+    r"|\b(?:CLEAR\s+)?CHEM(?:ICAL)?\s+FILM\b|\bCONVERSION\s+COAT(?:ING)?\b|\bALODINE\b|\bIRIDITE\b"
+    r"|\bELECTROLESS\s+NICKEL\b|\bNICKEL\s+PLAT\w*\b|\bZINC(?:\s+PLAT\w*)?\b|\bBLACK\s+OXIDE\b"
+    r"|\bPOWDER\s*COAT\w*\b|\bPAINT(?:ED)?\b|\bGOLD\s+(?:FLASH|PLAT\w*)\b|\bSILVER\s+PLAT\w*\b"
+    r"|\bTIN\s+PLAT\w*\b|\bCHROME\s+PLAT\w*\b|\bCADMIUM\b|\bELECTROPOLISH\w*\b|\bNITRID\w*\b",
+    re.IGNORECASE)
+SPEC_WORDS = re.compile(r"\b(?:PER|CLASS|TYPE|METHOD|COND|CONDITION|ASTM|AMS|MIL|GRADE|NITRIC|CITRIC|THK)\b")
+PART_NOUNS = {"BLOCK", "PLATE", "FRAME", "SHAFT", "BRACKET", "HOUSING", "COVER", "PIN", "SPACER", "BOX", "BODY",
+              "MANIFOLD", "CAGE", "MOUNT", "RING", "CELL", "PART", "PARTS", "BAR", "ROD", "TUBE"}
+
+MONTHS = {m: i for i, m in enumerate(["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
+                                      "NOV", "DEC"], start=1)}
+WEEKDAYS = {d: i for i, d in enumerate(["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"])}
+NUM_WORDS = {"ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5, "SIX": 6, "SEVEN": 7, "EIGHT": 8,
+             "NINE": 9, "TEN": 10, "A": 1, "AN": 1}
+
+EXPORT_PATTERNS = [
+    ("ITAR", re.compile(r"\bITAR\b|INTERNATIONAL\s+TRAFFIC\s+IN\s+ARMS|ARMS\s+EXPORT\s+CONTROL\s+ACT|22\s*CFR\s*12\d",
+                        re.IGNORECASE)),
+    ("EAR", re.compile(r"EXPORT\s+ADMINISTRATION\s+REGULATIONS|\bECCN\b|15\s*CFR\s*7[3-7]\d", re.IGNORECASE)),
+    ("CUI", re.compile(r"\bCUI\b|CONTROLLED\s+UNCLASSIFIED|CONTROLLED\s+TECHNICAL\s+INFORMATION|DISTRIBUTION\s+"
+                       r"STATEMENT\s+[B-F]\b|DFARS\s*252\.204-7012|NIST\s*SP\s*800-171", re.IGNORECASE)),
+]
+# The same legends as fuzzy phrases, for OCR text where a letter or two is wrong.
+EXPORT_PHRASES = [
+    ("ITAR", "INTERNATIONAL TRAFFIC IN ARMS REGULATIONS"), ("ITAR", "ARMS EXPORT CONTROL ACT"),
+    ("EAR", "EXPORT ADMINISTRATION REGULATIONS"), ("CUI", "CONTROLLED UNCLASSIFIED INFORMATION"),
+    ("CUI", "CONTROLLED TECHNICAL INFORMATION"), ("CUI", "DISTRIBUTION AUTHORIZED TO THE DEPARTMENT OF DEFENSE"),
+]
+NOT_EXPORT = re.compile(r"\b(?:NOT|NON|NO)[- ](?:ITAR|EXPORT[- ]CONTROLLED|CUI|CONTROLLED)\b", re.IGNORECASE)
+
+REQUIREMENT_RE = re.compile(
+    r"\bCERT(?:S|IFICATION|IFICATIONS|IFIED)?\b|\bC\s?OF\s?C\b|\bCOC\b|CERTIFICATE OF CONFORM|\bFAI\b|FIRST ARTICLE|AS9102"
+    r"|\bISO\s*\d{4,5}|\bAS\s?9100|ITAR REGISTRATION|\bNIST\b|\bDFARS\b|COMPLIANCE|\bNRE\b|\bTOOLING\b|SETUP (?:AND|CHARGE)"
+    r"|BREAK OUT|SEPARATE LINE|OWN LINE|WITH AND WITHOUT|PRICE BREAKS|\bBLANKET\b|\bEXPEDITE|\bOVERTIME\b|NO-?BID"
+    r"|DOUBLE BAG|PRECISION CLEAN|BARE AND OILED|FURNISHED|TRACEAB|INSPECTION",
+    re.IGNORECASE)
+
+# Words around a date that make it the date the quote is due, and words that make it something else.
+RESPOND_CUES = re.compile(
+    r"QUOTE (?:IS )?DUE|DUE (?:BY|IN|ON)|QUOTE BY|RESPOND(?:S|ED)? BY|RESPONSES? (?:ARE |IS )?DUE|REPLY BY|"
+    r"GET BACK TO (?:ME|US)|QUOTE BACK|QUOTE DATE|QUOTE (?:IT )?TODAY|QUOTES? (?:NEEDED|REQUIRED) BY|BID DUE|"
+    r"PRICING BY|NEED (?:THE |A |YOUR )?(?:QUOTE|PRICING|PRICE)", re.IGNORECASE)
+NOT_RESPOND = re.compile(r"\bLINK\b|GOOD THROUGH|EXPIRES|PARTS BY|NEED THEM|FIRST PARTS|DELIVER|SHIP|PROMISE|ON DOCK",
+                         re.IGNORECASE)
+DELIVERY_CUES = re.compile(r"NEED (?:THEM|THE PARTS|PARTS|IT)\b|PARTS BY|FIRST PARTS|DELIVERY|DELIVER(?:ED)? BY|"
+                           r"SHIP BY|ON DOCK BY|REQUIRED DELIVERY", re.IGNORECASE)
+
+
+def _find_export(text: str, fuzzy: bool) -> List[Tuple[str, str]]:
+    """Export-control kinds in a text, with the phrase that proved each one."""
+    found: List[Tuple[str, str]] = []
+    if not text:
+        return found
+    for kind, pat in EXPORT_PATTERNS:
+        m = pat.search(text)
+        if m:
+            phrase = m.group(0)
+            if kind == "EAR":
+                code = re.search(r"\bECCN\s*[:#]?\s*([0-9][A-E][0-9]{3}[A-Z]?)", text, re.IGNORECASE)
+                kind = f"EAR (ECCN {code.group(1).upper()})" if code else "EAR"
+            found.append((kind, phrase))
+    if fuzzy:
+        words = norm(text).split()
+        have = {k.split(" ")[0] for k, _ in found}
+        for kind, phrase in EXPORT_PHRASES:
+            if kind in have:
+                continue
+            target = phrase.split()
+            n = len(target)
+            for i in range(max(0, len(words) - n + 1)):
+                window = " ".join(words[i:i + n])
+                if all(difflib.SequenceMatcher(None, a, b).ratio() >= 0.7 for a, b in zip(words[i:i + n], target)) \
+                        and difflib.SequenceMatcher(None, window, phrase).ratio() >= 0.8:
+                    found.append((kind, window))
+                    have.add(kind)
+                    break
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# Dates
+# --------------------------------------------------------------------------- #
+def _year_for(month: int, day: int, today: dt.date) -> Optional[dt.date]:
+    """A month and day with no year: this year, unless that is well in the past."""
+    for year in (today.year, today.year + 1):
+        try:
+            d = dt.date(year, month, day)
+        except ValueError:
+            return None
+        if d >= today - dt.timedelta(days=60):
+            return d
+    return None
+
+
+def add_business_days(start: dt.date, days: int) -> dt.date:
+    current, added = start, 0
+    while added < days:
+        current += dt.timedelta(days=1)
+        if current.weekday() < 5:
+            added += 1
+    return current
+
+
+def parse_date(text: str, today: dt.date) -> Optional[Tuple[dt.date, str]]:
+    """The first date in a phrase, absolute or relative to today, with the words that gave it."""
+    t = clean(text)
+    up = t.upper()
+    m = re.search(r"\b(20\d\d)-(\d\d)-(\d\d)\b", t)
+    if m:
+        try:
+            return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3))), m.group(0)
+        except ValueError:
+            pass
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", t)
+    if m:
+        mo, da = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12 and 1 <= da <= 31:
+            if m.group(3):
+                year = int(m.group(3))
+                year += 2000 if year < 100 else 0
+                try:
+                    return dt.date(year, mo, da), m.group(0)
+                except ValueError:
+                    pass
+            else:
+                d = _year_for(mo, da, today)
+                if d:
+                    return d, m.group(0)
+    m = re.search(r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)[A-Z]*\.?\s+(\d{1,2})(?:ST|ND|RD|TH)?"
+                  r"(?:,?\s*(20\d\d))?\b", up)
+    if m:
+        mo, da = MONTHS[m.group(1)[:3]], int(m.group(2))
+        try:
+            d = dt.date(int(m.group(3)), mo, da) if m.group(3) else _year_for(mo, da, today)
+        except ValueError:
+            d = None
+        if d:
+            return d, t[m.start():m.end()]
+    m = re.search(r"\bWITHIN\s+(\w+)\s+(BUSINESS\s+DAYS?|WORKING\s+DAYS?|DAYS?|WEEKS?)\b|\bIN\s+(\w+)\s+"
+                  r"(BUSINESS\s+DAYS?|WORKING\s+DAYS?|DAYS?|WEEKS?)\b", up)
+    if m:
+        count_word = m.group(1) or m.group(3)
+        unit = m.group(2) or m.group(4)
+        count = int(count_word) if count_word.isdigit() else NUM_WORDS.get(count_word)
+        if count:
+            if unit.startswith(("BUSINESS", "WORKING")):
+                d = add_business_days(today, count)
+            elif unit.startswith("WEEK"):
+                d = today + dt.timedelta(weeks=count)
+            else:
+                d = today + dt.timedelta(days=count)
+            return d, t[m.start():m.end()]
+    m = re.search(r"\b(NEXT|THIS|BY|ON)?\s*(MON|TUE|WED|THU|FRI|SAT|SUN)[A-Z]*DAY\b", up)
+    if m:
+        wd = WEEKDAYS[m.group(2)]
+        if m.group(1) == "NEXT":  # the named day in the following calendar week
+            d = today + dt.timedelta(days=7 - today.weekday() + wd)
+        else:
+            d = today + dt.timedelta(days=(wd - today.weekday()) % 7)
+        return d, t[m.start():m.end()].strip()
+    m = re.search(r"\b(TODAY|TOMORROW|END OF (?:THE )?WEEK|EOW|END OF (?:THE )?DAY|EOD)\b", up)
+    if m:
+        word = m.group(1)
+        if word == "TOMORROW":
+            d = today + dt.timedelta(days=1)
+        elif word in ("TODAY", "END OF DAY", "END OF THE DAY", "EOD"):
+            d = today
+        else:
+            d = today + dt.timedelta(days=(4 - today.weekday()) % 7)
+        return d, t[m.start():m.end()]
+    return None
+
+
+def _iso_dates(text: str) -> List[Tuple[dt.date, str]]:
+    """ISO dates in OCR text, with look-alike letters folded ('2026-1O-O9')."""
+    out = []
+    for m in re.finditer(r"\b([2Z][0O][0-9OIlSB]{2})-([0-9OIlSB]{2})-([0-9OIlSB]{2})\b", text):
+        y, mo, d = (int("".join(_TO_DIGIT.get(c, c) for c in g.upper())) for g in m.groups())
+        try:
+            out.append((dt.date(y, mo, d), m.group(0)))
+        except ValueError:
+            continue
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Attachment documents
+# --------------------------------------------------------------------------- #
+class Line:
+    __slots__ = ("text", "conf", "page", "box", "i")
+
+    def __init__(self, text: str, conf: Optional[float], page: int, box: Optional[Sequence[float]], i: int):
+        self.text, self.conf, self.page, self.i = text, conf, page, i
+        self.box = tuple(float(v) for v in box) if box and len(box) == 4 else None
+
+    @property
+    def h(self) -> float:
+        return (self.box[3] - self.box[1]) if self.box else 0.0
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"Line({self.text!r}, {self.box})"
+
+
+class Doc:
+    """One attachment's text as the extractor sees it."""
+
+    def __init__(self, name: str, media: str, result: Optional[Dict[str, Any]]):
+        r = result or {}
+        self.name = name
+        self.media = (media or "").lower()
+        self.method = r.get("method") or "none"
+        self.text = clean_block(r.get("text") or "")
+        self.conf = r.get("confidence")
+        self.error = r.get("error")
+        self.settings = r.get("settings") or {}
+        self.ocr = self.method == "ocr"
+        self.lines: List[Line] = []
+        for i, ln in enumerate(r.get("lines") or []):
+            if isinstance(ln, dict) and clean(ln.get("text")):
+                self.lines.append(Line(clean(ln.get("text")), ln.get("conf"), int(ln.get("page") or 1),
+                                       ln.get("bbox"), i))
+        self.boxed = sum(1 for ln in self.lines if ln.box) >= 5
+        # Reading-order lines for text parsing. OCR text joins the cells of one row with wide gaps;
+        # those gaps are kept as " | " so a cell boundary is still visible.
+        self.rows: List[str] = [re.sub(r"\s{3,}", " | ", ln).strip() for ln in
+                                (r.get("text") or "").translate(_TRANS).splitlines()]
+        self.rows = [clean(x) for x in self.rows if clean(x)]
+        self.kind = "other"
+        self.capture = "digital"
+        self.parsed: Dict[str, Any] = {}
+
+    @property
+    def label(self) -> str:
+        if self.method == "text-layer":
+            return f"{self.name} (text layer)"
+        if self.method == "ocr":
+            return f"{self.name} (OCR {self.conf:.0f}%)" if isinstance(self.conf, (int, float)) else f"{self.name} (OCR)"
+        if self.method == "step-header":
+            return f"{self.name} (STEP header)"
+        return self.name
+
+    @property
+    def text_from(self) -> str:
+        if self.method == "text-layer":
+            return "text layer"
+        if self.method == "ocr":
+            return f"OCR {self.conf:.0f}%" if isinstance(self.conf, (int, float)) else "OCR"
+        if self.method == "step-header":
+            return "STEP header"
+        return "none"
+
+
+def classify(doc: Doc) -> Tuple[str, str]:
+    """(file type, how it was captured), from the text and the way it was read, not the name."""
+    up = doc.text.upper()
+    capture = "digital"
+    if doc.ocr:
+        settings = json.dumps(doc.settings).lower()
+        if doc.media == "jpg":
+            capture = "photo"
+        elif doc.media == "png":
+            capture = "screenshot"
+        elif "fax" in settings or "bilevel" in settings or "1-bit" in settings:
+            capture = "fax"
+        else:
+            capture = "scan"
+        if "photo" in settings and doc.media != "pdf":
+            capture = "photo"
+        elif ("screen" in settings or "viewer" in up[:300]) and doc.media == "png":
+            capture = "screenshot"
+    if doc.method == "step-header" or "ISO-10303" in up[:200] or re.search(r"^PART NUMBER:", up, re.M):
+        return "3D model", "digital"
+    form_hits = sum(bool(re.search(p, up)) for p in (
+        r"REQUEST\s*F[O0]R\s*QU[O0]TAT", r"\bRF[QO0]\s*N[O0]", r"RESP[O0]ND\s*BY", r"QU[O0]TE\s+REQUIREMENTS",
+        r"QUANTITIES", r"UNIT\s*PRICE", r"LEAD\s*TIME", r"SUPPLIER\s+RESP[O0]NSE", r"TO\s+SUPPLIER"))
+    drawing_hits = sum(bool(re.search(p, up)) for p in (
+        r"^\s*TITLE\s*$", r"\b[DO0]WG\.?\s*N[O0]", r"^\s*MATERIAL\s*$", r"^\s*FINISH\s*$", r"REVISIONS",
+        r"THIRD\s+ANGLE", r"UNLESS\s+OTHERWISE\s+SPECIFIED", r"TOLERANCES", r"D[O0]\s+N[O0]T\s+SCALE",
+        r"^\s*NOTES:", r"\bSCALE\b", r"\bSHEET\b", r"ISOMETRIC\s+VIEW"))
+    if form_hits >= 3 and form_hits >= drawing_hits - 2:
+        return "RFQ form", capture
+    if drawing_hits >= 4:
+        return "drawing", capture
+    if form_hits >= 2:
+        return "RFQ form", capture
+    if capture in ("photo", "screenshot"):
+        return capture, capture
+    if doc.media in ("jpg", "png"):
+        return ("photo" if doc.media == "jpg" else "screenshot"), capture
+    return "other", capture
+
+
+# ---- label and value helpers ----------------------------------------------- #
+def _lab(text: str) -> str:
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", text.upper()).split())
+
+
+def _label_score(text: str, label: str, tail_ok: bool = True) -> float:
+    """How well a line is just this label (1.0), ends with it (0.8, a merged OCR line), or is a
+    near miss ('MATERlAL', 'DWG N0')."""
+    t, lb = _lab(text), _lab(label)
+    if not t:
+        return 0.0
+    if t == lb:
+        return 1.0
+    if abs(len(t) - len(lb)) <= 2 and difflib.SequenceMatcher(None, t, lb).ratio() >= 0.8:
+        return 0.9
+    if tail_ok and t.endswith(" " + lb):
+        return 0.7
+    return 0.0
+
+
+def _below(doc: Doc, label: Line, accept: Callable[[str], Optional[str]], max_rows: float = 4.0,
+           stop: Optional[Callable[[str], bool]] = None) -> Optional[Tuple[str, Line]]:
+    """The value printed under a label: the nearest line below it that starts near the label's
+    left edge or overlaps it, on the same page."""
+    if not label.box:
+        return None
+    lx0, ly0, lx1, ly1 = label.box
+    h = max(label.h, 8.0)
+    cands = []
+    for ln in doc.lines:
+        if ln is label or not ln.box or ln.page != label.page:
+            continue
+        x0, y0, x1, y1 = ln.box
+        if y0 < ly0 + 0.35 * h or y0 > ly1 + max_rows * h:
+            continue
+        horiz = min(x1, lx1 + 4 * h) - max(x0, lx0 - 2 * h)
+        if horiz <= 0 and abs(x0 - lx0) > 3 * h:
+            continue
+        cands.append((y0 - ly1 + 0.2 * abs(x0 - lx0), ln))
+    for _, ln in sorted(cands, key=lambda c: c[0]):
+        if stop and stop(ln.text):
+            break
+        val = accept(ln.text)
+        if val:
+            return val, ln
+    return None
+
+
+def _after(rows: List[str], i: int, accept: Callable[[str], Optional[str]], ahead: int = 3,
+           stop: Optional[Callable[[str], bool]] = None) -> Optional[Tuple[str, int]]:
+    for j in range(i + 1, min(len(rows), i + 1 + ahead)):
+        if stop and stop(rows[j]):
+            break
+        val = accept(rows[j])
+        if val:
+            return val, j
+    return None
+
+
+def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[str]], ahead: int = 3,
+              stop: Optional[Callable[[str], bool]] = None, tail_ok: bool = True) -> Optional[Tuple[str, Optional[Line]]]:
+    """Find a value by its label: on the same line ('MATERIAL: X'), under it (boxes), or after
+    it in reading order. Whole-line labels are tried before merged-line tails."""
+    for lb in labels:  # same line: "MATERIAL: ALUMINUM 6061-T6"
+        pat = re.compile(r"(?:^|\|\s*)" + r"\s*".join(re.escape(w) for w in lb.split()) + r"\s*[:.]\s*(.+)$",
+                         re.IGNORECASE)
+        for ln in (doc.lines or []):
+            m = pat.search(ln.text)
+            if m and accept(m.group(1)):
+                return accept(m.group(1)), ln
+        for row in doc.rows:
+            m = pat.search(row)
+            if m and accept(m.group(1)):
+                return accept(m.group(1)), None
+    if doc.boxed:
+        scored = []
+        for ln in doc.lines:
+            s = max(_label_score(ln.text, lb, tail_ok) for lb in labels)
+            if s:
+                scored.append((-s, ln.i, ln))
+        for _, _, ln in sorted(scored, key=lambda x: (x[0], x[1])):
+            got = _below(doc, ln, accept, stop=stop)
+            if got:
+                return got
+    scored_rows = []
+    for i, row in enumerate(doc.rows):
+        cells = [c.strip() for c in row.split("|")]
+        s = max(max(_label_score(c, lb, tail_ok) for lb in labels) for c in cells)
+        if s:
+            scored_rows.append((-s, i))
+    for _, i in sorted(scored_rows):
+        got = _after(doc.rows, i, accept, ahead, stop)
+        if got:
+            return got[0], None
+    return None
+
+
+def _tail_segment(text: str, pattern: "re.Pattern[str]") -> Optional[str]:
+    """The value at the end of a line that OCR may have merged with a drawing note on its left:
+    the last sentence that holds the pattern, through the end of the line."""
+    text = clean(text.replace("|", "   ")).strip()
+    text = re.sub(r"\s{2,}", " ", text)
+    if not pattern.search(text):
+        return None
+    starts = [0] + [m.end() for m in re.finditer(r"(?<=[A-Za-z)])\.\s+(?=[A-Z0-9])", text)]
+    for s in reversed(starts):
+        seg = text[s:]
+        first = re.split(r"(?<=[A-Za-z)])\.\s+(?=[A-Z0-9])", seg)[0]
+        if pattern.search(first):
+            return _strip_junk(seg)
+    return _strip_junk(text)
+
+
+def _strip_junk(text: str) -> str:
+    """Drop OCR crumbs at the start of a value: stray lowercase bits, symbols, and item numbers."""
+    words = text.split()
+    while words and (re.fullmatch(r"[^A-Za-z0-9]+", words[0]) or re.fullmatch(r"[a-z]{1,3}", words[0])
+                     or re.fullmatch(r"\d{1,2}[.)]", words[0])):
+        words.pop(0)
+    while words and re.fullmatch(r"[^A-Za-z0-9.)%]+|[a-z]{1,2}", words[-1]):
+        words.pop()
+    return " ".join(words).strip(" ,;:")
+
+
+# ---- drawings ---------------------------------------------------------------- #
+DRAWING_LABELS = ["TITLE", "MATERIAL", "FINISH", "SIZE", "DWG NO", "DWG NO.", "REV", "DRAWN", "DATE", "SCALE",
+                  "SHEET", "REVISIONS", "NOTES", "THIRD ANGLE PROJECTION", "UNLESS OTHERWISE SPECIFIED"]
+
+
+def _is_drawing_label(text: str) -> bool:
+    return any(_label_score(c, lb, tail_ok=False) >= 0.9 for c in text.split("|") for lb in DRAWING_LABELS)
+
+
+def _pn_candidates(text: str, ocr: bool) -> List[str]:
+    pat = PN_OCR_RE if ocr else PN_RE
+    out = []
+    for m in pat.finditer(text):
+        tok = m.group(1)
+        fixed = fix_part_number(tok) if ocr else tok.upper()
+        prefix = fixed.split("-")[0]
+        if prefix in SPEC_PREFIXES or not re.search(r"[A-Z]", prefix) or re.fullmatch(r"RF[QO0]", prefix):
+            continue
+        if re.fullmatch(r"\d{4}", fixed.split("-")[1]) and re.fullmatch(r"[1-7]\d{3}", fixed.split("-")[1]) and prefix in ("AL", "T"):
+            continue
+        if re.fullmatch(r"Q\d{0,2}", prefix) or re.fullmatch(r"20\d\d-\d\d(-\d\d)?", fixed):
+            continue
+        if not re.fullmatch(r"[A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?", fixed):
+            continue
+        out.append(fixed)
+    return out
+
+
+def _clean_rev(text: str) -> Optional[str]:
+    t = clean(text).strip(" .,:;|()[]'\"*-_")
+    if not t:
+        return None
+    t = t.split()[0] if len(t.split()) <= 2 else ""
+    if re.fullmatch(r"[A-Za-z]{1,2}", t):
+        up = t.upper()
+        if len(up) == 2 and up[0] == up[1]:  # "Cc": one letter read twice
+            up = up[0]
+        return up
+    if re.fullmatch(r"\d{1,2}", t):
+        return t
+    return None
+
+
+def _material_value(text: str) -> Optional[str]:
+    t = ocr_fix_spec(clean(text))
+    if _is_drawing_label(t) and not MATERIAL_STRONG.search(t):
+        return None
+    if not (MATERIAL_STRONG.search(t) or MATERIAL_WORD.search(t)):
+        return None
+    seg = _tail_segment(t, re.compile(MATERIAL_STRONG.pattern + "|" + MATERIAL_WORD.pattern, re.IGNORECASE))
+    return seg or None
+
+
+def _finish_value(text: str) -> Optional[str]:
+    t = ocr_fix_spec(clean(text))
+    if re.fullmatch(r"(?:\|\s*)?NONE\.?(?:\s*\|)?", t.strip(), re.IGNORECASE):
+        return "NONE"
+    if _is_drawing_label(t) and not FINISH_RE.search(t):
+        return None
+    if not FINISH_RE.search(t):
+        return None
+    return _tail_segment(t, FINISH_RE) or None
+
+
+def _title_value(text: str) -> Optional[str]:
+    t = clean(text.replace("|", " "))
+    t = _strip_junk(t)
+    if not t or _is_drawing_label(t) or len(re.findall(r"[A-Z]", t)) < 4:
+        return None
+    if re.search(r"\b(?:INTERPRET|TOLERANCES|DIMENSIONS|ANGLES|UNLESS|THIRD ANGLE|BREAK SHARP|DO NOT SCALE)\b", t):
+        # a merged line: the title is the tail after the tolerance block text
+        m = re.search(r"([A-Z][A-Z0-9 ,.&/()'-]{5,})$", t)
+        t = m.group(1).strip() if m else ""
+    if sum(c.islower() for c in t) > len(t) * 0.3:
+        return None
+    return t or None
+
+
+def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
+    """Title block and legend values from a drawing's text."""
+    out: Dict[str, Any] = {"part_number": None, "rev": None, "title": None, "material": None, "finish": None,
+                           "company": None, "revisions": [], "conf": {}}
+
+    def keep(field: str, got: Optional[Tuple[str, Optional[Line]]]) -> None:
+        if got and got[0]:
+            out[field] = got[0]
+            ln = got[1]
+            out["conf"][field] = ln.conf if ln is not None and ln.conf is not None else doc.conf
+
+    stop = _is_drawing_label
+    keep("title", _labelled(doc, ["TITLE"], _title_value, ahead=2, stop=stop))
+    keep("material", _labelled(doc, ["MATERIAL", "MATL", "MATERIAL SPEC"], _material_value, ahead=3, stop=stop))
+    keep("finish", _labelled(doc, ["FINISH", "FINISH SPEC"], _finish_value, ahead=3, stop=stop))
+
+    # Part number: every candidate scores; the one under the DWG NO. label, alone on its line,
+    # or named in the email wins. A part number inside a note (an unplated variant) loses.
+    scores: Dict[str, float] = {}
+    spelled: Dict[str, str] = {}
+    confs: Dict[str, Optional[float]] = {}
+    hint_keys = {fold(p): p for p in hint_pns}
+
+    def cand(text: str, bonus: float, conf: Optional[float]) -> None:
+        for pn in _pn_candidates(text, doc.ocr):
+            key = fold(pn)
+            scores[key] = scores.get(key, 0.0) + bonus
+            spelled.setdefault(key, pn)
+            if conf is not None:
+                confs[key] = conf
+
+    for ln in (doc.lines or []):
+        n_words = len(ln.text.split())
+        cand(ln.text, 1.0 + (1.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), ln.conf)
+    if not doc.lines:
+        for row in doc.rows:
+            n_words = len(row.split())
+            cand(row, 1.0 + (1.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), None)
+    got = _labelled(doc, ["DWG NO", "DWG NO.", "DRAWING NO", "DWG", "PART NO", "P/N"],
+                    lambda t: (_pn_candidates(t, doc.ocr) or [None])[0], ahead=3, tail_ok=True)
+    if got:
+        key = fold(got[0])
+        scores[key] = scores.get(key, 0.0) + 4.0
+        spelled.setdefault(key, got[0])
+        if got[1] is not None and got[1].conf is not None:
+            confs[key] = got[1].conf
+    for key in list(scores):
+        for hk in hint_keys:
+            if key == hk or key.startswith(hk) or hk.startswith(key):
+                scores[key] += 2.5
+    if scores:
+        best = max(scores, key=lambda k: (scores[k], -len(k)))
+        if scores[best] >= 2.0:
+            out["part_number"] = spelled[best]
+            out["conf"]["part_number"] = confs.get(best, doc.conf)
+
+    # Rev: under the REV label next to the drawing number, or right after the part number on a
+    # merged title block row ("A CI-10442 C"), else the newest row of the revision table.
+    pn = out["part_number"]
+    rev = None
+    if pn:
+        key = fold(pn)
+        for row in doc.rows:
+            toks = row.replace("|", " ").split()
+            for k, tok in enumerate(toks[:-1]):
+                if _pn_candidates(tok, doc.ocr) and fold(fix_part_number(tok) if doc.ocr else tok) == key:
+                    r = _clean_rev(toks[k + 1])
+                    if r and len(toks) - k <= 3:
+                        rev = (r, None)
+        if doc.boxed and not rev:
+            for ln in doc.lines:
+                if _label_score(ln.text, "REV", tail_ok=True) >= 0.7 and len(ln.text) <= 12:
+                    got = _below(doc, ln, _clean_rev, max_rows=3.5)
+                    pn_line = next((p for p in doc.lines if p.box and fold(" ".join(_pn_candidates(p.text, doc.ocr))) == key), None)
+                    if got and pn_line and abs(got[1].box[1] - pn_line.box[1]) < 3 * max(pn_line.h, 10):
+                        rev = got
+                        break
+        if not rev:
+            idx = [i for i, row in enumerate(doc.rows) if _label_score(row, "REV", tail_ok=False) >= 0.9]
+            dwg = [i for i, row in enumerate(doc.rows) if re.match(r"^[DO0]WG\.?\s*N", row.upper())]
+            for i in idx:
+                if dwg and 0 < i - dwg[0] <= 3:
+                    got = _after(doc.rows, i, _clean_rev, ahead=1)
+                    if got:
+                        rev = (got[0], None)
+    # revision table rows: "B ADDED KEYWAY EDGE BREAK NOTE 2025-08-04 TW"
+    revs = []
+    for row in doc.rows:
+        m = re.match(r"^\|?\s*([A-Z]{1,2})\s+(?:\|\s*)?[A-Z].*\b20\d\d-\d\d-\d\d\b", row)
+        if m and not re.match(r"^(?:REV|SIZE|DWG|DRAWN)\b", row):
+            revs.append(m.group(1))
+    out["revisions"] = revs
+    if rev:
+        out["rev"] = rev[0]
+        ln = rev[1] if len(rev) > 1 else None
+        out["conf"]["rev"] = ln.conf if isinstance(ln, Line) and ln.conf is not None else doc.conf
+    elif revs:
+        out["rev"] = max(revs)
+        out["conf"]["rev"] = doc.conf
+    if revs and out["rev"] and out["rev"] not in revs and out["rev"].isdigit():
+        out["rev"] = max(revs)  # a digit where the revision table has letters is an OCR slip (8 for B)
+
+    # company: the line above TITLE in the title block
+    for i, row in enumerate(doc.rows):
+        if _label_score(row.split("|")[-1], "TITLE", tail_ok=False) >= 0.9 and i:
+            prev = _strip_junk(doc.rows[i - 1].split("|")[-1])
+            if re.fullmatch(r"[A-Z][A-Z&.,' -]{3,}", prev or "") and not _is_drawing_label(prev):
+                out["company"] = prev.title()
+            break
+    out["export"] = _find_export(doc.text, doc.ocr)
+    return out
+
+
+# ---- STEP -------------------------------------------------------------------- #
+def parse_step(doc: Doc) -> Dict[str, Any]:
+    t = doc.text
+    out: Dict[str, Any] = {"part_number": None, "title": None, "rev": None, "units": None, "size": None}
+
+    def grab(pattern: str) -> Optional[str]:
+        m = re.search(pattern, t, re.IGNORECASE | re.MULTILINE)
+        return clean(m.group(1)) if m and clean(m.group(1)) else None
+
+    out["part_number"] = grab(r"^\s*(?:PART NUMBER|P/N|PART)\s*[:=]\s*([A-Z0-9][A-Z0-9-]*)")
+    m = re.search(r"PRODUCT\s*\(\s*'([^']*)'\s*,\s*'([^']*)'(?:\s*,\s*'([^']*)')?", t)
+    if m:
+        out["part_number"] = out["part_number"] or clean(m.group(1))
+        out["title"] = clean(m.group(2)) or None
+        r = re.match(r"REV\.?\s*(\S+)", clean(m.group(3) or ""), re.IGNORECASE)
+        out["rev"] = r.group(1) if r else None
+    out["title"] = grab(r"^\s*TITLE\s*[:=]\s*(.+)$") or out["title"]
+    out["rev"] = grab(r"^\s*(?:REVISION|REV)\s*[:=]\s*(\S+)") or out["rev"]
+    if not out["rev"]:
+        out["rev"] = grab(r"^\s*PRODUCT DESCRIPTION\s*[:=]\s*REV\.?\s*(\S+)")
+    if not out["title"]:
+        d = grab(r"^\s*DESCRIPTION\s*[:=]\s*([^;\n]+)")
+        out["title"] = d
+    out["units"] = grab(r"^\s*UNITS?\s*[:=]\s*(\w+)")
+    out["size"] = grab(r"^\s*(?:BOUNDING BOX|SIZE|OVERALL SIZE)\s*[:=]\s*(.+)$")
+    if out["rev"] in ("-", "", None):
+        out["rev"] = None
+    if out["part_number"]:
+        out["part_number"] = out["part_number"].upper()
+    return out
+
+
+# ---- RFQ forms --------------------------------------------------------------- #
+FORM_COLUMNS = [
+    ("item", r"^(?:ITEM|LINE|NO\.?)$"),
+    ("pn", r"PART\s*(?:NUMBER|NO\.?|#)|^P/?N$|PARTNUMBER"),
+    ("rev", r"^REV\.?$"),
+    ("desc", r"DESCRIPTI[O0]N|^DESC\.?$"),
+    ("matfin", r"MATERIAL\s*[/|Il1]\s*FINISH"),
+    ("material", r"^MATERIAL$|^MAT'?L$"),
+    ("finish", r"^FINISH$"),
+    ("qty", r"QUANTIT|^QTY"),
+    ("price", r"UNIT\s*PRICE|^PRICE$"),
+    ("lead", r"LEAD\s*TIME"),
+]
+
+
+def _col_of(text: str) -> Optional[str]:
+    t = clean(text).upper().strip(" .:")
+    for key, pat in FORM_COLUMNS:
+        if re.search(pat, t):
+            return key
+    return None
+
+
+def parse_quantities(text: str) -> Tuple[Optional[List[int]], bool]:
+    """A quantity cell ('25 / 75 / 150', '250 / 500 / 1,000', '25, 50, 100') -> ([ints], complete).
+    complete is False when OCR left a dangling separator or an unreadable piece."""
+    t = clean(text).replace("|", " ")
+    t = re.sub(r"\bPCS?\b|\bPIECES\b|\bEA\b", " ", t, flags=re.IGNORECASE)
+    if "/" in t:
+        parts = [p.strip() for p in t.split("/")]
+    elif re.search(r"\d{1,3}(?:,\d{3})+", t) and not re.search(r"\d,\s", t):
+        parts = t.split()
+    else:
+        parts = re.split(r"[,;]|\s+AND\s+|\s+", t, flags=re.IGNORECASE)
+    nums, complete = [], True
+    for p in parts:
+        p = p.strip(" .*'\"`~-_")
+        if not p:
+            if nums:
+                complete = False
+            continue
+        n = _num(p)
+        if n is None or n == 0:
+            complete = False
+            continue
+        nums.append(n)
+    if t.rstrip(" *'\"`~_-").endswith("/"):
+        complete = False
+    return (nums or None), complete
+
+
+def _split_matfin(text: str) -> Tuple[Optional[str], Optional[str]]:
+    t = clean(text).strip(" /")
+    if not t:
+        return None, None
+    pieces = [p.strip() for p in re.split(r"\s+/\s+|\s/|/\s", t) if p.strip()]
+    if len(pieces) >= 2:
+        for k in range(1, len(pieces)):
+            right = " / ".join(pieces[k:])
+            if FINISH_RE.search(pieces[k]) or re.match(r"NONE\b", pieces[k], re.IGNORECASE):
+                return ocr_fix_spec(" / ".join(pieces[:k])), ocr_fix_spec(right)
+        return ocr_fix_spec(" / ".join(pieces[:-1])), ocr_fix_spec(pieces[-1])
+    if FINISH_RE.search(t) and not (MATERIAL_STRONG.search(t) or MATERIAL_WORD.search(t)):
+        return None, ocr_fix_spec(t)
+    return ocr_fix_spec(t), None
+
+
+_MATFIN_ANCHOR = re.compile(r"\b(?:AL|SST|ALUMINUM|STAINLESS|STEEL|BRASS|PEEK|TITANIUM|DELRIN|ACETAL|NYLON|"
+                            r"(?:17-4|15-5)\s?PH|[1-7]\d{3}-T\d|ASTM|AMS|MIL-|ANODIZE|PASSIVATE|NONE)\b", re.IGNORECASE)
+
+
+def _split_desc_matfin(text: str) -> Tuple[str, str]:
+    """A merged table row fragment: description words come first (left column), then material."""
+    m = _MATFIN_ANCHOR.search(text)
+    if not m:
+        if SPEC_WORDS.search(text.upper()) or re.match(r"^\s*[\d.]+\b", text) or "/" in text:
+            return "", text
+        return text, ""
+    before = text[:m.start()].strip(" ,")
+    if "/" in before or re.match(r"^[A-Z]?\d", before) or SPEC_WORDS.search(before.upper()):
+        return "", text.strip()  # "H1025 / PASSIVATE PER": all of it continues the material cell
+    return before, text[m.start():].strip()
+
+
+class _FormTable:
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+
+
+def _deskew_slope(lines: List[Line]) -> float:
+    """dy/dx from label boxes that were printed on one baseline (the table header)."""
+    pts = [((ln.box[0] + ln.box[2]) / 2, (ln.box[1] + ln.box[3]) / 2) for ln in lines if ln.box]
+    if len(pts) < 3:
+        return 0.0
+    mx = sum(p[0] for p in pts) / len(pts)
+    my = sum(p[1] for p in pts) / len(pts)
+    den = sum((p[0] - mx) ** 2 for p in pts)
+    if not den:
+        return 0.0
+    slope = sum((p[0] - mx) * (p[1] - my) for p in pts) / den
+    return slope if abs(slope) < 0.06 else 0.0
+
+
+QTY_LIST_RE = re.compile(r"(?:\d[\d,OIl]*\s*/\s*)+\d[\d,OIl]*\s*/?\*?|\d[\d,]*\s*/\s*\*?$")
+
+
+def _row_piece(text: str, ocr: bool) -> Dict[str, Any]:
+    """Split a table row fragment that OCR read across several columns, by what the words are:
+    item number, part number, rev, quantity list, then description words before material words."""
+    out: Dict[str, Any] = {"pn": None, "rev": None, "qty": None, "desc": "", "matfin": "", "tail_number": None}
+    t = clean(text.replace("|", " "))
+    m = (PN_OCR_RE if ocr else PN_RE).search(t)
+    if m and _pn_candidates(m.group(1), ocr):
+        out["pn"] = _pn_candidates(m.group(1), ocr)[0]
+        after = t[m.end():].strip(" .,")
+        toks = after.split()
+        if toks and len(toks[0].strip(".,")) <= 2 and _clean_rev(toks[0]) and not toks[0].isdigit():
+            out["rev"] = _clean_rev(toks[0])
+            after = after[len(toks[0]):]
+        t = after
+    q = QTY_LIST_RE.search(t)
+    if q:
+        out["qty"] = q.group(0)
+        t = (t[:q.start()] + " " + t[q.end():]).strip()
+    m = re.search(r"(?:^|\s)(\d{1,3}(?:,\d{3})+|\d{2,6})\s*$", t)
+    if m and not re.search(r"(?:ASTM|AMS|MIL|TYPE|CLASS|METHOD|GRADE|COND|F|H)\s*$", t[:m.start()].upper()):
+        out["tail_number"] = m.group(1)
+        t = t[:m.start()].strip()
+    t = re.sub(r"^\s*[:;.,_*\-]*\s*\d{1,2}\s+(?=[A-Z])", "", t)  # a leading item number
+    d, mf = _split_desc_matfin(_strip_junk(t))
+    out["desc"], out["matfin"] = d, mf
+    return out
+
+
+def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
+    """Table rows from OCR lines with boxes: find the header labels, give every line below them a
+    column by where it sits and a row by the part number cell it lines up with (after taking out
+    the page skew measured on the header). A line that runs across several columns is split by
+    what its words are, not by guessing where each word sits."""
+    lines = [ln for ln in doc.lines if ln.box]
+    header: Dict[str, Line] = {}
+    for ln in lines:
+        key = _col_of(ln.text)
+        if key and key not in header and len(ln.text) < 40:
+            header[key] = ln
+    merged_header = None
+    if "pn" not in header or "qty" not in header:
+        for ln in lines:
+            t = ln.text.upper()
+            if re.search(r"PART\s*(?:NUMBER|NO)", t) and re.search(r"QUANTIT|QTY", t):
+                merged_header = ln
+                break
+        if not merged_header:
+            return None
+        header = {}
+        x0, _, x1, _ = merged_header.box
+        text = merged_header.text
+        for key, pat in FORM_COLUMNS:
+            m = re.search(pat.replace("^", r"\b").replace("$", r"\b"), text.upper())
+            if m:
+                cx0 = x0 + (x1 - x0) * m.start() / max(1, len(text))
+                cx1 = x0 + (x1 - x0) * m.end() / max(1, len(text))
+                header[key] = Line(m.group(0), merged_header.conf, merged_header.page,
+                                   (cx0, merged_header.box[1], cx1, merged_header.box[3]), -1)
+        if "pn" not in header:
+            return None
+    slope = _deskew_slope(list(header.values())) if not merged_header else 0.0
+    page = header["pn"].page
+    x_ref = header["pn"].box[0]
+
+    def dy(ln: Line) -> float:
+        return ln.box[1] - slope * (ln.box[0] - x_ref)
+
+    head_y = max(dy(h) for h in header.values())
+    head_bottom = max(h.box[3] - slope * (h.box[0] - x_ref) for h in header.values())
+    end_y = float("inf")
+    for ln in lines:
+        if ln.page == page and dy(ln) > head_y and re.search(
+                r"REQUIREMENTS|^\W*TERMS\b|SUPPLIER\s+RESP|^NOTES\b", ln.text.upper()):
+            end_y = min(end_y, dy(ln))
+    body = [ln for ln in lines if ln.page == page and dy(ln) > head_bottom - 2 and dy(ln) < end_y - 2
+            and ln not in header.values() and ln is not merged_header]
+    if not body:
+        return None
+    heights = sorted(ln.h for ln in body if ln.h)
+    unit = heights[len(heights) // 2] if heights else 30.0
+    # a merged header line is taller than its text by the skew across its width
+    skew_mag = 0.0
+    if merged_header:
+        skew_mag = max(0.0, (merged_header.h - unit) / max(1.0, merged_header.box[2] - merged_header.box[0]))
+    cols = sorted(header.items(), key=lambda kv: kv[1].box[0])
+    margin = 0.4 * unit
+    spans = []
+    for k, (key, ln) in enumerate(cols):
+        left = ln.box[0] - margin
+        right = cols[k + 1][1].box[0] - margin if k + 1 < len(cols) else float("inf")
+        spans.append((key, left, right))
+
+    def column_of(ln: Line) -> Optional[str]:
+        x0, _, x1, _ = ln.box
+        width = max(1.0, x1 - x0)
+        hits = [(key, max(0.0, min(x1, r) - max(x0, l))) for key, l, r in spans]
+        hits = [h for h in hits if h[1] > 0]
+        if not hits:
+            return spans[0][0] if x1 < spans[0][1] + margin else None
+        best = max(hits, key=lambda h: h[1])
+        return best[0] if best[1] >= 0.85 * width else None
+
+    pieces = []  # (y, x, line, column or None for a line across columns, text)
+    for ln in body:
+        text = ln.text.strip(" |")
+        if text.strip(" |.,'`*_:;-"):
+            pieces.append((dy(ln), ln.box[0], ln, column_of(ln), text))
+    anchors = []
+    for y, x, ln, col, text in pieces:
+        pn = None
+        if col == "pn" and _pn_candidates(text, doc.ocr):
+            pn = _pn_candidates(text, doc.ocr)[0]
+        elif col is None:
+            pn = _row_piece(text, doc.ocr)["pn"]
+        if pn and not any(fold(a[1]) == fold(pn) and abs(a[0] - y) < 2 * unit for a in anchors):
+            anchors.append((y, pn, ln))
+    if not anchors:
+        return None
+    anchors.sort(key=lambda a: a[0])
+    rows = [{"pn": a[1], "cells": {}, "conf": a[2].conf, "qty": [], "qty_conf": None} for a in anchors]
+    for y, x, ln, col, text in sorted(pieces, key=lambda p: (p[0], p[1])):
+        cx = (ln.box[0] + ln.box[2]) / 2
+
+        def reach(a: Tuple[float, str, Line]) -> float:
+            return 0.5 * unit + skew_mag * abs(cx - (a[2].box[0] + a[2].box[2]) / 2)
+
+        k = max((i for i, a in enumerate(anchors) if a[0] - reach(a) <= y), default=None)
+        if k is None:
+            continue
+        row = rows[k]
+        cells = row["cells"]
+        if col is not None:
+            if col == "qty":
+                row["qty"].append(text)
+                row["qty_conf"] = min(row["qty_conf"] or 100.0, ln.conf if ln.conf is not None else 100.0)
+            elif col != "pn" or not _pn_candidates(text, doc.ocr) or fold(_pn_candidates(text, doc.ocr)[0]) != fold(row["pn"]):
+                cells.setdefault(col, []).append(text)
+            elif col == "pn":
+                cells.setdefault("pn", []).append(text)
+            continue
+        piece = _row_piece(text, doc.ocr)
+        if piece["rev"] and not cells.get("rev"):
+            cells["rev"] = [piece["rev"]]
+        if piece["qty"]:
+            row["qty"].append(piece["qty"])
+            row["qty_conf"] = min(row["qty_conf"] or 100.0, ln.conf if ln.conf is not None else 100.0)
+        if piece["tail_number"]:
+            row["qty"].append(piece["tail_number"])
+        if piece["desc"]:
+            cells.setdefault("desc", []).append(piece["desc"])
+        if piece["matfin"]:
+            cells.setdefault("matfin" if "matfin" in header or "material" not in header else "material", []).append(
+                piece["matfin"])
+    out = []
+    for r in rows:
+        c = {k: " ".join(v) for k, v in r["cells"].items()}
+        material, finish = (c.get("material"), c.get("finish"))
+        if "matfin" in c:
+            material, finish = _split_matfin(c["matfin"])
+        rev = _clean_rev(c.get("rev", "")) if c.get("rev") else None
+        if not rev and c.get("pn"):
+            after = c["pn"].split()
+            idx = next((i for i, tok in enumerate(after) if _pn_candidates(tok, doc.ocr)
+                        and fold(_pn_candidates(tok, doc.ocr)[0]) == fold(r["pn"])), None)
+            if idx is not None and idx + 1 < len(after):
+                rev = _clean_rev(after[idx + 1])
+        qty, complete = parse_quantities(" / ".join(x.strip(" /") for x in r["qty"])) if r["qty"] else (None, True)
+        if r["qty"] and r["qty"][0].rstrip(" *").endswith("/") and len(r["qty"]) == 1:
+            complete = False
+        desc = _strip_junk(c.get("desc", "")) or None
+        out.append({"part_number": r["pn"], "rev": rev, "description": desc, "material": material,
+                    "finish": finish, "quantities": qty, "qty_complete": complete,
+                    "conf": r["qty_conf"] if r["qty_conf"] is not None else r["conf"]})
+    return out
+
+
+def _form_rows_text(doc: Doc) -> List[Dict[str, Any]]:
+    """Table rows from reading-order text (a text layer, or OCR without boxes)."""
+    rows = doc.rows
+    start = next((i for i, r in enumerate(rows) if re.search(r"PART\s*(?:NUMBER|NO)|DESCRIPTI", r.upper())), None)
+    if start is None:
+        start = 0
+    end = next((i for i in range(start + 1, len(rows)) if re.search(r"REQUIREMENTS|^TERMS\b|SUPPLIER\s+RESP",
+                                                                      rows[i].upper())), len(rows))
+    header_end = start
+    while header_end + 1 < end and _col_of(rows[header_end + 1]) and not _pn_candidates(rows[header_end + 1], doc.ocr):
+        header_end += 1
+    region = rows[header_end + 1:end]
+    groups: List[List[str]] = []
+    for row in region:
+        if _pn_candidates(row, doc.ocr) and not re.search(r"\bRFQ\b", row.upper()):
+            groups.append([row])
+        elif groups:
+            groups[-1].append(row)
+    out = []
+    for g in groups:
+        first = g[0]
+        pn = _pn_candidates(first, doc.ocr)[0]
+        m = (PN_OCR_RE if doc.ocr else PN_RE).search(first)
+        rest_first = first[m.end():] if m else first
+        rev = None
+        toks = rest_first.replace("|", " ").split()
+        if toks and _clean_rev(toks[0]) and len(toks[0]) <= 2:
+            rev = _clean_rev(toks[0])
+            rest_first = rest_first.split(toks[0], 1)[1]
+        parts = [rest_first] + g[1:]
+        qty, complete, desc, matfin = None, True, [], []
+        for p in parts:
+            p = p.replace("|", " ")
+            q = re.search(r"(?:\d[\d,OIl]*\s*/\s*)+\d[\d,OIl]*\s*/?|\d[\d,]*\s*/\s*$", p)
+            if q and qty is None:
+                qty, complete = parse_quantities(q.group(0))
+                p = (p[:q.start()] + " " + p[q.end():]).strip()
+            elif qty is not None and not complete and re.fullmatch(r"\s*\d[\d,]*\s*", p):
+                more, _ = parse_quantities(p)
+                if more:
+                    qty, complete = qty + more, True
+                    continue
+            elif re.fullmatch(r"\s*\d[\d,]*\s*", p) and qty is None and len(parts) > 1:
+                qty, complete = parse_quantities(p)
+                continue
+            d, mf = _split_desc_matfin(p.strip())
+            if d:
+                desc.append(d)
+            if mf:
+                matfin.append(mf)
+        material, finish = _split_matfin(" ".join(matfin)) if matfin else (None, None)
+        out.append({"part_number": pn, "rev": rev, "description": _strip_junk(" ".join(desc)) or None,
+                    "material": material, "finish": finish, "quantities": qty, "qty_complete": complete,
+                    "conf": doc.conf})
+    return out
+
+
+HEADER_LABELS = ["RFQ NO", "RFQ NUMBER", "DATE", "RESPOND BY", "RESPONSE DUE", "QUOTE DUE", "DUE DATE", "BUYER",
+                 "PAGE", "REVISION", "PO NUMBER"]
+
+
+def _cell_value(rows: List[str], labels: Sequence[str], accept: Callable[[str], Optional[str]]) -> Optional[Tuple[str, None]]:
+    """A label in a row of label cells ('RFQ NO.  DATE  RESPOND BY') and its value in the same
+    position of the next row, or right after the label on its own line. Returns None when the
+    value in that position is unreadable, rather than borrowing a neighbour's value."""
+    for i, row in enumerate(rows):
+        up = _lab(row)
+        hits = []
+        for lb in set(HEADER_LABELS) | set(labels):
+            for m in re.finditer(r"(?:^| )" + re.escape(_lab(lb)) + r"(?= |$)", up):
+                hits.append((m.start(), m.end(), lb))
+        # keep the longest label at each position ("RESPOND BY", not "BY")
+        hits.sort(key=lambda h: (h[0], -(h[1] - h[0])))
+        kept = []
+        for h in hits:
+            if not kept or h[0] >= kept[-1][1]:
+                kept.append(h)
+        target = next((k for k, h in enumerate(kept) if h[2] in labels), None)
+        if target is None:
+            continue
+        tail = up[kept[target][1]:].strip()
+        if len(kept) == 1 and tail and accept(row[len(row) - len(tail):] if len(tail) < len(row) else row):
+            val = accept(row.split(kept[target][2].split()[-1], 1)[-1]) if kept[target][2].split()[-1] in row.upper() \
+                else None
+            if val:
+                return val, None
+        if i + 1 >= len(rows):
+            return None
+        nxt = rows[i + 1]
+        if len(kept) == 1:
+            val = accept(nxt)
+            return (val, None) if val else None
+        cells = [c.strip() for c in nxt.split("|") if c.strip()]
+        if len(cells) != len(kept):
+            cells = nxt.split()
+        if len(cells) == len(kept):
+            val = accept(cells[target])
+            return (val, None) if val else None
+        return None
+    return None
+
+
+def parse_form(doc: Doc) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"rfq_number": None, "date": None, "respond_by": None, "respond_text": None,
+                           "company": None, "rows": [], "requirements": [], "terms": None, "delivery": None}
+    head_text = "\n".join(doc.rows[:12])
+
+    def rfq_id(text: str) -> Optional[str]:
+        for m in RFQ_ID_RE.finditer(text.upper()):
+            tok = m.group(1)
+            if re.fullmatch(r"[2Z][0O][0-9OISB]{2}-[0-9OISB]{2}-[0-9OISB]{2}", tok):
+                continue  # an ISO date
+            fixed = fix_part_number(tok)
+            fixed = re.sub(r"^RF[O0]", "RFQ", fixed)
+            return fixed
+        return None
+
+    got = _labelled(doc, ["RFQ NO", "RFQ NO.", "RFQ NUMBER", "RFQ #", "RFO NO"], rfq_id, ahead=3)
+    out["rfq_number"] = got[0] if got else rfq_id(head_text)
+    resp_labels = ["RESPOND BY", "RESPONSE DUE", "QUOTE DUE", "DUE DATE", "BID DUE", "REPLY BY", "RESPOND"]
+    first_date = lambda t: _iso_dates(t)[0][1] if _iso_dates(t) else None  # noqa: E731
+    header_dates = sorted({d for d, _ in _iso_dates(head_text)})
+    got = None
+    label_seen = False
+    if doc.boxed:
+        for ln in doc.lines:
+            if max(_label_score(ln.text, lb, tail_ok=False) for lb in resp_labels) >= 0.9:
+                label_seen = True
+                hit = _below(doc, ln, first_date, max_rows=3.0)
+                if hit:
+                    got = hit
+                    break
+    if not got and not label_seen:
+        got = _cell_value(doc.rows, resp_labels, first_date)
+    if got:
+        d = _iso_dates(got[0])[0][0]
+        out["respond_by"], out["respond_text"] = d.isoformat(), f"RESPOND BY {d.isoformat()}"
+    elif len(header_dates) >= 2 and not label_seen:
+        # DATE and RESPOND BY sit side by side in the header; with the labels unreadable, the
+        # respond-by date is the later one. With only one date readable nothing says which it is.
+        d = header_dates[-1]
+        out["respond_by"], out["respond_text"] = d.isoformat(), f"RESPOND BY {d.isoformat()}"
+    elif label_seen and not got:
+        out["respond_unreadable"] = True
+    if len(header_dates) >= 2:
+        out["date"] = header_dates[0].isoformat()
+    for row in doc.rows[:3]:
+        t = _strip_junk(row.split("|")[0])
+        if re.fullmatch(r"[A-Z][A-Z&.,' -]{3,}", t or "") and "REQUEST" not in t:
+            out["company"] = re.sub(r"\s*\.?\s*REQUEST FOR QUOTATION.*$", "", t).title()
+            break
+    out["rows"] = (_form_rows_boxed(doc) if doc.boxed else None) or _form_rows_text(doc)
+    # quote requirements: numbered lines after the heading, until the terms or response box
+    reqs: List[str] = []
+    rows = doc.rows
+    start = next((i for i, r in enumerate(rows) if re.search(r"REQUIREMENTS|QUALITY\s+CLAUSES", r.upper())), None)
+    if start is not None:
+        for r in rows[start + 1:]:
+            up = r.upper()
+            if re.search(r"^TERMS\b|SUPPLIER\s+RESP|QUOTED\s+BY|^PAGE\s+\d", up):
+                break
+            text = re.sub(r"^\s*\d{1,2}\s*[.)]?\s+", "", r.replace("|", " ")).strip(" -_.")
+            if len(_tokens(text)) < 2 or not re.search(r"[A-Z]{3}", text):
+                continue
+            if reqs and not re.match(r"^\s*\d", r) and len(reqs[-1]) > 70 and not reqs[-1].endswith("."):
+                reqs[-1] += " " + text  # a long item wrapped onto the next line
+            elif not any(overlap(text, x) > 0.9 for x in reqs):
+                reqs.append(text)
+    out["requirements"] = reqs
+    for r in rows:
+        m = re.match(r"^\s*TERMS\s*[:.]\s*(.+)$", r, re.IGNORECASE)
+        if m:
+            out["terms"] = _strip_junk(m.group(1).replace("|", " "))
+            break
+    for rq in reqs:
+        if re.search(r"REQUIRED DELIVERY|DELIVERY\s*:", rq.upper()):
+            out["delivery"] = rq
+    out["export"] = _find_export(doc.text, doc.ocr)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# The email
+# --------------------------------------------------------------------------- #
+SIGNOFF = re.compile(r"^(?:thanks|thank you|thanks again|many thanks|best regards|best|regards|kind regards|cheers|"
+                     r"sincerely|thx|respectfully)[,!.]?$", re.IGNORECASE)
+TITLE_WORDS = re.compile(r"\b(?:buyer|manager|engineer|specialist|agent|administrator|purchasing|sourcing|"
+                         r"procurement|supply chain|director|president|owner|ceo|coordinator|planner|technician|"
+                         r"analyst|lead|officer|representative|sales|assistant)\b", re.IGNORECASE)
+COMPANY_SUFFIXES = ["hydraulics", "robotics", "aerospace", "defense", "medical", "optics", "optomechanics", "energy",
+                    "instruments", "packaging", "systems", "industries", "controls", "vacuum", "solar", "precision",
+                    "machining", "manufacturing", "technologies", "engineering", "automation", "motorsports",
+                    "agriculture", "devices", "conveyor", "electronics", "labs", "group", "tooling", "fabrication",
+                    "machinery", "products", "components", "dynamics", "pump", "valve", "fluid"]
+
+
+def split_body(body: str, from_name: str) -> Tuple[List[str], List[str]]:
+    """(content lines, signature lines)."""
+    lines = [clean(x) for x in (body or "").splitlines()]
+    first = (from_name or "").split()[0].lower() if from_name else ""
+    cut = None
+    for i, ln in enumerate(lines):
+        low = ln.lower().strip()
+        if SIGNOFF.match(low) or (low and (low == (from_name or "").lower() or (first and low == first))):
+            cut = i
+            if not SIGNOFF.match(low):
+                break
+    if cut is None:
+        return lines, []
+    return lines[:cut], lines[cut:]
+
+
+def sentences(lines: List[str]) -> List[str]:
+    out = []
+    for ln in lines:
+        if not ln:
+            continue
+        out.extend(s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", ln) if s.strip())
+    return out
+
+
+def email_company(email: Dict[str, Any], signature: List[str]) -> Optional[str]:
+    domain = (email.get("from_email") or "").split("@")[-1].lower()
+    label = re.sub(r"[^a-z0-9]", "", domain.split(".")[0]) if domain else ""
+    name = (email.get("from_name") or "").lower()
+    for ln in signature[1:]:
+        for part in re.split(r"\s*[,|]\s*", ln):
+            words = re.findall(r"[A-Za-z0-9&]+", part)
+            if not words or part.lower() == name or re.search(r"\d{3}", part):
+                continue
+            if label and words[0].lower() in label:
+                return part.strip()
+    for ln in signature[1:]:
+        for part in re.split(r"\s*[,|]\s*", ln):
+            if (part and part.lower() != name and not TITLE_WORDS.search(part) and not re.search(r"\d|@", part)
+                    and re.fullmatch(r"[A-Z][\w&.'-]*(?:\s+[A-Z&][\w&.'-]*)+", part)):
+                return part.strip()
+    return None
+
+
+def domain_company(email: str) -> Optional[str]:
+    domain = (email or "").split("@")[-1].lower()
+    if not domain or domain.split(".")[0] in ("gmail", "yahoo", "outlook", "hotmail", "icloud", "aol"):
+        return None
+    label = re.sub(r"[^a-z]", "", domain.split(".")[0])
+    for suffix in sorted(COMPANY_SUFFIXES, key=len, reverse=True):
+        if label.endswith(suffix) and len(label) > len(suffix) + 2:
+            return f"{label[:-len(suffix)].title()} {suffix.title()}"
+    return label.title() or None
+
+
+def _clauses(sentence: str) -> List[str]:
+    """Split at commas and joining words, but keep 'Type II, Class 2' together."""
+    parts = re.split(r",\s+(?!(?:CLASS|TYPE|METHOD|GRADE|NITRIC|CITRIC|COND)\b)|;\s*|:\s+|\s+with\s+|\s+then\s+|"
+                     r"\s+and then\s+|\s+after\s+(?=machining|welding)", sentence, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _phrase_for(pattern: "re.Pattern[str]", text: str, trim_nouns: bool = False) -> Optional[str]:
+    """The clause of a sentence that holds a pattern, trimmed of lead-in words."""
+    for clause in _clauses(text):
+        m = pattern.search(clause)
+        if not m:
+            continue
+        # start at the match, or a little earlier for adjectives ("black anodize", "unfilled PEEK")
+        before = clause[:m.start()].split()
+        keep = []
+        for w in reversed(before[-2:]):
+            if re.fullmatch(r"(?:black|clear|hard|gold|implant[- ]grade|unfilled|glass[- ]filled|annealed|"
+                            r"a36|aisi|type)", w, re.IGNORECASE):
+                keep.insert(0, w)
+            else:
+                break
+        phrase = " ".join(keep + [clause[m.start():]]).strip(" .,;:")
+        phrase = re.sub(r"^(?:then|and|a|an|the|it's|it is|in)\s+", "", phrase, flags=re.IGNORECASE)
+        phrase = re.sub(r"\s+(?:after machining|after plating|per the print)$", lambda mm: mm.group(0)
+                        if "print" in mm.group(0) else "", phrase, flags=re.IGNORECASE)
+        if trim_nouns:
+            words = phrase.split()
+            while len(words) > 1 and words[-1].upper().strip(".,") in PART_NOUNS:
+                words.pop()
+            phrase = " ".join(words)
+        return phrase.strip(" .,;:") or None
+    return None
+
+
+def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
+    subject = clean(email.get("subject"))
+    content, signature = split_body(email.get("body") or "", email.get("from_name") or "")
+    sents = sentences(content)
+    body_text = " ".join(sents)
+    out: Dict[str, Any] = {"subject": subject, "content": content, "signature": signature, "sentences": sents}
+
+    # identifiers
+    rfq = None
+    for src, text in (("subject", subject), ("email body", body_text)):
+        m = re.search(r"\bRFQ-\d{2}-\d{3,5}\b", text, re.IGNORECASE)
+        if m:
+            rfq = (m.group(0).upper(), src)
+            break
+        m = RFQ_NO_RE.search(text)
+        if m:
+            rfq = (m.group(1).upper(), src)
+            break
+    out["rfq_number"] = rfq
+    qref = None
+    for src, text in (("subject", subject), ("email body", body_text)):
+        m = QUOTE_REF_RE.search(text)
+        if m:
+            qref = (m.group(1).upper(), src)
+            break
+    out["quote_ref"] = qref
+    revision = bool(qref) and bool(re.search(r"\b(?:UPDATE|REVISE|REVISED|REVISION|REQUOTE|RE-QUOTE|AGAINST REV|"
+                                              r"NEW REV|RELEASED REV)\b", (subject + " " + body_text).upper()))
+    revision = revision or bool(re.search(r"\b(?:REVISED QUOTE|UPDATE(?:D)? (?:OUR |THE |YOUR )?QUOTE|REQUOTE)\b",
+                                          body_text.upper()))
+    out["request"] = "quote revision" if revision else "new RFQ"
+
+    # part numbers named in the email, with a rev when one sits next to them
+    excluded = {fold(rfq[0])} if rfq else set()
+    if qref:
+        excluded.add(fold(qref[0]))
+    pns: List[Dict[str, Any]] = []
+    for src, text in (("subject", subject), ("email body", "\n".join(content))):
+        for m in PN_RE.finditer(text):
+            pn = m.group(1).upper()
+            if (fold(pn) in excluded or pn.split("-")[0] in SPEC_PREFIXES or re.match(r"RFQ-", pn)
+                    or any(fold(pn) == fold(e) or fold(pn).endswith(fold(e)) for e in excluded)):
+                continue
+            after = text[m.end():m.end() + 16]
+            r = re.match(r"\s*,?\s*REV(?:ISION)?\.?\s*([A-Z0-9]{1,2})\b", after, re.IGNORECASE)
+            rev = r.group(1).upper() if r else None
+            if not rev:
+                sent = next((s for s in re.split(r"(?<=[.!?])\s+", text) if pn in s.upper()), "")
+                r = re.search(r"\bREV(?:ISION)?\.?\s+([A-Z0-9]{1,2})\s+OF\b", sent, re.IGNORECASE)
+                if r and len(set(PN_RE.findall(sent))) == 1:
+                    rev = r.group(1).upper()
+            hit = next((p for p in pns if fold(p["pn"]) == fold(pn)), None)
+            if hit:
+                hit["rev"] = hit["rev"] or rev
+                continue
+            pns.append({"pn": pn, "rev": rev, "src": src, "pos": m.start()})
+    out["part_numbers"] = pns
+
+    # per-part lines in the body ("BWM-3105 Rev A, pivot pin, 17-4 PH stainless, condition H1025, passivated")
+    per_part: Dict[str, Dict[str, Optional[str]]] = {}
+    for ln in content:
+        m = re.match(r"^\s*(?:P/N\s*)?([A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?)\s*(?:,?\s*REV\.?\s*([A-Z0-9]{1,2}))?\s*[,:-]\s*(.+)$",
+                     ln, re.IGNORECASE)
+        if not m:
+            continue
+        fields = [f.strip() for f in re.split(r",\s*", m.group(3)) if f.strip()]
+        info: Dict[str, Optional[str]] = {"description": None, "material": None, "finish": None}
+        mat: List[str] = []
+        for f in fields:
+            if FINISH_RE.search(f) and not info["finish"]:
+                info["finish"] = f
+            elif MATERIAL_STRONG.search(f) or MATERIAL_WORD.search(f):
+                mat.append(f)
+            elif mat and re.match(r"(?:condition|cond\.?)\s", f, re.IGNORECASE):
+                mat.append(f)
+            elif not info["description"] and not mat:
+                info["description"] = f
+        info["material"] = ", ".join(mat) or None
+        per_part[fold(m.group(1))] = info
+    out["per_part"] = per_part
+
+    # labelled lines: "Material: ...", "Finish: ...", "Quantities: ..."
+    labels: Dict[str, str] = {}
+    for ln in content:
+        m = re.match(r"^\s*(material|finish|quantit(?:y|ies)|qty|inspection|lead time|due date|quote due)\s*[:=]\s*(.+)$",
+                     ln, re.IGNORECASE)
+        if m:
+            labels[m.group(1).lower()[:5]] = m.group(2).strip()
+
+    # material and finish for the whole email
+    material = None
+    if "mater" in labels:
+        material = labels["mater"]
+    else:
+        for s in sents:
+            if MATERIAL_STRONG.search(s):
+                material = _phrase_for(MATERIAL_STRONG, s, trim_nouns=True)
+                if material:
+                    break
+    out["material"] = material
+    finish = labels.get("finis")
+    if not finish:
+        for s in sents:
+            if FINISH_RE.search(s) and not re.search(r"\bWITH AND WITHOUT\b|\bIF THE\b", s.upper()):
+                finish = _phrase_for(FINISH_RE, s)
+                if finish:
+                    break
+    out["finish"] = finish
+
+    # quantities and annual usage
+    qty: Optional[List[int]] = None
+    annual: Optional[int] = None
+    qty_text = None
+    for src_text in ([labels["quant"]] if "quant" in labels else []) + ([labels["qty"]] if "qty" in labels else []):
+        q, _ = parse_quantities(re.split(r"\b(?:pcs|pieces|ea)\b", src_text, flags=re.IGNORECASE)[0])
+        if q:
+            qty, qty_text = q, src_text
+            break
+    for s in [subject] + sents:
+        up = s.upper()
+        if re.search(r"\bANNUAL|PER YEAR|/\s*YR\b|A YEAR\b|\bEAU\b|YEARLY|USAGE\b|\bVOLUME\b", up):
+            m = re.search(r"(?:ANNUAL\s+(?:USAGE|VOLUME)|USAGE|EAU|VOLUME)[A-Z ]{0,30}?(?:IS|OF|:)?\s*(?:ABOUT|AROUND|"
+                          r"APPROX\.?|APPROXIMATELY|ROUGHLY|~)?\s*(\d[\d,.]*K?)\s*(?:PCS|PIECES|EA|UNITS)?", up)
+            if not m:
+                m = re.search(r"(\d[\d,.]*K?)\s*(?:PCS|PIECES)?\s*(?:/\s*YR|PER YEAR|A YEAR|ANNUALLY)", up)
+            if m and _num(m.group(1)) and annual is None:
+                annual = _num(m.group(1))
+        if qty:
+            continue
+        m = re.search(r"\bRELEASE(?:\s+QUANTITY)?\s*(?:IS|OF|:)?\s*(\d[\d,]*)", up)
+        if m:
+            qty, qty_text = [_num(m.group(1))], s
+            continue
+        m = re.search(r"\bQUANTIT(?:Y|IES)\s*[:=]?\s*((?:\d[\d,]*\s*(?:PCS|PIECES)?\s*(?:/|,|AND|&)?\s*)+)", up)
+        if m and _num(m.group(1).split()[0].strip(",/")):
+            q, _ = parse_quantities(m.group(1))
+            if q:
+                qty, qty_text = q, s
+                continue
+        m = re.search(r"\bQTY\.?\s*[:=]?\s*(\d[\d,]*(?:\s*(?:/|,)\s*\d[\d,]*)*)", up)
+        if m:
+            q, _ = parse_quantities(m.group(1))
+            if q:
+                qty, qty_text = q, s
+                continue
+        scrub = PN_RE.sub(" ", up)
+        scrub = re.sub(r"\b[A-Z]+\d[\w-]*|\b\d+[A-Z][\w-]*", " ", scrub)  # 316L, 6061-T6, H1025
+        scrub = re.sub(r"\(.*?\)", " ", scrub)
+        scrub = re.sub(r"\b(?:POSSIBLY|MAYBE|PERHAPS)\s+\d[\d,]*\s+MORE\b.*", " ", scrub)
+        scrub = re.sub(r"\b\d[\d,]*\s+MORE\b", " ", scrub)
+        if re.search(r"ANNUAL|PER YEAR|/\s*YR|USAGE|VOLUME", scrub):
+            continue
+        m = re.search(r"((?:\d[\d,]*\s*(?:,|/|AND|&|OR)\s*)*\d[\d,]*)\s*(?:PCS|PC|PIECES|EA|UNITS)\b", scrub)
+        if m:
+            q, _ = parse_quantities(m.group(1))
+            if q:
+                qty, qty_text = q, s
+                continue
+        m = re.search(r"\b(?:QUOTE|QUOTATION|PRICING|PRICE)\s+(?:FOR|ON)\s+(\d[\d,]*)\s+[A-Z]", scrub)
+        # "blanket pricing for 3 enclosure covers" counts part numbers, not pieces
+        if m and s is not subject and not (_num(m.group(1)) == len(pns) and len(pns) > 1):
+            qty, qty_text = [_num(m.group(1))], s
+    out["quantities"] = (qty, qty_text)
+    out["annual_usage"] = annual
+
+    # descriptions: the words before a part number, the subject, or "12 gimbal yokes"
+    descs: Dict[str, str] = {}
+    body_join = "\n".join(content)
+    for p in pns:
+        text = subject if p["src"] == "subject" else body_join
+        idx = text.upper().find(p["pn"])
+        before = text[:idx]
+        before = re.split(r"[.!?:;(\n]\s*", before)[-1]
+        before = re.sub(r"[,\s]*(?:P/N|PN|PART(?:\s+NUMBER)?|#)?[\s,]*$", "", before, flags=re.IGNORECASE)
+        m = re.search(r"(?:\b(?:the attached|attached|the|a|an|our|your|this|of|on|for)\s+)((?:[a-z][a-z0-9-]*\s*){1,5})$",
+                      before)
+        if m:
+            d = m.group(1).strip()
+            if not re.search(r"\b(?:drawing|print|rfq|file|scan|photo|model|step|quote|pdf|package|revision|rev)\b", d):
+                descs.setdefault(fold(p["pn"]), d)
+    sub_desc = None
+    m = re.search(r"(?:\bRFQ\b[^:]*|QUOTE REQUEST|REQUEST FOR QUOTE|QUOTE|RFQ)\s*:\s*(.+)$", subject, re.IGNORECASE)
+    if m:
+        d = re.split(r",|\s+-\s+|\s+(?=[A-Z][A-Z0-9]{0,4}-\d)", m.group(1))[0].strip()
+        if d and not PN_RE.fullmatch(d) and len(d.split()) <= 7:
+            sub_desc = d
+    if not sub_desc:
+        m = re.search(r"\bQUOTE\s+ON\s+([a-z][a-z -]+)$", subject, re.IGNORECASE)
+        if m:
+            sub_desc = m.group(1).strip()
+    qty_desc = None
+    m = re.search(r"\b(?:quote|quotation|pricing|price)\s+(?:for|on)\s+\d[\d,]*\s+([a-z][a-z -]{2,40}?)(?:\s+in\b|\s+of\b|,|\.|$)",
+                  body_text)
+    if m:
+        qty_desc = m.group(1).strip()
+    out["descriptions"], out["subject_description"], out["qty_description"] = descs, sub_desc, qty_desc
+
+    # sizes stated in the email
+    size = None
+    m = re.search(r"((?:about\s+|approx\.?\s+)?(?:\d*\.\d+|\d+)\"?(?:\s*(?:OD|ID|dia(?:meter)?|long|thick|wide|lg))?"
+                  r"(?:\s*x\s*(?:\d*\.\d+|\d+)\"?(?:\s*(?:OD|ID|dia(?:meter)?|long|thick|wide|lg))?)+)", body_text,
+                  re.IGNORECASE)
+    if m and re.search(r"\sx\s", m.group(1), re.IGNORECASE):
+        size = m.group(1).strip()
+    out["size"] = size
+
+    # dates: when the quote is due, and when parts are needed
+    respond = None
+    for s in [subject] + sents:
+        if RESPOND_CUES.search(s) and not NOT_RESPOND.search(s):
+            got = parse_date(s, today)
+            if got:
+                respond = (got[0].isoformat(), s.strip())
+                break
+    out["respond_by"] = respond
+    delivery = None
+    for s in sents:
+        if DELIVERY_CUES.search(s) and not RESPOND_CUES.search(s):
+            got = parse_date(s, today)
+            delivery = (s.strip(), got[0].isoformat() if got else None)
+            break
+    out["delivery"] = delivery
+
+    # requirements
+    reqs: List[str] = []
+    for s in sents:
+        pointer = re.search(r"\b(?:SEE|ARE (?:ALL )?(?:LISTED )?ON|IS ON|LISTED ON)\s+THE\s+(?:ATTACHED\s+)?(?:RFQ\s+)?FORM\b",
+                            s.upper())
+        if REQUIREMENT_RE.search(s) and not pointer:
+            if re.match(r"^\s*(?:material|finish|quantit)", s, re.IGNORECASE):
+                continue
+            reqs.append(s.strip())
+    out["requirements"] = reqs
+
+    # export control, drawing links, drawings promised later
+    full = subject + "\n" + "\n".join(content)
+    marks = [] if NOT_EXPORT.search(full) and not re.search(r"\bITAR CONTROLLED\b|\bMARKED CUI\b", full.upper()) \
+        else _find_export(full, fuzzy=False)
+    out["export"] = marks
+    links = []
+    for m in URL_RE.finditer("\n".join(content)):
+        around = body_text[max(0, body_text.find(m.group(0)) - 300):body_text.find(m.group(0)) + 50]
+        if re.search(r"\b(?:DRAWING|DRAWINGS|STEP|CAD|MODEL|TECHNICAL DATA|TDP|FILE SHARE|PORTAL|PRINTS?|FILES)\b",
+                     around.upper()):
+            links.append(m.group(0).rstrip(".,"))
+    out["drawing_links"] = links
+    out["drawing_later"] = bool(re.search(r"\b(?:SEND|EMAIL|FORWARD)\s+(?:YOU\s+)?THE\s+(?:DRAWING|PRINT|CAD|STEP)"
+                                          r"[^.]*\b(?:TOMORROW|LATER|SOON|NEXT WEEK|WHEN)|DRAWING(?:S)?\s+(?:TO|WILL)\s+"
+                                          r"FOLLOW", body_text.upper()))
+    out["company"] = email_company(email, signature)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Material and finish comparison (for check notes)
+# --------------------------------------------------------------------------- #
+def material_keys(text: Optional[str]) -> set:
+    """What identifies a material, whatever the wording: alloy, temper, condition."""
+    if not text:
+        return set()
+    t = ocr_fix_spec(clean(text).upper())
+    keys = set()
+    for m in re.finditer(r"\b([1-7]\d{3})(?:-(T\d{1,4}))?(?:\s*OR\s*(T\d{1,4}))?\b", t):
+        if re.search(r"\b(?:AL|ALUMINUM|ALUMINIUM)\b", t) or m.group(2):
+            keys.add(m.group(1))
+            for g in (m.group(2), m.group(3)):
+                if g:
+                    keys.add(f"{m.group(1)}-{g}")
+    for m in re.finditer(r"\b(17-4|15-5|13-8)\s?PH\b", t):
+        keys.add(m.group(1) + "PH")
+    for m in re.finditer(r"\b(H\d{3,4})\b", t):
+        keys.add(m.group(1))
+    for m in re.finditer(r"\b(30[34]L?|31[06]L?|41[06]|420|440C)\b", t):
+        if re.search(r"STAINLESS|SS\b|SST|CRES", t) or m.group(1).endswith("L"):
+            keys.add(m.group(1))
+    for m in re.finditer(r"\b(4140|4340|8620|12L14|1018|1020|1045|A36)\b", t):
+        keys.add(m.group(1))
+    for m in re.finditer(r"\bC(3\d{2})(?:00)?\b", t):
+        keys.add("C" + m.group(1))
+    for word in ("PEEK", "DELRIN", "ACETAL", "ULTEM", "TITANIUM", "BRASS", "INCONEL"):
+        if word in t:
+            keys.add(word)
+    return keys
+
+
+def materials_agree(a: Optional[str], b: Optional[str]) -> bool:
+    ka, kb = material_keys(a), material_keys(b)
+    if not ka or not kb:
+        return True
+    if ka <= kb or kb <= ka:
+        return True
+    # different wording of the same alloy: compare alloys, then tempers only where both give one
+    alloys_a = {k for k in ka if "-" not in k}
+    alloys_b = {k for k in kb if "-" not in k}
+    if alloys_a and alloys_b and not (alloys_a & alloys_b):
+        return False
+    tempers_a = {k for k in ka if "-T" in k}
+    tempers_b = {k for k in kb if "-T" in k}
+    if tempers_a and tempers_b and not (tempers_a & tempers_b):
+        return False
+    conds_a = {k for k in ka if re.fullmatch(r"H\d+", k)}
+    conds_b = {k for k in kb if re.fullmatch(r"H\d+", k)}
+    return not (conds_a and conds_b and not (conds_a & conds_b))
+
+
+FINISH_FAMILIES = [("anodize", r"ANODI"), ("passivate", r"PASSIVAT"), ("chem film", r"CHEM\w*\s+FILM|CONVERSION|ALODINE"),
+                   ("electroless nickel", r"ELECTROLESS"), ("black oxide", r"BLACK\s+OXIDE"),
+                   ("powder coat", r"POWDER"), ("paint", r"PAINT"), ("zinc", r"ZINC"), ("gold", r"GOLD"),
+                   ("none", r"^NONE\b")]
+
+
+def finishes_agree(a: Optional[str], b: Optional[str]) -> bool:
+    if not a or not b:
+        return True
+    ta, tb = clean(a).upper(), clean(b).upper()
+    fa = {name for name, pat in FINISH_FAMILIES if re.search(pat, ta)}
+    fb = {name for name, pat in FINISH_FAMILIES if re.search(pat, tb)}
+    if fa and fb and not (fa <= fb or fb <= fa):
+        return False
+    if "anodize" in fa & fb:
+        for colors in (("BLACK", "CLEAR"),):
+            ca = {c for c in colors if c in ta}
+            cb = {c for c in colors if c in tb}
+            if ca and cb and ca != cb:
+                return False
+        tya = re.search(r"TYPE\s+(III|II|I)\b", ta)
+        tyb = re.search(r"TYPE\s+(III|II|I)\b", tb)
+        hard_a = "HARD" in ta or (tya and tya.group(1) == "III")
+        hard_b = "HARD" in tb or (tyb and tyb.group(1) == "III")
+        if (tya or "HARD" in ta) and (tyb or "HARD" in tb) and hard_a != hard_b:
+            return False
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Putting one RFQ together
+# --------------------------------------------------------------------------- #
+def _v(value: Any = None, source: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
+    out = {"value": value, "source": source if value not in (None, [], "") else None}
+    out.update(extra)
+    return out
+
+
+def lookup_customer(from_email: str, shop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    domain = (from_email or "").split("@")[-1].lower().strip()
+    for customer in (shop or {}).get("customers", []):
+        if customer.get("domain", "").lower() == domain:
+            return customer
+    return None
+
+
+def is_rfq(email: Dict[str, Any], decision: Optional[Dict[str, Any]] = None) -> bool:
+    """With a Jev decision, Jev's call. Without one: the sender asks for a price on parts, and the
+    email is not an order question or a sales pitch."""
+    if decision and "is_rfq" in decision:
+        return bool(decision["is_rfq"])
+    subject = clean(email.get("subject")).upper()
+    content, _ = split_body(email.get("body") or "", email.get("from_name") or "")
+    body = " ".join(content).upper()
+    text = subject + " " + body
+    pitch = re.search(r"\d+\s*% OFF|\bUNSUBSCRIBE\b|THIS MONTH ONLY|FREE SHIPPING|\bWEBINAR\b|\bNEWSLETTER\b|"
+                      r"\bOUR (?:ONLINE )?STORE\b|\bRESUME\b|\bJOB OPENING\b|\bWE ARE HIRING\b|SET UP A (?:QUICK )?CALL",
+                      text)
+    order = re.search(r"\b(?:PO|P\.O\.|PURCHASE ORDER)\s*#?\s*\d+[^.?!]*\b(?:STATUS|TRACKING|SHIP|PROMISE|ON TRACK)|"
+                      r"\bSTATUS\?|\bTRACKING\b", text)
+    ask = re.search(r"\bRFQ\b|\bRFP\b|REQUEST FOR (?:A )?QUOT|\bQUOTE REQUEST\b|\bQUOTATION\b|"
+                    r"\b(?:PLEASE|CAN YOU|COULD YOU|WOULD YOU)\s+(?:\w+\s+){0,2}QUOTE\b|\bQUOTE (?:ON|FOR)\b|"
+                    r"\bREQUESTING A QUOTE\b|\bNEED A QUOTE\b|\bSEND (?:ME |US )?PRICING\b|\bPRICING (?:ON|FOR)\b|"
+                    r"\bBLANKET PRICING\b|\bLOOKING FOR PRICING\b|\bQUOTE\b.*\b(?:PCS|QTY|DRAWING)\b|\bUPDATE (?:OUR |THE )?QUOTE\b",
+                    text)
+    if pitch and not re.search(r"\bRFQ\b|REQUEST FOR QUOT", subject):
+        return False
+    if order and not ask:
+        return False
+    return bool(ask)
+
+
+def _pick(cands: List[Tuple[str, Any, str, Optional[float]]], order: Sequence[str]) -> Optional[Tuple[str, Any, str, Optional[float]]]:
+    """cands: (kind, value, source label, OCR conf or None). The first kind in precedence order."""
+    for kind in order:
+        for c in cands:
+            if c[0] == kind and c[1] not in (None, "", []):
+                return c
+    return None
+
+
+def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[str, Any],
+            decision: Optional[Dict[str, Any]] = None, *, today: Optional[dt.date] = None) -> Dict[str, Any]:
+    """One RFQ record from an email and the ocr.file_text result of each attachment."""
+    today = today or dt.date.today()
+    texts = texts or {}
+    em = parse_email(email, today)
+    check: List[str] = []
+
+    # attachments
+    docs: List[Doc] = []
+    for att in email.get("attachments") or []:
+        name = att.get("name") if isinstance(att, dict) else str(att)
+        media = (att.get("media") if isinstance(att, dict) else "") or Path(name or "").suffix.lstrip(".").lower()
+        media = {"stp": "step", "jpeg": "jpg"}.get(media, media)
+        doc = Doc(name, media, texts.get(name))
+        doc.kind, doc.capture = classify(doc) if doc.text else (
+            ("3D model" if media == "step" else "photo" if media == "jpg" else "screenshot" if media == "png" else "other"),
+            "digital")
+        docs.append(doc)
+    email_pns = [p["pn"] for p in em["part_numbers"]]
+    for doc in docs:
+        if doc.kind == "drawing":
+            doc.parsed = parse_drawing(doc, email_pns)
+        elif doc.kind == "RFQ form":
+            doc.parsed = parse_form(doc)
+        elif doc.kind == "3D model":
+            doc.parsed = parse_step(doc)
+    forms = [d for d in docs if d.kind == "RFQ form"]
+    drawings = [d for d in docs if d.kind == "drawing" and d.parsed.get("part_number")]
+    models = [d for d in docs if d.kind == "3D model" and d.parsed.get("part_number")]
+
+    # customer
+    cust = lookup_customer(email.get("from_email", ""), shop)
+    if cust:
+        customer, customer_src = cust.get("name"), "shop customer list"
+    elif em["company"]:
+        customer, customer_src = em["company"], "email signature"
+    else:
+        customer, customer_src = None, None
+        domain = (email.get("from_email") or "").split("@")[-1].lower()
+        label = re.sub(r"[^a-z0-9]", "", domain.split(".")[0]) if domain else ""
+        for d in forms + drawings:
+            comp = d.parsed.get("company")
+            if comp and label and comp.split()[0].lower() in label:
+                customer, customer_src = comp, d.name
+                break
+        if not customer:
+            customer, customer_src = domain_company(email.get("from_email", "")), "email domain"
+
+    # RFQ number, respond-by, requirements from forms
+    rfq_cands = []
+    if em["rfq_number"]:
+        rfq_cands.append(("email", em["rfq_number"][0], em["rfq_number"][1]))
+    for f in forms:
+        if f.parsed.get("rfq_number"):
+            rfq_cands.append(("form", f.parsed["rfq_number"], f.label))
+    rfq_number = _v()
+    if rfq_cands:
+        # the typed subject is exact; a form number that matches it up to OCR slips adds nothing
+        best = rfq_cands[0]
+        rfq_number = _v(best[1], best[2])
+        base = lambda s: fold(re.sub(r"^RF[QO0]-?", "", s.upper()))  # noqa: E731
+        for kind, val, src in rfq_cands[1:]:
+            if base(val) != base(best[1]) and difflib.SequenceMatcher(None, base(val), base(best[1])).ratio() < 0.8:
+                check.append(f"RFQ number differs: {best[2]} says {best[1]}, {src} says {val}")
+    quote_ref = _v(*em["quote_ref"]) if em["quote_ref"] else _v()
+
+    respond = _v(text=None)
+    form_resp = next(((f.parsed["respond_by"], f.parsed.get("respond_text"), f.label) for f in forms
+                      if f.parsed.get("respond_by")), None)
+    if form_resp:
+        respond = _v(form_resp[0], form_resp[2], text=form_resp[1])
+        if em["respond_by"] and em["respond_by"][0] != form_resp[0]:
+            check.append(f"Respond-by differs: email says {em['respond_by'][0]} (\"{em['respond_by'][1]}\"), "
+                         f"{form_resp[2]} says {form_resp[0]}; used the RFQ form")
+    elif em["respond_by"]:
+        respond = _v(em["respond_by"][0], "email body", text=em["respond_by"][1])
+
+    requirements: List[Dict[str, Any]] = []
+    for f in forms:
+        for r in f.parsed.get("requirements") or []:
+            requirements.append({"value": r, "source": f.label})
+    for r in em["requirements"]:
+        if not any(overlap(r, x["value"]) >= 0.8 for x in requirements):
+            requirements.append({"value": r, "source": "email body"})
+
+    delivery = _v()
+    if em["delivery"]:
+        delivery = _v(em["delivery"][0], "email body", date=em["delivery"][1])
+    else:
+        for f in forms:
+            if f.parsed.get("delivery"):
+                delivery = _v(f.parsed["delivery"], f.label, date=None)
+                break
+    terms = next((_v(f.parsed["terms"], f.label) for f in forms if f.parsed.get("terms")), _v())
+
+    # export control: every place a marking shows up
+    marks: List[Tuple[str, str]] = [(k, "email body") for k, _ in em["export"]]
+    for d in docs:
+        for k, _ in (d.parsed.get("export") or []):
+            marks.append((k, d.label))
+    export = _v()
+    if marks:
+        kinds = []
+        for k, _ in marks:
+            if k not in kinds and not (k == "EAR" and any(x.startswith("EAR (") for x, _ in marks)):
+                kinds.append(k)
+        order = {"ITAR": 0, "EAR": 1, "CUI": 2}
+        kinds.sort(key=lambda k: order.get(k.split(" ")[0], 3))
+        sources = []
+        for _, s in marks:
+            if s not in sources:
+                sources.append(s)
+        export = _v(", ".join(kinds), "; ".join(sources))
+        if all(s != "email body" for _, s in marks):
+            check.append(f"{', '.join(kinds)} marking found only in {', '.join(sources)}; the email does not mention it")
+
+    # ---- part lines -------------------------------------------------------- #
+    lines: List[Dict[str, Any]] = []
+
+    def find_line(pn: Optional[str], allow_prefix: bool = True) -> List[Dict[str, Any]]:
+        if not pn:
+            return []
+        key = fold(pn)
+        exact = [ln for ln in lines if ln["_key"] == key]
+        if exact or not allow_prefix:
+            return exact
+        return [ln for ln in lines if ln["_key"].startswith(key) and len(ln["_key"]) > len(key)]
+
+    def new_line(pn: Optional[str]) -> Dict[str, Any]:
+        ln = {"_key": fold(pn) if pn else "", "_c": {f: [] for f in ("part_number", "rev", "description", "material",
+                                                                       "finish", "quantities", "annual_usage", "size")},
+              "_qty_complete": True}
+        lines.append(ln)
+        return ln
+
+    def add(ln: Dict[str, Any], field: str, kind: str, value: Any, source: str, conf: Optional[float] = None) -> None:
+        if value in (None, "", []):
+            return
+        ln["_c"][field].append((kind, value, source, conf))
+
+    for f in forms:
+        for row in f.parsed.get("rows") or []:
+            hit = find_line(row["part_number"], allow_prefix=False)
+            ln = hit[0] if hit else new_line(row["part_number"])
+            conf = row.get("conf") if f.ocr else None
+            add(ln, "part_number", "form", row["part_number"], f.label, conf)
+            add(ln, "rev", "form", row.get("rev"), f.label, conf)
+            add(ln, "description", "form", row.get("description"), f.label, conf)
+            add(ln, "material", "form", row.get("material"), f.label, conf)
+            add(ln, "finish", "form", row.get("finish"), f.label, conf)
+            add(ln, "quantities", "form", row.get("quantities"), f.label, conf)
+            if not row.get("qty_complete", True):
+                ln["_qty_complete"] = False
+    # drawings: one line each, or every dash-number line of the form that starts with the drawing number
+    ordered = sorted(drawings, key=lambda d: next((i for i, p in enumerate(email_pns)
+                                                   if fold(p) == fold(d.parsed["part_number"])), 99))
+    for d in ordered:
+        p = d.parsed
+        targets = find_line(p["part_number"]) or [new_line(p["part_number"])]
+        conf = p.get("conf", {})
+        for ln in targets:
+            variant = ln["_key"] != fold(p["part_number"])
+            add(ln, "part_number", "drawing_variant" if variant else "drawing", p["part_number"], d.label,
+                conf.get("part_number") if d.ocr else None)
+            add(ln, "rev", "drawing", p.get("rev"), d.label, conf.get("rev") if d.ocr else None)
+            add(ln, "description", "drawing_variant" if variant else "drawing", p.get("title"), d.label,
+                conf.get("title") if d.ocr else None)
+            add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material") if d.ocr else None)
+            add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish") if d.ocr else None)
+    for d in models:
+        p = d.parsed
+        targets = find_line(p["part_number"]) or [new_line(p["part_number"])]
+        for ln in targets:
+            add(ln, "part_number", "model", p["part_number"], d.label)
+            add(ln, "rev", "model", p.get("rev"), d.label)
+            add(ln, "description", "model", p.get("title"), d.label)
+            add(ln, "size", "model", p.get("size"), d.label)
+    for p in em["part_numbers"]:
+        targets = find_line(p["pn"])
+        if not targets:
+            if lines and (forms or drawings) and p["src"] == "subject" and len(em["part_numbers"]) > len(lines):
+                continue
+            targets = [new_line(p["pn"])]
+        src = "subject" if p["src"] == "subject" else "email body"
+        for ln in targets:
+            add(ln, "part_number", "email", p["pn"], src)
+            add(ln, "rev", "email", p.get("rev"), src)
+    if not lines:
+        new_line(None)
+    # email-wide values reach every line; per-part listings reach their own line
+    qty, _ = em["quantities"]
+    for ln in lines:
+        info = next((v for k, v in em["per_part"].items() if ln["_key"] and (ln["_key"] == k or ln["_key"].startswith(k))),
+                    None)
+        if info:
+            add(ln, "description", "email", info.get("description"), "email body")
+            add(ln, "material", "email", info.get("material"), "email body")
+            add(ln, "finish", "email", info.get("finish"), "email body")
+        desc = em["descriptions"].get(ln["_key"]) or next(
+            (v for k, v in em["descriptions"].items() if ln["_key"].startswith(k)), None)
+        if not desc and len(lines) == 1:
+            desc = em["subject_description"] or em["qty_description"]
+        add(ln, "description", "email", desc, "email body" if desc in em["descriptions"].values() else "subject")
+        if not info or not info.get("material"):
+            add(ln, "material", "email", em["material"], "email body")
+        if not info or not info.get("finish"):
+            add(ln, "finish", "email", em["finish"], "email body")
+        add(ln, "quantities", "email", qty, "email body")
+        add(ln, "annual_usage", "email", em["annual_usage"], "email body")
+        add(ln, "size", "email", em["size"], "email body")
+
+    # ---- resolve each field with the precedence rules ---------------------- #
+    out_lines = []
+    clean_kinds = ("email", "model")
+    for n, ln in enumerate(lines, start=1):
+        c = ln["_c"]
+        rec: Dict[str, Any] = {"line": n}
+        for field, order in (("part_number", ("drawing", "form", "model", "email", "drawing_variant")),
+                             ("rev", ("drawing", "form", "model", "email")),
+                             ("description", ("drawing", "form", "model", "email", "drawing_variant")),
+                             ("material", ("drawing", "form", "email")),
+                             ("finish", ("drawing", "form", "email")),
+                             ("quantities", ("form", "email")),
+                             ("annual_usage", ("form", "email")),
+                             ("size", ("email", "model"))):
+            if field == "description" and any(k == "drawing_variant" for k, *_ in c[field]):
+                # a dash-number line: the form's description names the variant, the drawing the family
+                order = ("form", "drawing_variant", "model", "email")
+            if field == "part_number" and any(k == "drawing_variant" for k, *_ in c[field]):
+                order = ("form", "email", "drawing_variant")
+            win = _pick(c[field], order)
+            if not win:
+                rec[field] = _v()
+                continue
+            kind, value, source, conf = win
+            ocr_win = conf is not None or "(OCR" in source
+            # identity fields: when a clean source agrees up to OCR slips, keep its spelling
+            if field in ("part_number", "rev") and ocr_win:
+                for k2, v2, s2, c2 in c[field]:
+                    if "(OCR" not in s2 and fold(v2) == fold(value) and v2 != value:
+                        value = v2
+                        break
+            if field in ("part_number", "rev"):
+                for k2, v2, s2, c2 in c[field]:
+                    if k2 == "drawing_variant" or v2 in (None, ""):
+                        continue
+                    if fold(v2) != fold(value):
+                        if field == "rev" and ("(OCR" in s2 or ocr_win) and len(fold(v2)) == len(fold(value)) == 1 \
+                                and not (("(OCR" in s2) and ocr_win):
+                            # one OCR letter against a clean one: trust the clean source, say so
+                            clean_v = v2 if "(OCR" not in s2 else value
+                            if clean_v != value:
+                                check.append(f"Line {n} rev: OCR read {value} in {source}, {s2} says {v2}; "
+                                             f"used {clean_v}")
+                                value, source = clean_v, s2
+                            continue
+                        label = "Part number" if field == "part_number" else f"Line {n} rev"
+                        check.append(f"{label} differs: {source} says {value}, {s2} says {v2}; used {value}")
+            if field == "material":
+                for k2, v2, s2, c2 in c[field]:
+                    if v2 is not value and not materials_agree(value, v2):
+                        check.append(f"Line {n} material differs: {source} says {value}, {s2} says {v2}; "
+                                     f"used {'the drawing' if kind == 'drawing' else source}")
+            if field == "finish":
+                for k2, v2, s2, c2 in c[field]:
+                    if v2 is not value and not finishes_agree(value, v2):
+                        check.append(f"Line {n} finish differs: {source} says {value}, {s2} says {v2}; "
+                                     f"used {'the drawing' if kind == 'drawing' else source}")
+            if field == "quantities":
+                for k2, v2, s2, c2 in c[field]:
+                    if v2 is not value and list(v2) != list(value):
+                        check.append(f"Line {n} quantities differ: {source} says {' / '.join(map(str, value))}, "
+                                     f"{s2} says {' / '.join(map(str, v2))}; used {source}")
+                if not ln["_qty_complete"] and kind == "form":
+                    check.append(f"Line {n} quantities may be incomplete: OCR could not read every break in {source}")
+            if ocr_win and conf is not None and conf < LOW_OCR_CONF and field in ("part_number", "rev", "quantities"):
+                confirmed = any("(OCR" not in s2 and fold(str(v2)) == fold(str(value)) for _, v2, s2, _ in c[field])
+                if not confirmed:
+                    check.append(f"Line {n} {field.replace('_', ' ')} read by OCR at {conf:.0f}% confidence "
+                                 f"from {source}: verify")
+            rec[field] = _v(value, source)
+        out_lines.append(rec)
+
+    # ---- files, missing info, routing --------------------------------------- #
+    files = []
+    for d in docs:
+        entry = {"name": d.name, "type": d.kind, "capture": d.capture, "text_from": d.text_from, "chars": len(d.text)}
+        if d.error:
+            entry["error"] = d.error
+        files.append(entry)
+    missing = []
+    if not any(ln["quantities"]["value"] or ln["annual_usage"]["value"] for ln in out_lines):
+        missing.append("quantity")
+    elif any(not (ln["quantities"]["value"] or ln["annual_usage"]["value"]) for ln in out_lines):
+        missing.append("quantity for some lines")
+    has_drawing = any(d.kind in ("drawing", "3D model") for d in docs)
+    if not has_drawing and not em["drawing_links"]:
+        missing.append("drawing")
+    if em["drawing_links"] and not has_drawing:
+        check.append("Drawings are behind a link, not attached: " + ", ".join(em["drawing_links"]))
+    if em["drawing_later"] and not has_drawing:
+        check.append("The sender says the drawing will follow")
+    if not any(ln["material"]["value"] for ln in out_lines) and not em["drawing_links"]:
+        missing.append("material")
+    for d in docs:
+        if d.method == "none" or not d.text:
+            check.append(f"No text could be read from {d.name}" + (f" ({d.error})" if d.error else ""))
+
+    routing = None
+    if decision:
+        due = decision.get("due") or {}
+        routing = {"lane": decision.get("lane_name") or decision.get("lane"), "lane_id": decision.get("lane"),
+                   "estimator": decision.get("owner"), "priority": decision.get("priority"),
+                   "quote_by": due.get("date") if isinstance(due, dict) else None}
+
+    seen = set()
+    check = [c for c in check if not (c in seen or seen.add(c))]
+    return {
+        "email_id": email.get("id"), "received": email.get("received"), "subject": clean(email.get("subject")),
+        "is_rfq": is_rfq(email, decision),
+        "customer": customer, "customer_source": customer_src, "customer_tier": cust.get("tier") if cust else None,
+        "contact": clean(email.get("from_name")) or None, "contact_email": clean(email.get("from_email")) or None,
+        "rfq_number": rfq_number, "quote_ref": quote_ref, "request": em["request"],
+        "respond_by": respond, "delivery": delivery, "terms": terms,
+        "requirements": requirements, "export_control": export,
+        "lines": out_lines, "files": files, "missing": missing, "check": check, "routing": routing,
+    }
+
+
+def extract_all(emails: List[Dict[str, Any]], texts_by_email: Dict[str, Dict[str, Dict[str, Any]]],
+                shop: Dict[str, Any], decisions: Optional[Dict[str, Dict[str, Any]]] = None, *,
+                today: Optional[dt.date] = None) -> List[Dict[str, Any]]:
+    """Records for the emails that are RFQs, in inbox order."""
+    out = []
+    for email in emails:
+        dec = (decisions or {}).get(email.get("id"))
+        if not is_rfq(email, dec):
+            continue
+        out.append(extract(email, (texts_by_email or {}).get(email.get("id"), {}), shop, dec, today=today))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# The consolidated file
+# --------------------------------------------------------------------------- #
+CSV_COLUMNS = ["Email", "Received", "Customer", "Tier", "Contact", "Contact email", "RFQ number", "Quote ref",
+               "Request", "Respond by", "Delivery", "Line", "Part number", "Rev", "Description", "Material", "Finish",
+               "Size", "Quantities", "Annual usage", "Export control", "Export control found in", "Requirements",
+               "Files", "Missing info", "Check", "Lane", "Estimator", "Priority", "Quote by"]
+
+
+def _cell(value: Any) -> str:
+    """A spreadsheet-safe cell: text that starts like a formula gets a leading apostrophe."""
+    if value is None:
+        return ""
+    s = str(value)
+    if s[:1] in ("=", "+", "@", "\t", "\r") or (s[:1] == "-" and len(s) > 1 and not re.match(r"-\d", s)):
+        return "'" + s
+    return s
+
+
+def to_csv(records: List[Dict[str, Any]], bom: bool = False) -> str:
+    """One row per part line, RFC 4180 (CRLF line ends, quoted where needed). bom=True puts a UTF-8
+    byte order mark first so Excel opens the file as UTF-8."""
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+    w.writerow(CSV_COLUMNS)
+    for r in records:
+        files = "; ".join(f"{f['name']} ({f['type']}, {f['text_from']})" for f in r.get("files") or [])
+        routing = r.get("routing") or {}
+        for ln in r.get("lines") or [{}]:
+            q = (ln.get("quantities") or {}).get("value")
+            au = (ln.get("annual_usage") or {}).get("value")
+            w.writerow([_cell(x) for x in [
+                r.get("email_id"), r.get("received"), r.get("customer"), r.get("customer_tier"), r.get("contact"),
+                r.get("contact_email"), (r.get("rfq_number") or {}).get("value"),
+                (r.get("quote_ref") or {}).get("value"), r.get("request"), (r.get("respond_by") or {}).get("value"),
+                (r.get("delivery") or {}).get("value"), ln.get("line"), (ln.get("part_number") or {}).get("value"),
+                (ln.get("rev") or {}).get("value"), (ln.get("description") or {}).get("value"),
+                (ln.get("material") or {}).get("value"), (ln.get("finish") or {}).get("value"),
+                (ln.get("size") or {}).get("value"), " / ".join(str(x) for x in q) if q else "",
+                au if au else "", (r.get("export_control") or {}).get("value"),
+                (r.get("export_control") or {}).get("source"),
+                "; ".join(x["value"] for x in r.get("requirements") or []), files,
+                "; ".join(r.get("missing") or []), "; ".join(r.get("check") or []),
+                routing.get("lane"), routing.get("estimator"), routing.get("priority"), routing.get("quote_by")]])
+    text = buf.getvalue()
+    return ("﻿" + text) if bom else text
+
+
+def to_json(records: List[Dict[str, Any]]) -> str:
+    return json.dumps({"about": "RFQ details extracted by rfq_details.py: one record per RFQ email, every value "
+                                "with the place it came from.", "records": records}, indent=1, ensure_ascii=False) + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# CLI: read the files, write the consolidated file, or grade against the answer key
+# --------------------------------------------------------------------------- #
+def _fallback_text(data: bytes, media: str) -> Dict[str, Any]:
+    """Without ocr.py: PDF text layers through pypdf (attachments.extract_pdf_text) and STEP
+    headers. Scans come back empty, which --check will show."""
+    base = {"method": "none", "text": "", "confidence": None, "pages": None, "lines": [], "settings": {},
+            "seconds": 0.0, "error": None}
+    if media == "pdf":
+        try:
+            import attachments
+            got = attachments.extract_pdf_text(data)
+        except Exception as exc:  # noqa: BLE001
+            return dict(base, error=f"could not read the PDF ({exc})")
+        if len((got.get("text") or "").strip()) > 40:
+            return dict(base, method="text-layer", text=got["text"], pages=got.get("pages"))
+        return dict(base, error="no text layer and ocr.py is not available")
+    if media == "step":
+        head = data[:2_000_000].decode("latin-1", "replace")
+        m = re.search(r"PRODUCT\s*\(\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'", head)
+        if m:
+            text = f"Part number: {m.group(1)}\nTitle: {m.group(2)}\nProduct description: {m.group(3)}"
+            return dict(base, method="step-header", text=text)
+    return dict(base, error="ocr.py is not available")
+
+
+def load_texts(emails: List[Dict[str, Any]], cache_path: Optional[Path] = BETA_CACHE, allow_ocr: bool = True,
+               texts_file: Optional[Path] = None) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """email id -> attachment name -> file_text result, for attachments that are real files."""
+    pre = json.loads(Path(texts_file).read_text(encoding="utf-8")) if texts_file else None
+    ocr_mod, cache = None, None
+    if pre is None:
+        try:
+            import ocr as ocr_mod  # noqa: F811
+            cache = ocr_mod.OcrCache(cache_path) if cache_path else None
+        except Exception:  # noqa: BLE001 - ocr.py missing or broken: fall back to text layers
+            ocr_mod = None
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    dirty = False
+    for email in emails:
+        for att in email.get("attachments") or []:
+            if not isinstance(att, dict) or not att.get("path"):
+                continue
+            rel = att["path"]
+            if pre is not None:
+                if rel in pre:
+                    out.setdefault(email["id"], {})[att["name"]] = pre[rel]
+                continue
+            path = DATA_DIR / rel
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                out.setdefault(email["id"], {})[att["name"]] = {"method": "none", "text": "", "error": str(exc)}
+                continue
+            media = att.get("media") or path.suffix.lstrip(".").lower()
+            if ocr_mod is not None:
+                before = len(getattr(cache, "_entries", {}) or {}) if cache is not None else 0
+                res = ocr_mod.file_text(data, media, att["name"], cache=cache, allow_ocr=allow_ocr)
+                dirty = dirty or (cache is not None and len(getattr(cache, "_entries", {}) or {}) != before)
+            else:
+                res = _fallback_text(data, media)
+            out.setdefault(email["id"], {})[att["name"]] = res
+    if dirty and cache is not None:
+        try:
+            cache.save()
+        except Exception:  # noqa: BLE001 - a read-only checkout still gets its results
+            pass
+    return out
+
+
+def load_shop() -> Dict[str, Any]:
+    try:
+        return json.loads((HERE / "shop_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+# ---- grading ----------------------------------------------------------------- #
+def _text_ok(got: Any, truth: Dict[str, Any]) -> bool:
+    if truth.get("value") is None:
+        return got in (None, "", [])
+    if got in (None, ""):
+        return False
+    options = [truth["value"]] + list(truth.get("accept") or [])
+    return any(norm(got) == norm(o) or similar(got, o) >= 0.85 for o in options)
+
+
+def _id_ok(got: Any, truth: Dict[str, Any], strip_rfq: bool = False) -> bool:
+    tv = truth.get("value")
+    if tv is None:
+        return got in (None, "")
+    if not got:
+        return False
+    a, b = str(got).upper(), str(tv).upper()
+    if strip_rfq:
+        a, b = re.sub(r"^RFQ-?", "", a), re.sub(r"^RFQ-?", "", b)
+    return re.sub(r"[^A-Z0-9]", "", a) == re.sub(r"[^A-Z0-9]", "", b)
+
+
+def _source_kind(field: str, where: List[str], files: Dict[str, Dict[str, Any]], value: Any) -> str:
+    """Which kind of source a correct answer has to come from: the one that wins by precedence."""
+    if value in (None, [], ""):
+        return "empty"
+    typed = [(w, files.get(w, {})) for w in where if w in files]
+    by_type = {"drawing": [w for w, f in typed if f.get("type") == "drawing"],
+               "RFQ form": [w for w, f in typed if f.get("type") == "RFQ form"],
+               "3D model": [w for w, f in typed if f.get("type") == "3D model"]}
+    emailish = any(w in ("email", "subject") for w in where)
+    if field in ("rfq_number", "quote_ref", "customer", "export_control", "requirements", "annual_usage"):
+        if emailish:
+            return "email"
+        for w, f in typed:
+            return f.get("text", "text layer")
+        return "email"
+    order = ("RFQ form", "drawing") if field in ("quantities", "respond_by") else ("drawing", "RFQ form", "3D model")
+    for t in order:
+        if by_type.get(t):
+            return files[by_type[t][0]].get("text", "text layer")
+    return "email"
+
+
+def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any]:
+    """Field-by-field comparison with the answer key."""
+    files = truth.get("files") or {}
+    by_id = {r["email_id"]: r for r in records}
+    rows: List[Dict[str, Any]] = []
+
+    def add(eid: str, field: str, ok: bool, kind: str, got: Any, want: Any, attach_only: bool) -> None:
+        rows.append({"email": eid, "field": field, "ok": bool(ok), "kind": kind, "got": got, "want": want,
+                     "attachment_only": attach_only})
+
+    for eid, t in (truth.get("rfqs") or {}).items():
+        r = by_id.get(eid)
+        if r is None:
+            add(eid, "is_rfq", False, "email", "skipped", "RFQ", False)
+            continue
+        for field in ("customer",):
+            add(eid, field, _text_ok(r.get(field), {"value": t[field]}), "email", r.get(field), t[field], False)
+        add(eid, "customer_tier", r.get("customer_tier") == t.get("customer_tier"), "email", r.get("customer_tier"),
+            t.get("customer_tier"), False)
+        for field in ("rfq_number", "quote_ref"):
+            tv = t[field]
+            got = (r.get(field) or {}).get("value")
+            where = tv.get("where") or []
+            add(eid, field, _id_ok(got, tv, strip_rfq=field == "rfq_number"),
+                _source_kind(field, where, files, tv.get("value")), got, tv.get("value"),
+                bool(where) and not any(w in ("email", "subject") for w in where))
+        add(eid, "request", r.get("request") == t.get("request"), "email", r.get("request"), t.get("request"), False)
+        tv = t["respond_by"]
+        got = (r.get("respond_by") or {}).get("value")
+        where = tv.get("where") or []
+        add(eid, "respond_by", got == tv.get("value"), _source_kind("respond_by", where, files, tv.get("value")),
+            got, tv.get("value"), bool(where) and not any(w in ("email", "subject") for w in where))
+        tv = t["export_control"]
+        got = (r.get("export_control") or {}).get("value")
+        where = tv.get("where") or []
+        add(eid, "export_control", (got or None) == tv.get("value"),
+            _source_kind("export_control", where, files, tv.get("value")), got, tv.get("value"),
+            bool(where) and not any(w in ("email", "subject") for w in where))
+        # requirements: recall of the answer key's items, and how many extracted items match none
+        got_reqs = [x["value"] for x in r.get("requirements") or []]
+        for item in t.get("requirements") or []:
+            ok = any(overlap(item["value"], g) >= 0.7 for g in got_reqs)
+            add(eid, "requirements", ok, _source_kind("requirements", item.get("where") or [], files, item["value"]),
+                "" if ok else "; ".join(got_reqs)[:120], item["value"],
+                not any(w in ("email", "subject") for w in item.get("where") or []))
+        extra = [g for g in got_reqs if not any(overlap(i["value"], g) >= 0.7 for i in t.get("requirements") or [])]
+        for g in extra:
+            rows.append({"email": eid, "field": "requirements (extra)", "ok": False, "kind": "extra", "got": g,
+                         "want": None, "attachment_only": False})
+        add(eid, "missing", sorted(r.get("missing") or []) == sorted(t.get("missing") or []), "email",
+            r.get("missing"), t.get("missing"), False)
+        # lines: pair by part number, then by position
+        got_lines = list(r.get("lines") or [])
+        used = set()
+        for k, tl in enumerate(t.get("lines") or []):
+            tpn = (tl["part_number"] or {}).get("value")
+            match = None
+            for j, gl in enumerate(got_lines):
+                if j in used:
+                    continue
+                if tpn and fold((gl.get("part_number") or {}).get("value") or "") == fold(tpn):
+                    match = j
+                    break
+            if match is None and k < len(got_lines) and k not in used and not tpn:
+                match = k
+            if match is None:
+                match = next((j for j in range(len(got_lines)) if j not in used and
+                              not (got_lines[j].get("part_number") or {}).get("value")), None)
+            gl = got_lines[match] if match is not None else {}
+            if match is not None:
+                used.add(match)
+            for field in ("part_number", "rev", "description", "material", "finish", "quantities", "annual_usage"):
+                tv = tl.get(field) or {"value": None}
+                got = (gl.get(field) or {}).get("value")
+                if field in ("part_number", "rev"):
+                    ok = _id_ok(got, tv)
+                elif field in ("quantities", "annual_usage"):
+                    ok = (got or None) == tv.get("value")
+                else:
+                    ok = _text_ok(got, tv)
+                where = tv.get("where") or []
+                add(eid, field, ok, _source_kind(field, where, files, tv.get("value")), got, tv.get("value"),
+                    bool(where) and not any(w in ("email", "subject") for w in where))
+        for j, gl in enumerate(got_lines):
+            if j not in used:
+                rows.append({"email": eid, "field": "lines (extra)", "ok": False, "kind": "extra",
+                             "got": (gl.get("part_number") or {}).get("value"), "want": None,
+                             "attachment_only": False})
+        # file types
+        for f in r.get("files") or []:
+            tf = files.get(f["name"])
+            if tf:
+                add(eid, "file type", f["type"] == tf["type"], tf.get("text", "text layer"), f["type"], tf["type"],
+                    False)
+    for eid in truth.get("not_rfq") or []:
+        if eid in by_id:
+            add(eid, "is_rfq", False, "email", "RFQ", "not an RFQ", False)
+    return {"rows": rows}
+
+
+def print_grade(result: Dict[str, Any], verbose: bool = False) -> Tuple[int, int]:
+    rows = result["rows"]
+    scored = [r for r in rows if r["kind"] != "extra"]
+    fields = []
+    for r in scored:
+        if r["field"] not in fields:
+            fields.append(r["field"])
+    kinds = ["email", "text layer", "STEP header", "OCR", "empty"]
+    print(f"{'field':<16}{'all':>12}" + "".join(f"{k:>14}" for k in kinds))
+    for f in fields:
+        sub = [r for r in scored if r["field"] == f]
+        line = f"{f:<16}{_frac(sub):>12}"
+        for k in kinds:
+            ks = [r for r in sub if r["kind"] == k]
+            line += f"{_frac(ks) if ks else '-':>14}"
+        print(line)
+    line = f"{'TOTAL':<16}{_frac(scored):>12}"
+    for k in kinds:
+        ks = [r for r in scored if r["kind"] == k]
+        line += f"{_frac(ks) if ks else '-':>14}"
+    print(line)
+    att = [r for r in scored if r["attachment_only"]]
+    print(f"\nvalues printed only on attachments: {_frac(att)}"
+          f"   (OCR-only: {_frac([r for r in att if r['kind'] == 'OCR'])})")
+    extras = [r for r in rows if r["kind"] == "extra"]
+    print(f"extra items not in the answer key: {len(extras)}"
+          + (" (" + ", ".join(f"{r['email']} {r['field']}" for r in extras[:12]) + ")" if extras else ""))
+    wrong = [r for r in scored if not r["ok"]]
+    if wrong:
+        print(f"\n{len(wrong)} wrong:")
+        for r in wrong if verbose else wrong[:40]:
+            print(f"  {r['email']:<4} {r['field']:<15} [{r['kind']}] got {str(r['got'])[:70]!r} want {str(r['want'])[:70]!r}")
+    return sum(r["ok"] for r in scored), len(scored)
+
+
+def _frac(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "-"
+    ok = sum(r["ok"] for r in rows)
+    return f"{ok}/{len(rows)} {100 * ok / len(rows):.0f}%"
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Extract RFQ details into one consolidated file.")
+    ap.add_argument("--emails", default=str(BETA_EMAILS), help="inbox JSON (default: the beta inbox)")
+    ap.add_argument("--out", default=str(BETA_OUT), help="output path without extension (.csv and .json)")
+    ap.add_argument("--cache", default=str(BETA_CACHE), help="OCR cache (default: data/rfq_beta/ocr_cache.json)")
+    ap.add_argument("--no-ocr", action="store_true", help="never run tesseract; use the cache and text layers only")
+    ap.add_argument("--today", default=SAMPLE_INBOX_DATE.isoformat(), help="date the emails arrived (YYYY-MM-DD)")
+    ap.add_argument("--texts", help="precomputed file_text results keyed by path under data/ (for evaluation)")
+    ap.add_argument("--check", action="store_true", help="grade against tests/rfq_beta_fields_truth.json")
+    ap.add_argument("--verbose", action="store_true", help="with --check, list every wrong field")
+    args = ap.parse_args(argv)
+    today = dt.date.fromisoformat(args.today)
+    inbox = json.loads(Path(args.emails).read_text(encoding="utf-8"))
+    emails = inbox.get("emails", inbox) if isinstance(inbox, dict) else inbox
+    texts = load_texts(emails, Path(args.cache) if args.cache else None, allow_ocr=not args.no_ocr,
+                       texts_file=Path(args.texts) if args.texts else None)
+    records = extract_all(emails, texts, load_shop(), today=today)
+    if args.check:
+        truth = json.loads(FIELDS_TRUTH.read_text(encoding="utf-8"))
+        ok, total = print_grade(grade(records, truth), verbose=args.verbose)
+        print(f"\n{ok}/{total} fields correct ({100 * ok / max(1, total):.1f}%)")
+        return 0
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.with_suffix(".csv").write_text(to_csv(records, bom=True), encoding="utf-8", newline="")
+    out.with_suffix(".json").write_text(to_json(records), encoding="utf-8")
+    n_lines = sum(len(r["lines"]) for r in records)
+    print(f"{len(records)} RFQs, {n_lines} part lines -> {out.with_suffix('.csv')} and {out.with_suffix('.json')}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,4 +1,6 @@
-# The demo server itself is standard library only. pypdf lets Jev read the text of PDFs
-# that people upload in "Paste an RFQ"; without it the demo still runs and Jev sees only
-# the file names of uploaded PDFs.
-pypdf==6.19.0
+# The demo server itself is standard library only. These add the file features, and each is
+# optional when running locally: without one, that feature degrades and the demo still runs.
+pypdf==6.19.0        # reads the text layer of PDFs
+Pillow==12.3.0       # prepares scans and photos for OCR, makes image thumbnails
+numpy==2.4.6         # the YOLO region detector (layout.py)
+onnxruntime==1.30.0  # runs the YOLO model (models/rfq_layout.onnx)

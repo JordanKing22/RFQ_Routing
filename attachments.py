@@ -13,6 +13,11 @@ From one spec this module makes three things that always agree:
 Uploaded files (Paste an RFQ) are kept in memory only. PDFs are read with pypdf, in a separate
 process with a time limit, so a hostile or broken PDF cannot hang the server. Without pypdf the
 demo still works; Jev then sees only the file name of an uploaded PDF.
+
+Real files on disk (kind "file", the RFQ details beta inbox in data/rfq_beta) are read the way a
+mail system would read them: the PDF text layer when there is one, Tesseract OCR (ocr.py) for scans,
+faxes, photos, and screenshots, and the header of a STEP file. Scanned or photographed uploads get
+OCR too when Tesseract is installed.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import docgen
 import drawings
+import stepfile
 from docgen import BLACK, LETTER, Page, clean, legend_text, text_width, wrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,7 +46,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC_KINDS = ("drawing", "model", "rfq_form", "po", "document")
 KIND_LABELS = {
     "drawing": "Drawing", "model": "3D model", "rfq_form": "RFQ form", "po": "Purchase order",
-    "document": "Document", "upload": "Uploaded file", "name_only": "File name only",
+    "document": "Document", "upload": "Uploaded file", "name_only": "File name only", "file": "File",
 }
 DOC_TYPE_LABELS = {
     "resume": "Resume", "brochure": "Brochure", "cert": "Certificate", "invoice": "Invoice",
@@ -82,7 +88,7 @@ def media_of(att: Dict[str, Any]) -> Optional[str]:
         return "pdf"
     if kind == "model":
         return "step"
-    if kind == "upload":
+    if kind in ("upload", "file"):
         return att.get("media")
     return None
 
@@ -201,12 +207,21 @@ def jev_text(att: Dict[str, Any]) -> str:
     kind = att.get("kind")
     if kind in SPEC_KINDS:
         return spec_text(att)
+    if kind == "file":
+        text = (att.get("text") or "").strip()
+        if text:
+            return text
+        if att.get("text_error"):
+            return f"(file; its text could not be read: {att['text_error']})"
+        return "(no text was found in this file)"
     if kind == "upload":
+        text = (att.get("text") or "").strip()
         if att.get("media") in ("png", "jpg"):
+            if text:
+                return text
             w, h = att.get("width"), att.get("height")
             dims = f", {w} x {h} px" if w and h else ""
-            return f"(image file{dims}; there is no text to read)"
-        text = (att.get("text") or "").strip()
+            return f"(image file{dims}; no text could be read from it)"
         if text:
             return text
         if att.get("text_error"):
@@ -833,6 +848,15 @@ class UploadStore:
             item.update(text=tidy_pdf_text(result["text"]), pages=result["pages"], text_error=result["error"])
         else:
             item["width"], item["height"] = image_size(data, media)
+        # A scan or a photo has no text layer: read it with Tesseract when the server has it.
+        if not item["text"] and ocr_ready():
+            result = _ocr().file_text(data, media, item["name"], effort=UPLOAD_OCR_EFFORT)
+            if result.get("method") == "ocr" and (result.get("text") or "").strip():
+                item.update(text=tidy_pdf_text(result["text"])[:PDF_TEXT_MAX_CHARS], text_error=None,
+                            text_method="ocr", text_conf=result.get("confidence"),
+                            pages=result.get("pages") or item["pages"])
+            elif result.get("error") and media != "pdf":
+                item["text_error"] = result["error"]
         with self.lock:
             self.items[item["id"]] = item
             self._evict()
@@ -861,13 +885,203 @@ def upload_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
     """The attachment entry stored on the email. The text stays even if the bytes are dropped later."""
     return {"name": item["name"], "kind": "upload", "media": item["media"], "upload_id": item["id"],
             "size": item["size"], "pages": item["pages"], "width": item["width"], "height": item["height"],
-            "text": item["text"][:PDF_TEXT_MAX_CHARS], "text_error": item["text_error"]}
+            "text": item["text"][:PDF_TEXT_MAX_CHARS], "text_error": item["text_error"],
+            "text_method": item.get("text_method"), "text_conf": item.get("text_conf")}
 
 
 def upload_public(item: Dict[str, Any]) -> Dict[str, Any]:
     """What the browser gets right after an upload, for the preview tile."""
     att = upload_attachment(item)
     return dict(describe(att, f"/api/upload/{item['id']}", available=True), id=item["id"])
+
+
+# --------------------------------------------------------------------------- #
+# Real files on disk, OCR, and thumbnails
+# --------------------------------------------------------------------------- #
+UPLOAD_OCR_EFFORT = os.environ.get("RFQ_UPLOAD_OCR_EFFORT", "fast")
+_ocr_mod: Any = None
+
+
+def _ocr() -> Any:
+    """ocr.py, imported lazily so the demo still runs where it cannot be imported."""
+    global _ocr_mod
+    if _ocr_mod is None:
+        try:
+            import ocr as mod
+            _ocr_mod = mod
+        except Exception:  # noqa: BLE001
+            _ocr_mod = False
+    return _ocr_mod or None
+
+
+def ocr_ready() -> bool:
+    mod = _ocr()
+    if not mod:
+        return False
+    try:
+        return bool(mod.available().get("ocr"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class LayeredCache:
+    """OCR results: the committed cache (read only) on top of a writable one in the cache folder."""
+
+    def __init__(self, seed: Any, live: Any):
+        self.seed, self.live = seed, live
+
+    def get(self, sha256: str) -> Optional[Dict[str, Any]]:
+        return (self.live.get(sha256) if self.live else None) or (self.seed.get(sha256) if self.seed else None)
+
+    def put(self, sha256: str, result: Dict[str, Any]) -> None:
+        if self.live:
+            self.live.put(sha256, result)
+
+    def save(self) -> None:
+        if self.live:
+            try:
+                self.live.save()
+            except Exception:  # noqa: BLE001 - a read-only disk only loses the speedup
+                pass
+
+
+_MARKINGS = [("itar", re.compile(r"INTERNATIONAL\s+TRAFFIC\s+IN\s+ARMS|\bITAR\b|ARMS\s+EXPORT\s+CONTROL", re.I)),
+             ("ear", re.compile(r"EXPORT\s+ADMINISTRATION\s+REGULATIONS|\bECCN\b", re.I)),
+             ("cui", re.compile(r"\bCUI\b|CONTROLLED\s+UNCLASSIFIED", re.I))]
+
+
+def detect_legend(text: str) -> Optional[str]:
+    """The export-control marking printed on a file, read from its text (the tile's lock badge)."""
+    for key, rx in _MARKINGS:
+        if rx.search(text or ""):
+            return key
+    return None
+
+
+def classify(text: str, media: Optional[str]) -> str:
+    """What a file is, from what is printed on it (not its name)."""
+    t = (text or "").upper()
+    if media == "step":
+        return "3D model"
+    if "REQUEST FOR QUOTATION" in t or re.search(r"\bRFQ\s*NO", t):
+        return "RFQ form"
+    if "PURCHASE ORDER" in t and re.search(r"PO\s*NUMBER|ORDER\s+TOTAL", t):
+        return "Purchase order"
+    if re.search(r"DWG\.?\s*NO|UNLESS\s+OTHERWISE\s+SPECIFIED|THIRD\s+ANGLE|REVISIONS", t):
+        return "Drawing"
+    return {"jpg": "Photo", "png": "Image", "pdf": "Document"}.get(media or "", "File")
+
+
+def resolve_data_path(data_dir: Any, rel: str) -> Optional[str]:
+    """A beta file path, kept inside data/. Returns None for anything that escapes it."""
+    base = os.path.realpath(str(data_dir))
+    target = os.path.realpath(os.path.join(base, rel or ""))
+    return target if target.startswith(base + os.sep) and os.path.isfile(target) else None
+
+
+def prepare_file(att: Dict[str, Any], data_dir: Any, cache: Any = None) -> Dict[str, Any]:
+    """Read one real attachment: its bytes, its text (text layer, OCR, or STEP header), and what it
+    is. Updates the attachment dict in place and returns it. Never raises."""
+    path = resolve_data_path(data_dir, att.get("path", ""))
+    if not path:
+        att.update(prepared=True, available=False, text="", text_error="the file is missing")
+        return att
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        att.update(prepared=True, available=False, text="", text_error=f"could not read the file ({exc})")
+        return att
+    media = att.get("media") or sniff(data) or ("step" if data[:12] == b"ISO-10303-21" else None)
+    att.update(media=media, size=len(data), sha256=hashlib.sha256(data).hexdigest(), available=True)
+    if media in ("png", "jpg"):
+        att["width"], att["height"] = image_size(data, media)
+    if media == "step":
+        info = stepfile.parse(data)
+        att["step"] = {k: info.get(k) for k in ("part_number", "title", "units", "schema", "system")}
+        att["step"]["bbox"] = stepfile.bbox_phrase(info.get("mesh"), info.get("units"))
+        att["_mesh"] = info.get("mesh")
+    result: Optional[Dict[str, Any]] = None
+    mod = _ocr()
+    if mod and hasattr(mod, "file_text"):
+        try:
+            result = mod.file_text(data, media or "", att.get("name", ""), cache=cache)
+        except Exception as exc:  # noqa: BLE001 - fall back to the readers below
+            result = {"method": "none", "text": "", "confidence": None, "pages": None, "error": repr(exc)}
+    if not result or (not (result.get("text") or "").strip() and media in ("pdf", "step")):
+        # Without ocr.py: the PDF text layer through pypdf, and the STEP header. Scans stay unread.
+        if media == "pdf":
+            r = extract_pdf_text(data)
+            result = {"method": "text-layer" if r["text"].strip() else "none", "text": r["text"],
+                      "pages": r["pages"], "confidence": None,
+                      "error": r["error"] or (None if r["text"].strip() else "a scan, and OCR is not available")}
+        elif media == "step":
+            st = att.get("step") or {}
+            result = {"method": "step-header", "confidence": None, "pages": None, "error": None,
+                      "text": f"3D CAD MODEL (STEP {st.get('schema') or ''})\nPART: {st.get('part_number') or ''}"
+                              f" {st.get('title') or ''}\nUNITS: {st.get('units') or ''}. BOUNDING BOX: "
+                              f"{st.get('bbox') or 'unknown'}"}
+        else:
+            result = result or {"method": "none", "text": "", "confidence": None, "pages": None,
+                                "error": "OCR is not available on this server"}
+    text = result.get("text") or ""
+    if result.get("method") in ("ocr", "text-layer"):
+        text = tidy_pdf_text(text)
+    att.update(prepared=True, text=text[:PDF_TEXT_MAX_CHARS], text_method=result.get("method"),
+               text_conf=result.get("confidence"), text_error=result.get("error") if not text else None,
+               pages=result.get("pages"), _file_text=result)
+    att["doc_type"] = classify(text, media)
+    att["legend"] = detect_legend(text)
+    return att
+
+
+def text_from_label(att: Dict[str, Any]) -> str:
+    method = att.get("text_method")
+    if method == "ocr":
+        conf = att.get("text_conf")
+        return f"OCR {round(conf)}%" if conf is not None else "OCR"
+    return {"text-layer": "text layer", "step-header": "STEP header"}.get(method or "", "no text")
+
+
+_thumb_lock = threading.Lock()
+_thumbs: Dict[str, Tuple[bytes, str]] = {}
+
+
+def file_thumb(att: Dict[str, Any], data_dir: Any) -> Optional[Tuple[bytes, str]]:
+    """A small preview of a real file: page 1 of a PDF (pdftoppm), a shrunk image (Pillow), or the
+    shaded 3D view of a STEP model. None when the tools for it are missing."""
+    key = att.get("sha256") or ""
+    with _thumb_lock:
+        if key in _thumbs:
+            return _thumbs[key]
+    path = resolve_data_path(data_dir, att.get("path", ""))
+    if not path:
+        return None
+    media, out = att.get("media"), None
+    try:
+        if media == "step":
+            out = (stepfile.iso_svg(att.get("_mesh")).encode("utf-8"), "image/svg+xml")
+        elif media == "pdf":
+            import shutil
+            if shutil.which("pdftoppm"):
+                proc = subprocess.run(["pdftoppm", "-f", "1", "-l", "1", "-scale-to", "560", "-jpeg",
+                                       "-jpegopt", "quality=78", path], capture_output=True, timeout=30)
+                if proc.returncode == 0 and proc.stdout.startswith(b"\xff\xd8"):
+                    out = (proc.stdout, "image/jpeg")
+        elif media in ("png", "jpg"):
+            from PIL import Image
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((560, 560))
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=82)
+                out = (buf.getvalue(), "image/jpeg")
+    except Exception:  # noqa: BLE001 - no preview is fine, the tile shows an icon
+        out = None
+    if out:
+        with _thumb_lock:
+            _thumbs[key] = out
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -901,11 +1115,34 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
                              "schema": att.get("schema") or "AP214",
                              "system": clean(att.get("originating_system") or ""),
                              "bbox": drawings.bbox_phrase(att)}
+    elif kind == "file" and base:
+        v = (att.get("sha256") or "")[:10]
+        media = att.get("media")
+        info.update(url=f"{base}/file?v={v}", text_url=f"{base}/text", size=att.get("size"),
+                    pages=att.get("pages"), width=att.get("width"), height=att.get("height"),
+                    available=bool(available and att.get("available", True)), text_from=text_from_label(att),
+                    scanned=att.get("text_method") == "ocr", text_error=att.get("text_error"))
+        info["thumb"] = f"{base}/thumb.{'svg' if media == 'step' else 'jpg'}?v={v}"
+        doc = att.get("doc_type") or classify("", media)
+        how = {"jpg": "photo", "png": "screenshot"}.get(media or "", "scan") if info["scanned"] else ""
+        info["label"] = f"{doc} ({how}, {info['text_from']})" if how and doc not in ("Photo", "Image") else \
+            (f"{doc} ({info['text_from']})" if info["scanned"] else doc)
+        if media == "step":
+            step = att.get("step") or {}
+            info["kind"] = "model"  # the viewer shows it in 3D, from the mesh in the file itself
+            info["mesh"] = f"{base}/mesh.json?v={v}"
+            info["model"] = {"schema": step.get("schema") or "STEP", "system": step.get("system") or "",
+                             "units": step.get("units"), "bbox": step.get("bbox")}
+            for key in ("part_number", "title"):
+                if step.get(key):
+                    info[key] = step[key]
     elif kind == "upload":
         text = (att.get("text") or "").strip()
         info.update(size=att.get("size"), pages=att.get("pages"), width=att.get("width"),
                     height=att.get("height"), text_error=att.get("text_error"), text_chars=len(text),
-                    preview=text[:700], available=bool(available and base))
+                    preview=text[:700], available=bool(available and base),
+                    scanned=att.get("text_method") == "ocr", text_from=text_from_label(att)
+                    if att.get("text_method") else None)
         if base:
             info["url"] = f"{base}/file"
             info["text_url"] = f"{base}/text"

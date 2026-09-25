@@ -12,6 +12,11 @@ this server talks to Jev.
 Saved Jev answers: cache/jev_results.json (written as results come in) on top of
 data/saved_results.json (a read-only seed you commit, so replays stay instant after a cloud
 host restarts). Settings > Download saved results gives you that seed file.
+
+RFQ details beta: the inbox is data/rfq_beta/emails.json, whose attachments are 30 real files. Their
+text comes from the PDF text layer or, for the uncopyable scans, faxes, photos, and screenshots,
+from Tesseract OCR (ocr.py), with results cached in data/rfq_beta/ocr_cache.json. rfq_details.py
+pulls the details out of every RFQ; /api/rfq_details.csv is the consolidated file.
 """
 
 from __future__ import annotations
@@ -44,9 +49,19 @@ import router
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 CONFIG_FILE = HERE / "shop_config.json"
-EMAILS_FILE = Path(os.environ.get("RFQ_EMAILS_FILE") or HERE / "data" / "sample_emails.json")
+DATA_DIR = HERE / "data"
+# This branch opens the RFQ details beta inbox. RFQ_EMAILS_FILE=data/sample_emails.json brings back
+# the 100-email inbox with generated attachments.
+EMAILS_FILE = Path(os.environ.get("RFQ_EMAILS_FILE") or DATA_DIR / "rfq_beta" / "emails.json")
 CACHE_FILE = Path(os.environ.get("RFQ_CACHE_DIR") or HERE / "cache") / "jev_results.json"
-SEED_FILE = Path(os.environ.get("RFQ_SEED_FILE") or HERE / "data" / "saved_results.json")
+SEED_FILE = Path(os.environ.get("RFQ_SEED_FILE") or DATA_DIR / "saved_results.json")
+OCR_SEED_FILE = Path(os.environ.get("RFQ_OCR_CACHE") or DATA_DIR / "rfq_beta" / "ocr_cache.json")
+OCR_LIVE_FILE = CACHE_FILE.parent / "ocr_cache.json"
+
+try:
+    import rfq_details
+except Exception:  # noqa: BLE001 - the demo still routes without the details extractor
+    rfq_details = None  # type: ignore[assignment]
 
 # Stop the queue on these: retrying cannot fix them.
 FATAL_KINDS = {"auth", "billing", "validation", "network", "not_found", "config", "bad_response"}
@@ -241,6 +256,13 @@ class App:
         self.order_version = 0
         self._keys: Dict[str, str] = {}
         self._decisions: Dict[str, Any] = {}
+        # Real attachment files: their text (text layer or OCR) must be ready before an email's
+        # Jev state, and so its cache key, can be computed.
+        self._prepared: set = set()
+        self._prep_locks: Dict[str, threading.Lock] = {}
+        self._email_changed_at: Dict[str, int] = {}
+        self._details: Dict[str, Any] = {}
+        self.ocr_cache = self._open_ocr_cache()
         self.live_count = 0
         self.last_call_at: Optional[float] = None
         self.pace_seconds: Optional[float] = None
@@ -257,6 +279,69 @@ class App:
         specs = [a for e in self.emails.values() for a in e["attachments"]]
         specs += [a for ex in self.paste_examples for a in ex["attachments"]]
         threading.Thread(target=att_mod.warm, args=(specs,), name="file-warmup", daemon=True).start()
+        # Emails whose files are all in the OCR cache are ready now (hashing and a lookup); the rest
+        # are read in the background, and the worker reads any it reaches first.
+        slow = []
+        for eid in self.order:
+            files = [a for a in self.emails[eid]["attachments"] if a.get("kind") == "file"]
+            if not files:
+                self._prepared.add(eid)
+            elif all(self._cached(a) for a in files):
+                self.prepare_email(eid)
+            else:
+                slow.append(eid)
+        if slow:
+            threading.Thread(target=lambda: [self.prepare_email(e) for e in slow], name="file-prep",
+                             daemon=True).start()
+
+    # ---- real attachment files ---------------------------------------------- #
+    @staticmethod
+    def _open_ocr_cache() -> Any:
+        ocr_mod = att_mod._ocr()
+        if not ocr_mod:
+            return None
+        try:
+            seed = ocr_mod.OcrCache(OCR_SEED_FILE) if OCR_SEED_FILE.is_file() else None
+            return att_mod.LayeredCache(seed, ocr_mod.OcrCache(OCR_LIVE_FILE))
+        except Exception as exc:  # noqa: BLE001
+            log(f"OCR cache unavailable ({exc}); scans will be read live.")
+            return None
+
+    def _cached(self, att: Dict[str, Any]) -> bool:
+        if att.get("media") == "step" or self.ocr_cache is None:
+            return att.get("media") == "step"
+        path = att_mod.resolve_data_path(DATA_DIR, att.get("path", ""))
+        if not path:
+            return True  # missing file: preparing it is instant
+        try:
+            with open(path, "rb") as fh:
+                return self.ocr_cache.get(hashlib.sha256(fh.read()).hexdigest()) is not None
+        except OSError:
+            return True
+
+    def prepare_email(self, eid: str) -> None:
+        """Read an email's real files (text layer, OCR, STEP header). Safe to call from any thread."""
+        if eid in self._prepared:
+            return
+        lock = self._prep_locks.setdefault(eid, threading.Lock())
+        with lock:
+            if eid in self._prepared:
+                return
+            email = self.emails[eid]
+            started = time.time()
+            for att in email.get("attachments") or []:
+                if att.get("kind") == "file" and not att.get("prepared"):
+                    att_mod.prepare_file(att, DATA_DIR, self.ocr_cache)
+            if self.ocr_cache is not None:
+                self.ocr_cache.save()
+            seconds = time.time() - started
+            if seconds > 2:
+                log(f"Read the attachments of {eid} in {seconds:.1f}s (OCR)")
+            with self.cond:
+                self._keys.pop(eid, None)
+                self._prepared.add(eid)
+                self._bump()
+                self._email_changed_at[eid] = self.version
 
     @staticmethod
     def _blank_item() -> Dict[str, Any]:
@@ -292,14 +377,18 @@ class App:
                         to_queue.append(eid)
                     continue
                 email = self.emails[eid]
-                if use_cache:
+                # Files not read yet (a scan waiting for OCR): the worker reads them first, then
+                # still uses a saved answer if there is one.
+                if use_cache and eid in self._prepared:
                     record = self.cache.get(self.key_for(email))
                     if record:
                         item.update(status="done", source="cache", record=record, error=None,
                                     routed_at=time.time())
                         cached += 1
                         continue
-                if self.jev is None:
+                if self.jev is None and use_cache and eid not in self._prepared:
+                    pass  # it may still replay from the cache once its files are read
+                elif self.jev is None:
                     item.update(status="error", error={
                         "kind": "config", "message": "No Jev API key found.",
                         "hint": "Put AI_GATEWAY_API_KEY=vck_... in Jev_Test/.env, then restart the demo."})
@@ -513,6 +602,20 @@ class App:
                 if item is None or item["status"] != "queued":
                     continue
                 email = self.emails[eid]
+                needs_files = eid not in self._prepared
+                if needs_files:
+                    gen = self.generation
+                    self.worker.update(state="running", current=eid, message=f"Reading the attachments of {eid}",
+                                       resume_at=None, wait_reason=None)
+                    self._bump()
+            if needs_files:
+                self.prepare_email(eid)  # OCR can take a while: never hold the lock for it
+            with self.cond:
+                if needs_files and (self.generation != gen or item["status"] != "queued"):
+                    if item["status"] == "queued":
+                        item["status"] = "idle"
+                    self._bump()
+                    continue
                 if item.get("use_cache"):
                     record = self.cache.get(self.key_for(email))
                     if record:
@@ -520,6 +623,12 @@ class App:
                                     routed_at=time.time())
                         self._bump()
                         continue
+                if self.jev is None:
+                    item.update(status="error", error={
+                        "kind": "config", "message": "No Jev API key found.",
+                        "hint": "Put AI_GATEWAY_API_KEY=vck_... in Jev_Test/.env, then restart the demo."})
+                    self._bump()
+                    continue
                 gen = self.generation
                 self.running_gen = gen
                 item["status"] = "running"
@@ -682,7 +791,9 @@ class App:
             if full or self.order_version > since_v:
                 state["order"] = list(self.order)
             if not full:
-                added = [eid for eid in self.order if self._added_at.get(eid, 0) > since_v]
+                # New emails, and emails whose files were just read (labels, sizes, how the text was read).
+                added = [eid for eid in self.order if self._added_at.get(eid, 0) > since_v
+                         or self._email_changed_at.get(eid, 0) > since_v]
                 if added:
                     state["emails"] = [self.public_email(self.emails[eid]) for eid in added]
             return state
@@ -702,7 +813,8 @@ class App:
         atts = self._attachment_list(eid)
         if atts is None or not (0 <= idx < len(atts)):
             return None
-        return att_mod.normalize(atts[idx])
+        att = atts[idx]
+        return att if isinstance(att, dict) and att.get("kind") == "file" else att_mod.normalize(att)
 
     def attachment_text(self, eid: str, idx: int) -> Optional[Dict[str, Any]]:
         """The text Jev reads for one attachment, exactly as it goes into the state."""
@@ -718,7 +830,7 @@ class App:
     def _describe(self, base_id: str, idx: int, att: Dict[str, Any]) -> Dict[str, Any]:
         att = att_mod.normalize(att)
         kind = att.get("kind")
-        base = f"/api/att/{base_id}/{idx}" if kind in att_mod.SPEC_KINDS or kind == "upload" else None
+        base = f"/api/att/{base_id}/{idx}" if kind in att_mod.SPEC_KINDS or kind in ("upload", "file") else None
         available = True
         if kind == "upload":
             available = self.uploads.get(att.get("upload_id") or "") is not None
@@ -736,6 +848,53 @@ class App:
             entry["attachments"] = [self._describe(f"X{i}", j, a) for j, a in enumerate(ex["attachments"])]
             out.append(entry)
         return out
+
+    # ---- RFQ details --------------------------------------------------------- #
+    def _texts(self, email: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """What each attachment says, in the shape rfq_details.extract expects (ocr.file_text results)."""
+        texts: Dict[str, Dict[str, Any]] = {}
+        for raw in email.get("attachments") or []:
+            att = att_mod.normalize(raw)
+            kind = att.get("kind")
+            if kind == "file":
+                texts[att["name"]] = att.get("_file_text") or {"method": att.get("text_method") or "none",
+                                                               "text": att.get("text") or ""}
+            elif kind == "upload":
+                texts[att["name"]] = {"method": att.get("text_method") or ("text-layer" if att.get("text") else "none"),
+                                      "text": att.get("text") or "", "confidence": att.get("text_conf")}
+            elif kind in att_mod.SPEC_KINDS:
+                texts[att["name"]] = {"method": "step-header" if kind == "model" else "text-layer",
+                                      "text": att_mod.spec_text(att)}
+        return texts
+
+    def rfq_record(self, eid: str) -> Optional[Dict[str, Any]]:
+        """The extracted details of one RFQ, or None when the email is not an RFQ."""
+        if rfq_details is None or eid not in self.emails:
+            return None
+        self.prepare_email(eid)
+        with self.cond:
+            item = self.items[eid]
+            decision = self._decision(eid) if item["status"] == "done" else None
+            memo_key = (json.dumps(decision, sort_keys=True, default=str) if decision else None,
+                        self._email_changed_at.get(eid))
+            memo = self._details.get(eid)
+            if memo and memo[0] == memo_key:
+                return memo[1]
+            email = self.emails[eid]
+        try:
+            record = rfq_details.extract(email, self._texts(email), self.shop, decision) \
+                if rfq_details.is_rfq(email, decision) else None
+        except Exception as exc:  # noqa: BLE001 - one odd email must not break the download
+            log(f"RFQ details for {eid} failed: {exc!r}")
+            record = None
+        with self.cond:
+            self._details[eid] = (memo_key, record)
+        return record
+
+    def rfq_records(self) -> List[Dict[str, Any]]:
+        with self.cond:
+            order = list(self.order)
+        return [r for r in (self.rfq_record(eid) for eid in order) if r]
 
     def bootstrap(self) -> Dict[str, Any]:
         lanes = router.lane_index(self.shop)
@@ -764,7 +923,9 @@ class App:
             "jev": jev_info,
             "free_tier_pace_seconds": FREE_TIER_PACE,
             "uploads": {"max_files": att_mod.MAX_UPLOADS_PER_EMAIL, "max_bytes": att_mod.MAX_UPLOAD_BYTES,
-                        "types": sorted(att_mod.UPLOAD_TYPES), "pdf_text": att_mod.pypdf_available()},
+                        "types": sorted(att_mod.UPLOAD_TYPES), "pdf_text": att_mod.pypdf_available(),
+                        "ocr": att_mod.ocr_ready()},
+            "features": {"rfq_details": rfq_details is not None, "ocr": att_mod.ocr_ready()},
             "state": self.snapshot(),
         }
 
@@ -863,7 +1024,21 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(self.app.cache.export(), indent=1).encode("utf-8")
             return self._send(200, body, "application/json; charset=utf-8",
                               {"Content-Disposition": self._disposition("attachment", "saved_results.json")})
-        match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|mesh\.json|text)", path)
+        if path in ("/api/rfq_details.csv", "/api/rfq_details.json"):
+            if rfq_details is None:
+                return self._json({"error": "rfq_details.py is not available on this server"}, 404)
+            records = self.app.rfq_records()
+            if path.endswith(".csv"):
+                body = rfq_details.to_csv(records).encode("utf-8-sig")  # the BOM makes Excel read UTF-8
+                return self._send(200, body, "text/csv; charset=utf-8",
+                                  {"Content-Disposition": self._disposition("attachment", "rfq_details.csv")})
+            return self._send(200, rfq_details.to_json(records).encode("utf-8"), "application/json; charset=utf-8",
+                              {"Content-Disposition": self._disposition("inline", "rfq_details.json")})
+        match = re.fullmatch(r"/api/rfq_details/([A-Z]\d{1,4})", path)
+        if match:
+            record = self.app.rfq_record(match.group(1))
+            return self._json({"ok": True, "record": record} if record else {"ok": False, "record": None})
+        match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|thumb\.jpg|mesh\.json|text)", path)
         if match:
             return self._attachment(match.group(1), int(match.group(2)), match.group(3), "download" in query)
         match = re.fullmatch(r"/api/upload/([0-9a-f]{16})/(file|text)", path)
@@ -878,7 +1053,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         kind = att.get("kind")
         if what == "text":
+            if kind == "file":
+                app.prepare_email(eid) if eid in app.emails else None
             return self._json(app.attachment_text(eid, idx))
+        if kind == "file":
+            return self._real_file(eid, att, what, download)
         if kind == "upload":
             if what != "file":
                 return self._json({"error": "not found"}, 404)
@@ -898,6 +1077,32 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 - a bad spec should not take the page down
             log(f"Could not build {eid}/{idx} {what}: {exc!r}")
             return self._json({"error": "could not build this file"}, 500)
+        return self._json({"error": "not found"}, 404)
+
+    def _real_file(self, eid: str, att: Dict[str, Any], what: str, download: bool) -> None:
+        """A real attachment file on disk (the RFQ details beta inbox)."""
+        path = att_mod.resolve_data_path(DATA_DIR, att.get("path", ""))
+        if not path:
+            return self._json({"error": "This file is missing on the server."}, 404)
+        if what == "file":
+            media = att.get("media") or "pdf"
+            ctype = att_mod.MEDIA_TYPES.get(media, "application/octet-stream")
+            with open(path, "rb") as fh:
+                return self._file(fh.read(), ctype, att["name"], download or media == "step", True)
+        if what in ("thumb.jpg", "thumb.svg"):
+            if eid in self.app.emails:
+                self.app.prepare_email(eid)
+            thumb = att_mod.file_thumb(att, DATA_DIR)
+            if not thumb:
+                return self._json({"error": "no preview"}, 404)
+            return self._send(200, thumb[0], thumb[1], {"Cache-Control": "private, max-age=3600"})
+        if what == "mesh.json":
+            if eid in self.app.emails:
+                self.app.prepare_email(eid)
+            if not att.get("_mesh"):
+                return self._json({"error": "no mesh in this file"}, 404)
+            return self._send(200, json.dumps(att["_mesh"]).encode("utf-8"), "application/json; charset=utf-8",
+                              {"Cache-Control": "private, max-age=3600"})
         return self._json({"error": "not found"}, 404)
 
     def _upload(self, uid: str, what: str, download: bool) -> None:
@@ -1062,6 +1267,10 @@ def main() -> None:
         lines.append("          next to server.py or in the folder above it.")
     lines += [f"  Cache:  {len(app.cache)} saved Jev results ({app.cache.seed_count} from data/saved_results.json)",
               f"  Open:   {url}" + (f"  (listening on {args.host}:{port} for other machines)" if public else "")]
+    ocr_info = att_mod._ocr().available() if att_mod._ocr() else {}
+    lines.append("  OCR:    " + (f"Tesseract {ocr_info.get('tesseract_version') or ''}".strip() if ocr_info.get("ocr")
+                                 else "Tesseract not found; scans use the committed OCR cache only"))
+    lines.append(f"  Inbox:  {len(app.order)} emails from {EMAILS_FILE.relative_to(HERE) if EMAILS_FILE.is_relative_to(HERE) else EMAILS_FILE}")
     if not att_mod.pypdf_available():
         lines.append("  Note:   pypdf is not installed, so Jev sees only the names of uploaded PDFs.")
         lines.append("          Run: pip install -r requirements.txt")

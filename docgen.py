@@ -2,9 +2,11 @@
 A tiny page canvas that writes both PDF and SVG. Standard library only.
 
 The sample attachments (drawings, RFQ forms, purchase orders) are laid out once as a list of
-drawing operations on a Page, then written out two ways from the same operations:
+drawing operations on a Page, then written out from the same operations:
   * to_pdf(pages)  -> a real PDF file (Helvetica, WinAnsi text), what the viewer opens
   * to_svg(page)   -> the matching thumbnail, what the email view shows as a tile
+  * to_image(page) -> a raster picture (Pillow), which tools/make_rfq_beta.py turns into
+                      scans, faxes, and phone photos: image_pdf() wraps those as image-only PDFs
 
 Coordinates are PDF points (1/72 inch) with the origin at the TOP-LEFT corner, like SVG.
 Text y is the baseline.
@@ -409,6 +411,212 @@ def to_svg(page: Page, width_px: Optional[float] = None, background: Color = WHI
             out.append(f'<path d="{" ".join(d)}" {_svg_style(o, o["stroke"], o["fill"])}/>')
     out.append("</svg>")
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Raster backend (needs Pillow; only the scan generator in tools/ uses it)
+# --------------------------------------------------------------------------- #
+FONT_FILES = {
+    False: ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "Arial.ttf", "arial.ttf"],
+    True: ["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+           "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "Arial Bold.ttf", "arialbd.ttf"],
+}
+_fonts: Dict[Tuple[bool, int], Any] = {}
+
+
+def _font(bold: bool, px: int) -> Any:
+    from PIL import ImageFont
+    key = (bold, px)
+    if key not in _fonts:
+        for path in FONT_FILES[bold]:
+            try:
+                _fonts[key] = ImageFont.truetype(path, px)
+                break
+            except OSError:
+                continue
+        else:
+            raise RuntimeError("No TrueType font found for rasterizing (install Liberation Sans or DejaVu Sans).")
+    return _fonts[key]
+
+
+def _flatten(cmds: Sequence[Tuple], steps: int = 14) -> List[List[Tuple[float, float]]]:
+    """Path commands to polylines (one per subpath), with Bezier curves sampled."""
+    runs: List[List[Tuple[float, float]]] = []
+    cur: List[Tuple[float, float]] = []
+    for c in cmds:
+        if c[0] == "M":
+            if len(cur) > 1:
+                runs.append(cur)
+            cur = [(c[1], c[2])]
+        elif c[0] == "L":
+            cur.append((c[1], c[2]))
+        elif c[0] == "C" and cur:
+            x0, y0 = cur[-1]
+            for i in range(1, steps + 1):
+                t = i / steps
+                u = 1 - t
+                cur.append((u ** 3 * x0 + 3 * u * u * t * c[1] + 3 * u * t * t * c[3] + t ** 3 * c[5],
+                            u ** 3 * y0 + 3 * u * u * t * c[2] + 3 * u * t * t * c[4] + t ** 3 * c[6]))
+        elif c[0] == "Z" and cur:
+            cur.append(cur[0])
+    if len(cur) > 1:
+        runs.append(cur)
+    return runs
+
+
+def _dashed(points: Sequence[Tuple[float, float]], dash: Sequence[float]) -> List[List[Tuple[float, float]]]:
+    """Split a polyline into dash segments (lengths in the same units as the points)."""
+    pattern = [max(0.01, d) for d in dash] or [1.0]
+    out: List[List[Tuple[float, float]]] = []
+    idx, left, on = 0, pattern[0], True
+    seg: List[Tuple[float, float]] = [points[0]]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        length = math.hypot(x1 - x0, y1 - y0)
+        pos = 0.0
+        while length - pos > 1e-9:
+            step = min(left, length - pos)
+            pos += step
+            left -= step
+            pt = (x0 + (x1 - x0) * pos / length, y0 + (y1 - y0) * pos / length)
+            if on:
+                seg.append(pt)
+            if left <= 1e-9:
+                if on and len(seg) > 1:
+                    out.append(seg)
+                on = not on
+                idx = (idx + 1) % len(pattern)
+                left = pattern[idx]
+                seg = [pt]
+    if on and len(seg) > 1:
+        out.append(seg)
+    return out
+
+
+def to_image(page: Page, dpi: float = 300.0, supersample: int = 2) -> Any:
+    """Rasterize a page to a Pillow RGB image at `dpi`. Drawn at supersample x and scaled down,
+    which anti-aliases the result like a real print."""
+    from PIL import Image, ImageDraw
+    k = dpi / 72.0 * supersample
+    size = (max(1, round(page.width * k)), max(1, round(page.height * k)))
+    img = Image.new("RGB", size, (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    def col(c: Optional[Color]) -> Optional[Tuple[int, int, int]]:
+        return None if not c else tuple(max(0, min(255, int(round(v * 255)))) for v in c)  # type: ignore[return-value]
+
+    def pts(points: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        return [(x * k, y * k) for x, y in points]
+
+    def stroke(points: Sequence[Tuple[float, float]], o: Dict[str, Any], color: Optional[Color]) -> None:
+        c = col(color)
+        if not c or len(points) < 2:
+            return
+        width = max(1, int(round(o.get("lw", 0.6) * k)))
+        runs = _dashed(points, [d * k for d in o["dash"]]) if o.get("dash") else [list(points)]
+        for run in runs:
+            draw.line(run, fill=c, width=width, joint="curve")
+
+    for kind, o in page.ops:
+        if kind == "text":
+            px = max(1, int(round(o["size"] * k)))
+            anchor = {"start": "ls", "middle": "ms", "end": "rs"}[o["anchor"]]
+            draw.text((o["x"] * k, o["y"] * k), o["text"], fill=col(o["color"]), font=_font(o["bold"], px),
+                      anchor=anchor)
+        elif kind == "line":
+            stroke(pts([(o["x1"], o["y1"]), (o["x2"], o["y2"])]), o, o["color"])
+        elif kind == "rect":
+            box = pts([(o["x"], o["y"]), (o["x"] + o["w"], o["y"] + o["h"]), (o["x"], o["y"] + o["h"])])
+            corners = [box[0], (box[1][0], box[0][1]), box[1], box[2], box[0]]
+            if o.get("fill"):
+                draw.rectangle([box[0], box[1]], fill=col(o["fill"]))
+            if o.get("stroke") and o.get("lw", 0.6) > 0:
+                stroke(corners, o, o["stroke"])
+        elif kind == "circle":
+            r = o["r"] * k
+            cx, cy = o["cx"] * k, o["cy"] * k
+            if o.get("fill"):
+                draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col(o["fill"]))
+            if o.get("stroke") and o.get("lw", 0.6) > 0:
+                ring = [(cx + r * math.cos(2 * math.pi * i / 72), cy + r * math.sin(2 * math.pi * i / 72))
+                        for i in range(73)]
+                stroke(ring, o, o["stroke"])
+        elif kind == "poly":
+            p = pts(o["points"])
+            if o.get("closed", True) and o.get("fill") and len(p) >= 3:
+                draw.polygon(p, fill=col(o["fill"]))
+            if o.get("stroke") and o.get("lw", 0.6) > 0:
+                stroke(p + ([p[0]] if o.get("closed", True) else []), o, o["stroke"])
+        elif kind == "path":
+            for run in _flatten(o["cmds"]):
+                p = pts(run)
+                if o.get("fill") and len(p) >= 3:
+                    draw.polygon(p, fill=col(o["fill"]))
+                if o.get("stroke") and o.get("lw", 0.6) > 0:
+                    stroke(p, o, o["stroke"])
+    if supersample > 1:
+        img = img.resize((max(1, round(page.width * dpi / 72.0)), max(1, round(page.height * dpi / 72.0))),
+                         Image.LANCZOS)
+    return img
+
+
+def image_pdf(pages: List[Tuple[bytes, int, int, str, float]], producer: str = "Scanner",
+              title: str = "") -> bytes:
+    """An image-only PDF: each page is one picture and there is no text layer, so nothing can be
+    selected or copied. pages: (data, width_px, height_px, encoding, dpi) where encoding is
+    "jpeg-gray", "jpeg-rgb" (data = JPEG bytes) or "bilevel" (data = packed 1-bit rows, 1 = white)."""
+    objects: List[bytes] = []
+
+    def add(obj: bytes) -> int:
+        objects.append(obj)
+        return len(objects)
+
+    catalog = add(b"")
+    pages_id = add(b"")
+    kids = []
+    for data, w, h, encoding, dpi in pages:
+        if encoding == "bilevel":
+            body = zlib.compress(data, 9)
+            head = (f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray "
+                    f"/BitsPerComponent 1 /Filter /FlateDecode /Length {len(body)} >>")
+        else:
+            body = data
+            space = "/DeviceGray" if encoding == "jpeg-gray" else "/DeviceRGB"
+            head = (f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {space} "
+                    f"/BitsPerComponent 8 /Filter /DCTDecode /Length {len(body)} >>")
+        image = add(head.encode() + b"\nstream\n" + body + b"\nendstream")
+        pw, ph = w / dpi * 72.0, h / dpi * 72.0
+        content = f"q {_num(pw)} 0 0 {_num(ph)} 0 0 cm /Im0 Do Q".encode()
+        stream = add(b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream")
+        kids.append(add(f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {_num(pw)} {_num(ph)}] "
+                        f"/Resources << /XObject << /Im0 {image} 0 R >> >> /Contents {stream} 0 R >>".encode()))
+    objects[catalog - 1] = f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode()
+    objects[pages_id - 1] = (f"<< /Type /Pages /Kids [{' '.join(f'{k} 0 R' for k in kids)}] "
+                             f"/Count {len(kids)} >>").encode()
+    info = add((f"<< /Producer {_pdf_text_string(producer)}" + (f" /Title {_pdf_text_string(title)}" if title else "")
+                + " /CreationDate (D:20260924150000Z) >>").encode("latin-1", errors="replace"))
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += (f"trailer\n<< /Size {len(objects) + 1} /Root {catalog} 0 R /Info {info} 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n").encode()
+    return bytes(out)
+
+
+def page_words(pages: List[Page]) -> List[str]:
+    """Every word printed on the pages, in drawing order: the ground truth for OCR tests."""
+    words: List[str] = []
+    for page in pages:
+        for kind, o in page.ops:
+            if kind == "text":
+                words.extend(o["text"].split())
+    return words
 
 
 # --------------------------------------------------------------------------- #
