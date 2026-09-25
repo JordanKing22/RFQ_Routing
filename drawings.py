@@ -67,6 +67,9 @@ def _dims(spec: Dict[str, Any]) -> List[float]:
     except (TypeError, ValueError):
         vals = []
     shape = spec.get("shape")
+    # NaN or infinity (Python's json accepts them) would break every layout: use the default instead
+    dflt = [1.0, 1.0, 0.5] if shape in ROUND3 else [2.0, 0.5] if shape in ROUND2 else [4.0, 3.0, 1.0]
+    vals = [v if math.isfinite(v) else dflt[min(i, len(dflt) - 1)] for i, v in enumerate(vals)]
     if shape in ROUND3:
         vals = (vals + [1.0, 1.0, 0.5])[:3]
         if vals[2] >= vals[1]:
@@ -119,6 +122,17 @@ def bbox_phrase(spec: Dict[str, Any]) -> str:
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
+
+
+def _text_list(value: Any) -> List[Any]:
+    """A list of text items from a spec field. A bare string is one item, not a list of characters."""
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if isinstance(v, (str, int, float)) and not isinstance(v, bool)]
+    return []
 
 
 # --------------------------------------------------------------------------- #
@@ -178,7 +192,7 @@ def parse_callout(text: Any, units: str) -> Dict[str, Any]:
     c: Dict[str, Any] = {"text": t, "T": T, "count": 1, "dias": [], "thread": None, "internal": None,
                          "depth": None, "thru": bool(re.search(r"\bTHRU\b", T)), "cb": None, "csk": None,
                          "rect": None, "width": None, "length": None, "radius": None, "bc": None, "angles": [],
-                         "pattern": None, "num": None, "tags": set()}
+                         "pattern": None, "num": None, "grid": None, "tags": set()}
     m = re.match(r"\s*(\d+)\s*X\b", T)
     if m:
         c["count"] = max(1, min(int(m.group(1)), 999))
@@ -236,6 +250,14 @@ def parse_callout(text: Any, units: str) -> Dict[str, Any]:
         c["rect"] = tuple(vals)
         if "PATTERN" in T:
             c["pattern"] = (vals[0], vals[1])
+    mg = re.search(_NUM + r"\s*(MM|IN\.?)?\s*GRID\b|\bGRID\s*(?:OF\s*)?" + _NUM, T)
+    if mg:
+        pitch = float(mg.group(1) or mg.group(3))
+        if mg.group(2) == "MM" and units != "mm":
+            pitch = _conv(pitch, "mm", units)
+        elif mg.group(2) and mg.group(2).startswith("IN") and units == "mm":
+            pitch = _conv(pitch, "in", units)
+        c["grid"] = pitch if pitch > 0 else None
     mw = re.search(_NUM + r"\s*(?:WIDE|W)\b", scrub)
     if mw:
         c["width"] = float(mw.group(1))
@@ -549,7 +571,7 @@ _COARSE = [False]  # set while building the lighter mesh used for a drawing's sm
 
 def plate_solid(m: Mesh, L: float, W: float, z0: float, z1: float, holes: Sequence[Dict[str, float]] = (),
                 pockets: Sequence[Tuple[float, float, float, float, float]] = (), xcuts: Sequence[float] = (),
-                ycuts: Sequence[float] = (), xf=None, max_holes: int = 48, split_walls: bool = True,
+                ycuts: Sequence[float] = (), xf=None, max_holes: int = 250, split_walls: bool = True,
                 merge_cells: bool = True, coarse: bool = False) -> None:
     """A rectangular plate [0,L] x [0,W] x [z0,z1] with round holes and rectangular pockets opened from the
     top, as one watertight component with no T-junctions (every face is convex).
@@ -573,20 +595,59 @@ def plate_solid(m: Mesh, L: float, W: float, z0: float, z1: float, holes: Sequen
             pk.append((x0, y0, x1, y1, min(dep, T) if dep < T * 0.999 else T))
     tiles = []
     if coarse or _COARSE[0]:
-        max_holes = min(max_holes, 16)
-    hl = _subsample_holes(list(holes), max_holes)
+        max_holes = min(max_holes, 16 if (coarse or _COARSE[0] == 2) else 64)
+    hl = _subsample_holes([h for h in holes if all(math.isfinite(h.get(k) or 0.0) for k in ("cx", "cy", "r"))
+                           and h["r"] > 0], max_holes)
+    # Each hole owns a square tile around it. Sizes are settled together, so that a big hole next to a small
+    # one (or a pocket) shrinks its tile instead of dropping the small hole: neighbors split the gap between
+    # them in proportion to their radii, and a tile that still reaches into a pocket trims the pocket a little.
+    cand = []
     for h in sorted(hl, key=lambda h: -max(h.get("r2") or 0, h["r"])):
         cx, cy, r = h["cx"], h["cy"], h["r"]
         r2 = max(r, h.get("r2") or 0.0)
-        half = min(r2 * 1.55, cx, L - cx, cy, W - cy)
-        for (x0, y0, x1, y1, _) in pk:
-            dch = max(x0 - cx, cx - x1, y0 - cy, cy - y1)
-            half = min(half, dch)
-        for t in tiles:
-            dch = max(abs(t["cx"] - cx), abs(t["cy"] - cy))
-            half = min(half, dch - t["h"])
-        if half < r2 * 1.08:
-            continue
+        need = r2 * 1.04
+        lim = min(r2 * 1.55, cx, L - cx, cy, W - cy)
+        if lim < need:
+            continue  # breaks out of the plate's edge
+        cand.append({"h": h, "cx": cx, "cy": cy, "r": r, "r2": r2, "need": need, "lim": lim})
+    for c in cand:
+        for k, (x0, y0, x1, y1, dep) in enumerate(pk):
+            dch = max(x0 - c["cx"], c["cx"] - x1, y0 - c["cy"], c["cy"] - y1)
+            if dch >= c["need"]:
+                c["lim"] = min(c["lim"], dch)
+                continue
+            # the smallest tile would reach into the pocket: move the pocket's nearest side back, if that is a
+            # small change, else give up the hole (it really runs into the pocket)
+            n_ = c["need"]
+            opts = []
+            if x0 > c["cx"]:
+                opts.append(((c["cx"] + n_ - x0) / (x1 - x0), (c["cx"] + n_, y0, x1, y1, dep)))
+            if x1 < c["cx"]:
+                opts.append(((x1 - (c["cx"] - n_)) / (x1 - x0), (x0, y0, c["cx"] - n_, y1, dep)))
+            if y0 > c["cy"]:
+                opts.append(((c["cy"] + n_ - y0) / (y1 - y0), (x0, c["cy"] + n_, x1, y1, dep)))
+            if y1 < c["cy"]:
+                opts.append(((y1 - (c["cy"] - n_)) / (y1 - y0), (x0, y0, x1, c["cy"] - n_, dep)))
+            opts = [o for o in opts if o[0] <= 0.3]
+            if opts:
+                pk[k] = min(opts)[1]
+                c["lim"] = min(c["lim"], n_)
+            else:
+                c["lim"] = -1.0
+    for a in range(len(cand)):
+        ca = cand[a]
+        for b in range(a + 1, len(cand)):
+            cb = cand[b]
+            d = max(abs(ca["cx"] - cb["cx"]), abs(ca["cy"] - cb["cy"]))
+            if d >= ca["lim"] + cb["lim"]:
+                continue
+            share = d * ca["r2"] / (ca["r2"] + cb["r2"])
+            ca["lim"] = min(ca["lim"], share)
+            cb["lim"] = min(cb["lim"], d - share)
+    for c in cand:
+        if c["lim"] < c["need"]:
+            continue  # touches a neighboring hole
+        h, cx, cy, r, r2, half = c["h"], c["cx"], c["cy"], c["r"], c["r2"], c["lim"]
         depth = h.get("depth")
         blind = depth is not None and depth < T * 0.995
         tiles.append({"cx": cx, "cy": cy, "r": r, "r2": r2, "d2": h.get("d2") or 0.0, "h": half,
@@ -1168,7 +1229,7 @@ def iso_view(page: Page, spec: Dict[str, Any], x: float, y: float, w: float, h: 
 
 def model_thumb_page(spec: Dict[str, Any]) -> Page:
     page = Page(320, 220)
-    mesh = build_mesh(spec)
+    mesh = build_mesh(spec, coarse="thumb")
     render_mesh(page, mesh, 22, 14, 276, 180, base=(0.66, 0.73, 0.83), edges=(0.18, 0.21, 0.27),
                 edge_lw=0.55, fill_frac=0.9, shadow=(0.86, 0.88, 0.9))
     # a small axis triad, like a CAD viewport
@@ -1308,7 +1369,7 @@ class Part:
         self.shape: str = shape
         self.units: str = "mm" if spec.get("units") == "mm" else "in"
         self.d = _dims(dict(spec, shape=shape))
-        self.callouts = [clean(c) for c in (spec.get("callouts") or []) if clean(c)][:4]
+        self.callouts = [clean(c).strip() for c in _text_list(spec.get("callouts")) if clean(c).strip()][:4]
         self.cs = [parse_callout(c, self.units) for c in self.callouts]
         self.anchors: Dict[int, Anchor] = {}
         self.family = ("prismatic" if shape in PRISMATIC else "complex" if shape in COMPLEX else
@@ -1353,6 +1414,7 @@ class Face2D:
         self.circles: List[Tuple[float, float, float]] = []
         self.rects: List[Tuple[float, float, float, float]] = []
         self.unit = min(w, h)
+        self.grid_corners: Optional[List[Pt]] = None
 
     def fits(self, x: float, y: float, r: float, gap: float) -> bool:
         edge = r + gap
@@ -1437,11 +1499,7 @@ def _patterns(n: int, w: float, h: float, e: float) -> List[List[Pt]]:
         else:
             c += [[(w / 2, e + (h - 2 * e) * k / 3) for k in range(4)]]
     if n >= 6:
-        pairs = [(a, n // a) for a in range(2, n) if n % a == 0 and n // a >= 2]
-        pairs.sort(key=lambda p: abs(math.log(max(p[0] - 1, 1) / max(p[1] - 1, 1) * max(h - 2 * e, 1e-9)
-                                              / max(w - 2 * ex, 1e-9))))
-        for a, b in pairs[:2]:
-            c.append([(ex + (w - 2 * ex) * i / (a - 1), e + (h - 2 * e) * j / (b - 1)) for j in range(b) for i in range(a)])
+        c += _grids(n, w, h, e)
     if n >= 4:
         per = _perimeter(n, w, h, ex, e)
         if per:
@@ -1449,6 +1507,33 @@ def _patterns(n: int, w: float, h: float, e: float) -> List[List[Pt]]:
     if n >= 2:
         c.append([(ex + (w - 2 * ex) * k / (n - 1), h / 2) for k in range(n)])
     return c
+
+
+def _grids(n: int, w: float, h: float, e: float, limit: int = 3) -> List[List[Pt]]:
+    """Rectangular grids of n holes: exact a x b grids, and a x b >= n grids with the few extra positions
+    left out at the corners (212 holes = 18 x 12 minus 4 corners), ordered by how well they match the face."""
+    sw, sh = max(w - 2 * e, 1e-9), max(h - 2 * e, 1e-9)
+    cands = []
+    for a in range(2, n + 1):
+        b = -(-n // a)
+        if b < 2:
+            continue
+        extra = a * b - n
+        if extra >= min(a, b) or extra > 4:
+            continue
+        fit = abs(math.log(max(a - 1, 1) / max(b - 1, 1) * sh / sw))
+        cands.append((fit + 0.05 * extra, a, b, extra))
+    cands.sort()
+    out: List[List[Pt]] = []
+    for _, a, b, extra in cands[:limit]:
+        pts = [(e + sw * i / (a - 1), e + sh * j / (b - 1)) for j in range(b) for i in range(a)]
+        if extra:
+            cx, cy = w / 2, h / 2
+            drop = sorted(range(len(pts)), key=lambda k: (-(abs(pts[k][0] - cx) / sw + abs(pts[k][1] - cy) / sh),
+                                                          pts[k][1], pts[k][0]))[:extra]
+            pts = [q for k, q in enumerate(pts) if k not in set(drop)]
+        out.append(pts)
+    return out
 
 
 def _hole_geom(c: Dict[str, Any], units: str, unit: float) -> Dict[str, Any]:
@@ -1542,6 +1627,7 @@ def _build_prismatic(p: Part) -> None:
         p.fins = [(fx0 + pitch * (i + 0.5) - tf / 2, fx0 + pitch * (i + 0.5) + tf / 2) for i in range(nf)]
         top.rects.append((fx0 - tf * 0.3, 0, fx1 + tf * 0.3, W))
         faces["bottom"] = Face2D(L, W)
+        faces["bottom"].circles = top.circles  # the base is thin: holes from both faces must not meet
         if fc:
             i = p.cs.index(fc)
             fa, fb = p.fins[len(p.fins) // 2 + 1] if len(p.fins) > 2 else p.fins[-1]
@@ -1671,20 +1757,21 @@ def _build_prismatic(p: Part) -> None:
                 p.anchors[i] = ("top", nest["a"] + R * 0.7071, nest["b"] + R * 0.7071, 0.0)
             else:
                 if p.profile == "housing" and p.pockets:
+                    # close to the cavity, so the lid screws fit between the groove and the outside
                     cav = p.pockets
-                    x0 = min(q["x0"] for q in cav) - p.wall * 0.32
-                    y0 = min(q["y0"] for q in cav) - p.wall * 0.32
-                    x1 = max(q["x1"] for q in cav) + p.wall * 0.32
-                    y1 = max(q["y1"] for q in cav) + p.wall * 0.32
+                    x0 = min(q["x0"] for q in cav) - p.wall * 0.25
+                    y0 = min(q["y0"] for q in cav) - p.wall * 0.25
+                    x1 = max(q["x1"] for q in cav) + p.wall * 0.25
+                    y1 = max(q["y1"] for q in cav) + p.wall * 0.25
                     wid = min(wid, p.wall * 0.3)
                 else:
                     e = mn * 0.16
                     x0, y0, x1, y1 = e, e, L - e, W - e
                 g = {"kind": "rect", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "rad": mn * 0.05, "wid": wid}
                 p.grooves.append(g)
-                for k in range(24):
-                    gx, gy = _rect_path_point(g, k / 24.0)
-                    top.circles.append((gx, gy, wid * 0.8))
+                w2 = wid * 0.55
+                top.rects += [(x0 - w2, y0 - w2, x1 + w2, y0 + w2), (x0 - w2, y1 - w2, x1 + w2, y1 + w2),
+                              (x0 - w2, y0 + w2, x0 + w2, y1 - w2), (x1 - w2, y0 + w2, x1 + w2, y1 - w2)]
                 p.anchors[i] = ("top", x1, (y0 + y1) / 2 + (y1 - y0) * 0.18, 0.0)
             continue
         if "slot" in tags and not c["length"] and (c["depth"] or "KNIFE" in c["T"]):
@@ -1786,6 +1873,8 @@ def _feature_rank(c: Dict[str, Any], shape: str) -> Tuple[int, float]:
         return (4, 0)
     if "chamfer" in tags or "cross" in tags:
         return (5, 0)
+    if "hole" in tags and c.get("grid"):
+        return (5, 1)
     if "hole" in tags:
         size = (c["cb"][0] if c["cb"] else c["thread"] or (c["dias"][0] if c["dias"] else 0))
         return (6, -size * (1 + math.log(c["count"] + 1) * 0.1))
@@ -1801,10 +1890,11 @@ def _hole_on(p: Part, face: str, x: float, y: float, g: Dict[str, Any], grp: int
     depth = g.get("depth")
     h = {"face": face, "r": g["r"], "r2": g["r2"], "d2": g["d2"], "style": g["style"], "rt": g["rt"], "grp": grp}
     if face == "top":
-        dep = p.top if depth is None else min(depth, p.top * 0.95)
+        top = p.base if p.profile == "heatsink" else p.top  # a heat sink's holes are in the base, between fins
+        dep = top if depth is None else min(depth, top * 0.95)
         if p.profile == "housing" and depth is None:
-            dep = min(H * 0.5, p.top)
-        h.update(axis="z", a=x, b=y, lo=p.top - dep, hi=p.top, entry="+")
+            dep = min(H * 0.5, top)
+        h.update(axis="z", a=x, b=y, lo=top - dep, hi=top, entry="+")
     elif face == "bottom":
         dep = min(depth or H * 0.3, H * 0.6)
         if p.profile == "heatsink":
@@ -1846,6 +1936,66 @@ def _hole_target(p: Part, c: Dict[str, Any], groups: int, ports: int, faces: Dic
     return "top"
 
 
+def _best_effort(face: Face2D, n: int, r: float, gap: float, cands: Sequence[List[Pt]]) -> List[Pt]:
+    """When no candidate fits cleanly, take the one that does the least harm: holes in open air (inside a
+    cavity or pocket) are the worst, then holes off the face, then holes touching other features."""
+    best, best_pts = None, None
+    for pts in cands:
+        if len(pts) != n:
+            continue
+        cost = 0.0
+        for x, y in pts:
+            edge = min(x, y, face.w - x, face.h - y) - r
+            if edge < 0:
+                cost += 100.0 * (-edge / max(r, 1e-9))
+            for x0, y0, x1, y1 in face.rects:
+                dx = max(x0 - x, 0.0, x - x1)
+                dy = max(y0 - y, 0.0, y - y1)
+                if dx * dx + dy * dy < r * r:
+                    inside = x0 < x < x1 and y0 < y < y1
+                    cost += 1000.0 if inside else 50.0
+            for cx, cy, cr in face.circles:
+                d = math.hypot(x - cx, y - cy)
+                if d < r + cr + gap:
+                    cost += 10.0 * (r + cr + gap - d) / max(r + cr, 1e-9)
+        if best is None or cost < best:
+            best, best_pts = cost, pts
+    if best_pts is None:
+        best_pts = [(face.w * (k + 1) / (n + 1), face.h / 2) for k in range(n)]
+    return list(best_pts)
+
+
+def _grid_points(face: Face2D, n: int, pitch: float, rr: float, gap: float) -> List[Pt]:
+    """Holes on a stated grid pitch, centered on the face, trimmed to n (corner positions go first)."""
+    if pitch <= 0:
+        return []
+    margin = max(rr * 1.5, rr + gap)
+    nx = int((face.w - 2 * margin) / pitch + 1e-9) + 1
+    ny = int((face.h - 2 * margin) / pitch + 1e-9) + 1
+    if nx < 1 or ny < 1 or nx * ny > 4000:
+        return []
+    while nx * ny > n + 4 and (nx > 1 or ny > 1):
+        # a bigger face than the pattern: shrink the grid, keeping its proportions
+        if (nx - 1) * ny >= n and (nx >= ny or (nx * (ny - 1)) < n):
+            nx -= 1
+        elif nx * (ny - 1) >= n:
+            ny -= 1
+        else:
+            break
+    x0 = (face.w - (nx - 1) * pitch) / 2
+    y0 = (face.h - (ny - 1) * pitch) / 2
+    pts = [(x0 + i * pitch, y0 + j * pitch) for j in range(ny) for i in range(nx)]
+    face.grid_corners = [(x0, y0), (x0 + (nx - 1) * pitch, y0), (x0 + (nx - 1) * pitch, y0 + (ny - 1) * pitch),
+                         (x0, y0 + (ny - 1) * pitch)]
+    pts = [q for q in pts if face.fits(q[0], q[1], rr, gap)]
+    if len(pts) > n:
+        cx, cy = face.w / 2, face.h / 2
+        order = sorted(range(len(pts)), key=lambda k: (-(abs(pts[k][0] - cx) + abs(pts[k][1] - cy)), pts[k][1], pts[k][0]))
+        drop = set(order[:len(pts) - n])
+        pts = [q for k, q in enumerate(pts) if k not in drop]
+    return pts
+
+
 def _place_holes(p: Part, faces: Dict[str, Face2D], target: str, c: Dict[str, Any], g: Dict[str, Any], i: int,
                  gap_base: float) -> None:
     L, W, H = p.d
@@ -1858,8 +2008,15 @@ def _place_holes(p: Part, faces: Dict[str, Face2D], target: str, c: Dict[str, An
         if face is None:
             face = faces["top"]
             tgt = "top"
-        r = g["r"]
-        rr = max(r, g["r2"], g["rt"])
+        gg = dict(g)
+        rr = max(gg["r"], gg["r2"], gg["rt"])
+        # a hole is never bigger than the face it is on: a typo such as "Ø99" must not fill the sheet
+        cap = min(face.w, face.h) * (0.42 if n == 1 else 0.3 if n <= 4 else 0.2)
+        if rr > cap > 0:
+            k = cap / rr
+            for key in ("r", "r2", "rt"):
+                gg[key] = gg[key] * k
+            rr = cap
         unit = face.unit
         prefer: List[List[Pt]] = []
         cx0, cy0 = face.w / 2, face.h / 2
@@ -1868,6 +2025,17 @@ def _place_holes(p: Part, faces: Dict[str, Face2D], target: str, c: Dict[str, An
         bore = getattr(p, "bore", None)
         if bore and tgt == "top":
             cx0, cy0 = bore[0], bore[1]
+        gap = max(gap_base, rr * 0.35)
+        if c.get("grid"):
+            pts = _grid_points(face, n, c["grid"], rr, gap)
+            if len(pts) >= max(1, int(n * 0.9)):
+                prefer.append(pts)
+                n = len(pts)
+        if "CORNER" in c["T"] and n == 4:
+            if face.grid_corners:
+                prefer.append(list(face.grid_corners))  # "in place of the corner grid holes"
+            for e in (rr * 1.8, unit * 0.06, unit * 0.1):
+                prefer.append([(e, e), (face.w - e, e), (face.w - e, face.h - e), (e, face.h - e)])
         if c["bc"]:
             R = c["bc"] / 2
             if bore and tgt == "top":
@@ -1887,14 +2055,21 @@ def _place_holes(p: Part, faces: Dict[str, Face2D], target: str, c: Dict[str, An
         if tgt == "upright" and n <= 2:
             prefer.append([(face.w * (k + 1) / (n + 1), cy0) for k in range(n)])
         if p.profile == "housing" and tgt == "top":
-            e = p.wall * 0.62 if not p.grooves else p.wall * 0.7
-            prefer += _patterns(n, face.w, face.h, e)
+            # lid screws sit on the walls, outside the gasket groove when there is one
+            fracs = (0.3, 0.36, 0.25, 0.42) if p.grooves else (0.5, 0.42, 0.58, 0.35, 0.65)
+            for f in fracs:
+                prefer += [q for q in _patterns(n, face.w, face.h, p.wall * f) if len(q) == n]
+        if p.profile == "cover" and tgt == "top" and n >= 5:
+            # many holes on a lid form a bolt pattern around the edge
+            for f in (0.1, 0.07, 0.13, 0.17):
+                per = _perimeter(n, face.w, face.h, max(unit * f, rr * 1.8), max(unit * f, rr * 1.8))
+                if per:
+                    prefer.append(per)
         if tgt in ("front", "right") and p.profile == "housing":
             zc = p.floor + (H - p.floor) * 0.5
             prefer.append([(face.w * (k + 1) / (n + 1), zc) for k in range(n)])
         insets = [unit * f for f in (0.1, 0.13, 0.17, 0.22, 0.28, 0.34, 0.4)]
         insets = [max(e, rr * 1.7) for e in insets]
-        gap = max(gap_base, rr * 0.35)
         pts = None
         scale = 1.0
         for attempt in range(6):
@@ -1903,13 +2078,14 @@ def _place_holes(p: Part, faces: Dict[str, Face2D], target: str, c: Dict[str, An
                 break
             scale *= 0.78
         if not pts:
-            pts = (_patterns(n, face.w, face.h, max(unit * 0.12, rr * 1.5)) or [[(face.w / 2, face.h / 2)] * n])[0][:n]
-            if len(pts) < n:
-                pts = [(face.w * (k + 1) / (n + 1), face.h / 2) for k in range(n)]
-        gg = dict(g)
+            scale = 0.78 ** 5
+            cands = list(prefer)
+            for e in insets:
+                cands += _patterns(n, face.w, face.h, e)
+            pts = _best_effort(face, n, rr * scale, gap * scale, cands)
         if scale < 1.0:
             for key in ("r", "r2", "rt"):
-                gg[key] = g[key] * scale
+                gg[key] = gg[key] * scale
         for x, y in pts:
             p.holes.append(_hole_on(p, tgt, x, y, gg, i))
             face.circles.append((x, y, max(gg["r"], gg["r2"], gg["rt"])))
@@ -3404,17 +3580,18 @@ def _rounded_outline(length: float, width: float, r: float, steps: int = 5) -> L
     return pts
 
 
-def build_mesh(spec: Dict[str, Any], coarse: bool = False) -> Mesh:
-    """The part's solid. coarse=True gives a lighter mesh (fewer hole facets) for small views."""
+def build_mesh(spec: Dict[str, Any], coarse: Any = False) -> Mesh:
+    """The part's solid. coarse=True gives a light mesh for a drawing's small isometric view (big hole patterns
+    subsampled, fewer facets); coarse="thumb" a medium one for a model's tile; False the full model."""
     p = part_model(spec)
     m = Mesh()
-    _COARSE[0] = coarse
+    _COARSE[0] = 2 if coarse is True else 1 if coarse else 0
     try:
         {"prismatic": _prismatic_mesh, "round": _round_mesh, "complex": _complex_mesh, "other": _other_mesh}[p.family](p, m)
     except Exception:  # noqa: BLE001 - never fail a file for a strange spec
         m = Mesh()
     finally:
-        _COARSE[0] = False
+        _COARSE[0] = 0
     if not m.f:
         L, W, H = bbox(spec)
         m.box(0, 0, 0, L, W, H)
@@ -3807,8 +3984,8 @@ def _layout(views: List[View], blocks: List[Block], region: Tuple[float, float, 
         th = sum(rowh) + gapy * max(0, len(used_r) - 1)
         return tw, th, colw, rowh, cl, rt, rg
 
-    lo, hi = 1e-6, 1e6
-    for _ in range(46):
+    lo, hi = 1e-12, 1e9
+    for _ in range(72):
         mid = math.sqrt(lo * hi)
         tw, th = grid(mid)[:2]
         if tw <= rw and th <= rh:
@@ -3852,7 +4029,7 @@ def _label_lines(text: str, width: float) -> Tuple[List[str], float]:
     if len(lines) > 3:
         lines = lines[:3]
         lines[-1] = fit_text(lines[-1] + " ...", width, size)[0]
-    return lines, size
+    return lines or ["-"], size
 
 
 def _anchor_uv(views: Dict[str, View], anchor: Anchor) -> Optional[Tuple[View, float, float, float]]:
@@ -5328,7 +5505,7 @@ def _title_block(page: Page, spec: Dict[str, Any], p: Part, x: float, y: float, 
 
 
 def _rev_block(page: Page, spec: Dict[str, Any], x: float, y: float, w: float) -> float:
-    revs = [r for r in (spec.get("revisions") or []) if isinstance(r, dict)][-4:] or [
+    revs = [r for r in (spec.get("revisions") if isinstance(spec.get("revisions"), list) else []) if isinstance(r, dict)][-4:] or [
         {"rev": spec.get("rev") or "A", "description": "RELEASED", "date": spec.get("date") or ""}]
     drawn = clean(spec.get("drawn_by") or "")
     initials = "".join(t[0] for t in re.findall(r"[A-Z][A-Z'-]+", drawn.upper().replace(".", " ")))[:3] or "TW"
@@ -5363,7 +5540,7 @@ def _rev_block(page: Page, spec: Dict[str, Any], x: float, y: float, w: float) -
 def _notes(page: Page, spec: Dict[str, Any], legend: Optional[str], company: str, x: float, width: float,
            bottom: float, max_h: float) -> float:
     """Notes anchored to the bottom left, proprietary text under them. Returns the top of the block."""
-    notes = [clean(n) for n in spec.get("notes") or [] if clean(n)][:12]
+    notes = [clean(n).strip() for n in _text_list(spec.get("notes")) if clean(n).strip()][:12]
     prop = legend_text("proprietary", company) if legend == "proprietary" else ""
     size, lead = 6.8, 8.3
     for _ in range(6):
