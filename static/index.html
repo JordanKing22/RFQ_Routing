@@ -225,8 +225,10 @@ svg.i.lg { width: 20px; height: 20px; }
 /* ---------- drawer ---------- */
 .scrim { position: fixed; inset: 0; background: rgba(22,24,28,.28); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 40; }
 .scrim.show { opacity: 1; pointer-events: auto; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 50; transform: translateX(104%); transition: transform .22s cubic-bezier(.2,.8,.2,1); display: flex; flex-direction: column; }
-.drawer.show { transform: none; }
+/* Closed, the drawer is also hidden (after it slides out), so its buttons leave the tab order and
+   its shadow stops darkening the right edge of the page. */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 50; transform: translateX(104%); visibility: hidden; transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s linear .22s; display: flex; flex-direction: column; }
+.drawer.show { transform: none; visibility: visible; transition: transform .22s cubic-bezier(.2,.8,.2,1), visibility 0s; }
 .dhead { display: flex; gap: 12px; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .dhead h2 { margin: 0; font-size: 17px; line-height: 1.3; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .dhead .meta { font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
@@ -358,7 +360,9 @@ code { font-family: var(--mono); font-size: 12px; background: #f1f0ec; padding: 
 /* modal */
 .modal { position: fixed; left: 50%; top: 50%; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; transform: translate(-50%, -48%) scale(.98); opacity: 0; pointer-events: none; transition: all .18s; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 60; visibility: hidden; }
 .modal.show { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); visibility: visible; }
-.mhead { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+/* The modal scrolls as one box; its title bar and its Route button stay in view (at 1280x720 and on
+   phones the form is taller than the screen). z-index sits above the file tiles' badges. */
+.mhead { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; background: var(--surface); border-radius: 14px 14px 0 0; }
 .mhead h2 { margin: 0; font-size: 16px; }
 .mbody { padding: 16px 20px; display: grid; gap: 12px; }
 .field { min-width: 0; }
@@ -374,7 +378,7 @@ code { font-family: var(--mono); font-size: 12px; background: #f1f0ec; padding: 
 .dropzone .dz-t { flex: 1; min-width: 180px; }
 .dropzone .dz-t b { color: var(--ink); font-weight: 600; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.mfoot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 14px 20px; border-top: 1px solid var(--line); }
+.mfoot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 14px 20px; border-top: 1px solid var(--line); position: sticky; bottom: 0; z-index: 5; background: var(--surface); border-radius: 0 0 14px 14px; }
 .mfoot .note { margin: 0 auto 0 0; }
 
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow-lg); transition: all .2s; z-index: 90; pointer-events: none; max-width: calc(100vw - 32px); }
@@ -482,6 +486,9 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .dhead { padding: 16px 16px 12px; }
   .ftiles { gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mbody, .mhead, .mfoot { padding-left: 16px; padding-right: 16px; }
+  .mfoot { flex-wrap: wrap; }
+  .mfoot .note { flex-basis: 100%; }
+  .mfoot .note:empty { display: none; }
   .group-head span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -747,13 +754,17 @@ async function rebootstrap() {
   try {
     const boot = await api("/api/bootstrap");
     const hadEmail = S.selected;
+    // Paste an RFQ may be half filled in: keep the chosen example and the sample files still on it.
+    const ex = P.example != null ? (S.boot.paste_examples || [])[P.example] : null;
+    const keepExample = ex ? { idx: P.example, label: ex.label } : null, keepNames = P.exampleFiles.map((a) => a.name);
     closeViewer();
     resetReveal();
     S.state = null;
     loadBoot(boot);
-    clearPasteFiles();
+    restorePasteAfterRestart(keepExample, keepNames);
     applyState(boot.state);
-    if (hadEmail && !S.emails[hadEmail]) closeOverlays();
+    // A pasted email is gone after a restart. Close only the drawer: Paste an RFQ may be open on top of it.
+    if (S.drawer === "email" && !S.emails[hadEmail]) closeDrawer();
     else if (S.drawer === "email") renderEmailDrawer(true);
     else if (S.drawer === "settings") renderSettings();
     toast("The demo server restarted, so the board was reloaded. Route the inbox to replay saved results.");
@@ -859,16 +870,23 @@ function schedulePoll(ms) {
 
 async function poll() {
   try {
-    const q = S.state ? `?since=${encodeURIComponent(S.state.version)}&boot=${encodeURIComponent(S.state.boot_id)}` : "";
-    const st = await api("/api/state" + q);
-    if (S.offline) { S.offline = false; renderBanner(); }
-    applyState(st);
-  } catch (e) {
-    S.offline = true; renderConn(); renderBanner();
+    let st = null;
+    try {
+      const q = S.state ? `?since=${encodeURIComponent(S.state.version)}&boot=${encodeURIComponent(S.state.boot_id)}` : "";
+      st = await api("/api/state" + q);
+    } catch (e) {
+      S.offline = true; renderConn(); renderBanner();
+    }
+    if (st) {
+      if (S.offline) { S.offline = false; renderBanner(); }
+      try { applyState(st); } catch (e) { console.error(e); }  // a page bug, not the server being down
+    }
+  } finally {
+    // Whatever happened above, keep polling.
+    const w = S.state && S.state.worker;
+    const active = (w && (w.state === "running" || w.state === "waiting" || w.queue_length > 0)) || S.queue.length;
+    schedulePoll(document.hidden ? 5000 : active ? 400 : 1500);
   }
-  const w = S.state && S.state.worker;
-  const active = (w && (w.state === "running" || w.state === "waiting" || w.queue_length > 0)) || S.queue.length;
-  schedulePoll(document.hidden ? 5000 : active ? 400 : 1500);
 }
 
 /* Merge a state from the server. A delta carries only the items that changed since the version we
@@ -1069,7 +1087,7 @@ function rowInner(id) {
   const d = state === "shown" ? it.decision : null;
   const att = (e.attachments || []).length;
   let dest;
-  if (d) dest = `<span class="dest">${ic("arrow", "sm")}${marker(d.lane)}<span class="lname">${esc(d.lane_name)}</span>${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}</span>`;
+  if (d) dest = `<span class="dest">${ic("arrow", "sm")}${marker(d.lane)}<span class="lname">${esc(d.lane_name)}</span>${d.priority ? `<span class="prio ${esc(d.priority)}">${esc(d.priority)}</span>` : ""}</span>`;
   else if (state === "error") dest = `<span class="dest err"><span class="lname">${esc((it.error && it.error.message) || "Error")}</span></span>`;
   else if (state === "queued") dest = `<span class="snip">Queued for Jev</span>`;
   else if (state === "asking") dest = `<span class="snip">Asking Jev</span>`;
@@ -1113,7 +1131,7 @@ function renderInbox() {
 /* ---------------------------------------------------------------- board */
 function badgeHtml(f) {
   const icon = { restricted: "lock", serious: "zap", warning: "alert" }[f.tone];
-  return `<span class="badge ${f.tone}">${icon ? ic(icon, "sm") : ""}${esc(f.label)}</span>`;
+  return `<span class="badge ${esc(f.tone)}">${icon ? ic(icon, "sm") : ""}${esc(f.label)}</span>`;
 }
 
 function customerBadge(d) {
@@ -1154,7 +1172,7 @@ function cardInner(id) {
   const key = S.showKey && d.matches_expected != null
     ? `<span class="key-mark ${d.matches_expected ? "ok" : "bad"}" title="Answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}">${ic(d.matches_expected ? "check" : "x", "sm")}</span>` : "";
   return `${key}<div class="csubj">${esc(e.subject || "(no subject)")}</div>
-    <div class="cmeta">${d.priority ? `<span class="prio ${d.priority}">${d.priority}</span>` : ""}<span class="o">${esc(orgOf(e, d))}</span>${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}</div>
+    <div class="cmeta">${d.priority ? `<span class="prio ${esc(d.priority)}">${esc(d.priority)}</span>` : ""}<span class="o">${esc(orgOf(e, d))}</span>${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}</div>
     <div class="cfoot"><div class="badges">${cardBadges(d)}</div>${meterHtml(d.meter, d.lane)}</div>`;
 }
 
@@ -1280,20 +1298,41 @@ function select(id) {
 }
 
 function openDrawer(mode) {
+  if (mode !== "email" && S.selected) { const prev = S.selected; S.selected = null; markSelected(prev, null); }
+  const drawer = $("#drawer"), opener = document.activeElement;
+  const wasOpen = drawer.classList.contains("show");
+  if (!wasOpen) S.drawerReturn = opener && opener !== document.body && !drawer.contains(opener) ? opener : null;
   S.drawer = mode;
-  $("#drawer").classList.add("show"); $("#drawer").setAttribute("aria-hidden", "false");
+  drawer.classList.add("show"); drawer.setAttribute("aria-hidden", "false");
   $("#scrim").classList.add("show");
   if (mode === "email") renderEmailDrawer(true); else renderSettings();
+  // Opened from the keyboard: move focus into the drawer, so Tab does not wander over the board behind the scrim.
+  if (!wasOpen && opener && opener !== document.body && opener.matches(":focus-visible")) { const c = $("#closeDrawer"); if (c) c.focus({ preventScroll: true }); }
 }
 
 function closeOverlays() {
   if (!$("#viewer").hidden) return closeViewer();
-  if ($("#pasteModal").classList.contains("show")) return closePaste();
-  const prev = S.selected;
-  S.drawer = null; S.selected = null;
+  if (pasteOpen()) return closePaste();
+  closeDrawer();
+}
+
+function closeDrawer() {
+  const prev = S.selected, drawer = $("#drawer");
+  const hadFocus = drawer.contains(document.activeElement);
+  S.drawer = null; S.selected = null; S.drawerVersion = null;
   markSelected(prev, null);
-  $("#drawer").classList.remove("show"); $("#drawer").setAttribute("aria-hidden", "true");
-  $("#scrim").classList.remove("show");
+  drawer.classList.remove("show"); drawer.setAttribute("aria-hidden", "true");
+  if (!pasteOpen()) $("#scrim").classList.remove("show");
+  // The closed drawer is hidden, so focus inside it would fall back to the top of the page: return it to the opener.
+  if (hadFocus && !pasteOpen()) {
+    const card = prev && S.dom.cards.get(prev), row = prev && S.dom.rows.get(prev), opener = S.drawerReturn;
+    // Opened from a card or an inbox row: go back to the one for the email shown last.
+    const same = opener && opener.dataset && opener.dataset.id ? (opener.classList.contains("row") ? row : card) : null;
+    const canFocus = (el) => el && el.isConnected && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+    const back = [same && same.el, opener, card && card.el, row && row.el].find(canFocus);
+    if (back) back.focus({ preventScroll: true });
+  }
+  S.drawerReturn = null;
 }
 
 function optionLabel(qname, key) {
@@ -1430,21 +1469,22 @@ function renderEmailDrawer(force) {
   if (!force && S.drawerVersion === version) return;
   const oldBody = $("#drawer .dbody");
   const keepScroll = S.drawerVersion && JSON.parse(S.drawerVersion)[0] === id && oldBody ? oldBody.scrollTop : 0;
-  const active = document.activeElement;
-  const focusAtt = active && $("#drawer").contains(active) && active.dataset ? active.dataset.att : undefined;
+  // The drawer is rebuilt when the email's state changes: keep focus on the same control.
+  const active = document.activeElement, inDrawer = active && $("#drawer").contains(active);
+  const focusAtt = inDrawer && active.dataset ? active.dataset.att : undefined, focusId = inDrawer ? active.id : "";
   S.drawerVersion = version;
   const d = shown ? it.decision : null, th = S.state.thresholds;
   let top = "", after = "";
   if (d) {
-    const due = d.due ? ` · ${d.due.kind} due ${esc(d.due.label)}` : "";
+    const due = d.due ? ` · ${esc(d.due.kind)} due ${esc(d.due.label)}` : "";
     const keyLine = S.showKey && d.expected_lane ? `<div class="note">${d.matches_expected ? ic("check", "sm") + " Matches" : ic("x", "sm") + " Differs from"} the answer key: ${esc(S.lanes[d.expected_lane] ? S.lanes[d.expected_lane].name : d.expected_lane)}. ${esc((e.expected && e.expected.note) || "")}</div>` : "";
     top = `<div class="sec"><div class="sec-title">Routing decision</div>
       <div class="decision">
         <div class="dest">${marker(d.lane)}${esc(d.lane_name)}</div>
-        <div class="owner">${esc(d.owner)}${d.priority ? ` · <span class="prio ${d.priority}">${d.priority}</span> ${esc(d.priority_reason)}` : ""}${due}</div>
+        <div class="owner">${esc(d.owner)}${d.priority ? ` · <span class="prio ${esc(d.priority)}">${esc(d.priority)}</span> ${esc(d.priority_reason)}` : ""}${due}</div>
         <div class="reason">${esc(d.reason)}</div>
         <div class="badges">${d.flags.map(badgeHtml).join("")}${customerBadge(d)}</div>
-        <ol class="trace">${d.trace.map((t) => `<li><span class="tk ${t.outcome}">${ic(traceIcon(t.outcome), "sm")}</span><span><b>${esc(t.label)}</b> <span class="td">${esc(t.detail)}</span></span></li>`).join("")}</ol>
+        <ol class="trace">${d.trace.map((t) => `<li><span class="tk ${esc(t.outcome)}">${ic(traceIcon(t.outcome), "sm")}</span><span><b>${esc(t.label)}</b> <span class="td">${esc(t.detail)}</span></span></li>`).join("")}</ol>
         ${keyLine}
       </div></div>`;
     const act = d.action || {};
@@ -1465,7 +1505,7 @@ function renderEmailDrawer(force) {
   const meta = d && it.jev ? `<div class="sec"><div class="sec-title">Call details</div><dl class="kv">
       <dt>Model</dt><dd>${esc(it.jev.model || "")}</dd>
       <dt>Response time</dt><dd>${it.jev.latency_ms != null ? Math.round(it.jev.latency_ms) + " ms" : "n/a"}</dd>
-      <dt>Input tokens</dt><dd>${it.jev.input_tokens ?? "n/a"}</dd>
+      <dt>Input tokens</dt><dd>${esc(it.jev.input_tokens ?? "n/a")}</dd>
       <dt>Cost</dt><dd>${money(it.jev.cost_usd)}${it.jev.cost_is_estimate ? " (estimated)" : " (reported)"}${!it.jev.cost_is_estimate && it.jev.cost_usd === 0 ? `, list price ${money(it.jev.list_price_usd)}` : ""}</dd>
       <dt>Source</dt><dd>${it.source === "cache" ? `Saved result from ${esc(it.jev.saved_at || "")}` : "Live call"}</dd>
       ${it.jev.request_id ? `<dt>Request ID</dt><dd>${esc(it.jev.request_id)}</dd>` : ""}
@@ -1480,7 +1520,9 @@ function renderEmailDrawer(force) {
   const ta = $("#draftText");
   if (ta) { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 4) + "px"; }
   if (keepScroll) $("#drawer .dbody").scrollTop = keepScroll;
-  if (focusAtt !== undefined) { const t = $(`#drawer [data-att="${focusAtt}"]`); if (t) t.focus({ preventScroll: true }); }
+  const refocus = focusAtt !== undefined ? $(`#drawer [data-att="${focusAtt}"]`) : focusId ? document.getElementById(focusId) : null;
+  if (refocus && $("#drawer").contains(refocus)) refocus.focus({ preventScroll: true });
+  else if (inDrawer) { const c = $("#closeDrawer"); if (c) c.focus({ preventScroll: true }); }
   const copy = $("#copyDraft");
   if (copy) copy.onclick = async () => { try { await navigator.clipboard.writeText($("#draftText").value); toast("Draft copied"); } catch (err) { $("#draftText").select(); document.execCommand("copy"); toast("Draft copied"); } };
   const rerun = $("#rerun");
@@ -1503,10 +1545,25 @@ function savedCountHtml() {
   return `<b>${n}</b> saved Jev ${n === 1 ? "answer" : "answers"}${seed ? `, ${seed} of them from the seed file` : ", none from a seed file yet"}.`;
 }
 
+/* Slider changes go out one request at a time and always end on the latest values. Two requests in
+   flight could reach the server out of order and leave it on the older value. */
+const TH = { pending: null, busy: false, timer: 0 };
+function queueThresholds(update) {
+  TH.pending = Object.assign(TH.pending || {}, update);
+  clearTimeout(TH.timer); TH.timer = setTimeout(flushThresholds, 120);
+}
+function flushThresholds() {
+  if (TH.busy || !TH.pending) return;
+  const body = TH.pending; TH.pending = null; TH.busy = true;
+  api("/api/thresholds", body).then((r) => applyState(r.state)).catch((e) => toast(e.message))
+    .finally(() => { TH.busy = false; flushThresholds(); });
+}
+
 function updateSettings() {
   const th = S.state.thresholds;
   const cc = $("#cacheCount"); if (cc && cc.textContent !== String(S.state.stats.cache_size)) cc.textContent = S.state.stats.cache_size;
   const sc = $("#savedCount"); if (sc) { const h = savedCountHtml(); if (sc.dataset.h !== h) { sc.innerHTML = h; sc.dataset.h = h; } }
+  if (TH.busy || TH.pending) return;  // a slider change is on its way; a poll must not move the slider back
   const ab = $("#autoBar"), ib = $("#itarBar");
   if (ab && document.activeElement !== ab) { ab.value = Math.min(th.email_type_confidence, th.process_confidence); $("#autoBarV").textContent = pct(parseFloat(ab.value)); }
   if (ib && document.activeElement !== ib) { ib.value = th.export_control_restrict; $("#itarBarV").textContent = pct(parseFloat(ib.value)); }
@@ -1552,15 +1609,13 @@ function renderSettings() {
       </div>
     </div>`;
   $("#closeDrawer").onclick = closeOverlays;
-  let t1;
   $("#autoBar").oninput = (ev) => {
     const v = parseFloat(ev.target.value); $("#autoBarV").textContent = pct(v);
-    clearTimeout(t1); t1 = setTimeout(async () => { try { const r = await api("/api/thresholds", { email_type_confidence: v, process_confidence: v }); applyState(r.state); } catch (e) { toast(e.message); } }, 120);
+    queueThresholds({ email_type_confidence: v, process_confidence: v });
   };
-  let t2;
   $("#itarBar").oninput = (ev) => {
     const v = parseFloat(ev.target.value); $("#itarBarV").textContent = pct(v);
-    clearTimeout(t2); t2 = setTimeout(async () => { try { const r = await api("/api/thresholds", { export_control_restrict: v }); applyState(r.state); } catch (e) { toast(e.message); } }, 120);
+    queueThresholds({ export_control_restrict: v });
   };
   $("#useCache").onchange = (ev) => { S.useCache = ev.target.checked; try { localStorage.setItem("rfq.useCache", S.useCache ? "1" : "0"); } catch (e) { /* storage blocked */ } };
   $("#showKey").onchange = (ev) => { S.showKey = ev.target.checked; try { localStorage.setItem("rfq.showKey", S.showKey ? "1" : "0"); } catch (e) { /* storage blocked */ } renderAll(); };
@@ -1644,7 +1699,7 @@ function addFiles(fileList) {
   const mb = Math.round(lim.max_bytes / 1048576);
   for (const file of files) {
     const type = uploadType(file);
-    const base = { key: "u" + (++P.seq), name: file.name, size: file.size, media: type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : "jpg", progress: 0 };
+    const base = { key: "u" + (++P.seq), name: file.name, size: file.size, media: !type ? null : type === "application/pdf" ? "pdf" : type === "image/png" ? "png" : "jpg", progress: 0 };
     if (!type || !lim.types.includes(type)) { P.uploads.push(Object.assign(base, { state: "error", error: "Only PDF, PNG, and JPG files can be attached." })); continue; }
     if (file.size > lim.max_bytes) { P.uploads.push(Object.assign(base, { state: "error", error: `Over the ${mb} MB limit (${fmtBytes(file.size)}).` })); continue; }
     if (!file.size) { P.uploads.push(Object.assign(base, { state: "error", error: "The file is empty." })); continue; }
@@ -1662,13 +1717,15 @@ function addFiles(fileList) {
 
 function startUpload(u) {
   const xhr = new XMLHttpRequest();
-  u.xhr = xhr;
+  u.xhr = xhr; u.netError = false;
+  const current = () => u.xhr === xhr;  // events from a request that was replaced or cancelled are ignored
   xhr.open("POST", "/api/uploads");
   xhr.setRequestHeader("Content-Type", u.type);
   xhr.setRequestHeader("X-File-Name", encodeURIComponent(u.name));
-  xhr.upload.onprogress = (e) => { if (e.lengthComputable) { u.progress = e.loaded / e.total; updateUploadTile(u); } };
-  xhr.upload.onload = () => { if (u.state === "uploading") { u.state = "reading"; u.progress = 1; renderPasteFiles(); } };
+  xhr.upload.onprogress = (e) => { if (current() && e.lengthComputable) { u.progress = e.loaded / e.total; updateUploadTile(u); } };
+  xhr.upload.onload = () => { if (current() && u.state === "uploading") { u.state = "reading"; u.progress = 1; renderPasteFiles(); } };
   xhr.onload = () => {
+    if (!current()) return;
     let data = {};
     try { data = JSON.parse(xhr.responseText || "{}"); } catch (e) { /* not JSON */ }
     u.xhr = null;
@@ -1676,8 +1733,31 @@ function startUpload(u) {
     else { u.state = "error"; u.error = (data.error && data.error.message) || (xhr.status === 401 ? "Sign in again, then retry." : `Upload failed (${xhr.status || "no response"}).`); toast(`${u.name}: ${u.error}`); u.toasted = true; }
     renderPasteFiles();
   };
-  xhr.onerror = () => { u.xhr = null; u.state = "error"; u.error = "The upload failed. Check the connection and try again."; u.toasted = true; toast(`${u.name}: ${u.error}`); renderPasteFiles(); };
+  xhr.onerror = () => {
+    if (!current()) return;
+    u.xhr = null; u.state = "error"; u.netError = true; u.error = "The upload failed. Check the connection and try again."; u.toasted = true;
+    toast(`${u.name}: ${u.error}`); renderPasteFiles();
+  };
   xhr.send(u.file);
+}
+
+/* After a server restart: the old server's memory held the uploaded bytes, but the browser still has each
+   file, so it sends them again. The chosen example keeps the sample files the user had not removed. */
+function restorePasteAfterRestart(example, names) {
+  const x = example ? (S.boot.paste_examples || [])[example.idx] : null;
+  if (x && x.label === example.label) {
+    $("#pExample").value = String(example.idx);
+    P.example = example.idx;
+    P.exampleFiles = (x.attachments || []).filter((a) => a.url && names.includes(a.name));
+  }
+  for (const u of P.uploads) {
+    if (!u.file || (u.state === "error" && !u.netError)) continue;
+    const old = u.xhr; u.xhr = null;
+    if (old) old.abort();
+    Object.assign(u, { state: "uploading", progress: 0, att: null, error: "", toasted: false });
+    startUpload(u);
+  }
+  renderPasteFiles();
 }
 
 function updateUploadTile(u) {
@@ -1747,8 +1827,9 @@ async function submitPaste(ev) {
   try {
     const r = await api("/api/emails", payload);
     S.emails[r.id] = r.email;
-    // Files are cleared after a send. The example resets to Blank too, so choosing it again brings its files back.
-    $("#pExample").value = ""; P.example = null;
+    // The next paste starts from a clean form. Keeping the text but not the example's files would let a
+    // re-send go out without the drawing that carried the ITAR marking.
+    $("#pasteForm").reset(); P.example = null;
     clearPasteFiles();
     closePaste();
     applyState(r.state);
