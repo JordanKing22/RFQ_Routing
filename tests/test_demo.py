@@ -245,7 +245,24 @@ class RouterTests(unittest.TestCase):
         decision = router.decide(email, answers, SHOP)
         self.assertEqual(decision["lane"], "itar")
         self.assertTrue(decision["export_marked"])
-        self.assertIn("Marking found in the attachment", decision["trace"][0]["detail"])
+        self.assertIn("Export-control wording found in", decision["trace"][0]["detail"])
+
+    def test_same_lane_email_types_count_together(self):
+        email = next(e for e in DATA["emails"] if e["id"] == "E10")
+
+        def split(a, b):
+            answers = fake_answers()
+            probs = {t: 0.02 for t in router.EMAIL_TYPES}
+            probs[a], probs[b] = 0.46, 0.46
+            answers["email_type"] = {"type": "choice", "choice": a, "p": 0.46, "confidence": 0.352,
+                                     "probabilities": probs}
+            return router.decide(email, answers, SHOP)
+        self.assertEqual(split("purchase_order", "order_followup")["lane"], "orders")
+        self.assertEqual(split("new_rfq", "quote_revision")["lane"], "milling_3axis")
+        # Filtering archives mail with no reply, so a vendor / other split still goes to a person.
+        self.assertEqual(split("vendor_or_solicitation", "other")["lane"], "review")
+        # So does a split between lanes.
+        self.assertEqual(split("purchase_order", "new_rfq")["lane"], "review")
 
 
 def fake_answers(export=0.02, email_type="new_rfq", process="milling_3axis"):
@@ -500,7 +517,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((img["upload"]["width"], img["upload"]["height"]), (40, 30))
         self.assertEqual(self.c.json("/api/uploads", raw=b"<html></html>", ctype="application/pdf")[0], 400)
         self.assertEqual(self.c.json("/api/uploads", raw=b"hello", ctype="text/plain")[0], 415)
-        self.assertEqual(self.c.json("/api/uploads", raw=b"x", ctype="application/json")[0], 400)
+        self.assertEqual(self.c.json("/api/uploads", raw=b"x", ctype="application/json")[0], 415)
+        self.assertEqual(self.c.json("/api/uploads", raw=b"", ctype="application/pdf")[0], 400)
         status, sent = self.c.json("/api/emails", {
             "from_name": "Pat Doe", "from_email": "pat@example.com", "subject": "Quote please",
             "body": "Can you quote 10 pcs of the attached part?", "example": 0, "example_files": [],

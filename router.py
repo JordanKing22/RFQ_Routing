@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import attachments as att_mod
 
@@ -52,8 +52,9 @@ EMAIL_TYPE_LABELS = {
 
 MIXED_OPTION = {
     "mixed_or_unclear": "The main work is a different process, such as welding, fabrication, "
-                        "sheet metal, casting, or assembly, or the email does not describe the "
-                        "parts well enough to tell which machine would make them.",
+                        "sheet metal, casting, 3D printing, molding, or assembly, or the email "
+                        "does not describe the parts well enough to tell which machine would "
+                        "make them.",
 }
 
 VOLUME_LABELS = {
@@ -291,6 +292,28 @@ def pct(x: Optional[float]) -> str:
     return "n/a" if x is None else f"{round(x * 100)}%"
 
 
+# Email types that lead to the same lane. When Jev splits between the two types of a pair (a PO
+# or an order follow-up, say), it is still sure where the email goes, so the pair's combined
+# probability counts toward the auto-route bar. Vendor and "other" are not paired on purpose:
+# filtering archives an email with no reply, so it needs Jev to be confident on its own.
+SAME_LANE_TYPES = (("new_rfq", "quote_revision"), ("purchase_order", "order_followup"))
+
+
+def paired_type_confidence(answer: Dict[str, Any]) -> Optional[Tuple[float, float, str, str]]:
+    """(combined probability, confidence, type a, type b) when Jev's top two email types lead to
+    the same lane. Confidence uses TypeSafe's statistic (k * p - 1) / (k - 1) on the combined p."""
+    probs = answer.get("probabilities") or {}
+    ranked = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)
+    if len(ranked) < 2:
+        return None
+    (a, pa), (b, pb) = ranked[0], ranked[1]
+    if not any({a, b} == set(pair) for pair in SAME_LANE_TYPES):
+        return None
+    k = len(probs)
+    combined = pa + pb
+    return combined, max(0.0, min(1.0, (k * combined - 1.0) / (k - 1.0))), a, b
+
+
 def top_two(answer: Dict[str, Any], labels: Dict[str, str]) -> str:
     probs = sorted(answer.get("probabilities", {}).items(), key=lambda kv: kv[1], reverse=True)[:2]
     return " vs ".join(f"{labels.get(k, k)} {pct(v)}" for k, v in probs)
@@ -327,9 +350,11 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
     cad = cad_attachments(email.get("attachments") or [])
     et_label = EMAIL_TYPE_LABELS.get(et["choice"], et["choice"])
     et_conf = et.get("confidence") or 0.0
-    type_confident = et_conf >= th["email_type_confidence"]
+    pair = paired_type_confidence(et)
+    route_conf = max(et_conf, pair[1]) if pair else et_conf  # how sure Jev is about the lane
+    type_confident = route_conf >= th["email_type_confidence"]
     is_rfq = et["choice"] in ("new_rfq", "quote_revision")
-    meter = {"label": "Confidence", "value": et_conf, "threshold": th["email_type_confidence"]}
+    meter = {"label": "Confidence", "value": route_conf, "threshold": th["email_type_confidence"]}
     lane_id = "review"
     reason = ""
 
@@ -341,7 +366,7 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
     marked = export_marked_attachments(email.get("attachments") or [])
     where = ""
     if marked and ex["p"] >= th["export_control_warn"]:
-        where = " Marking found in the attachment" + ("s " if len(marked) > 1 else " ") + ", ".join(marked) + "."
+        where = " Export-control wording found in " + ", ".join(marked) + "."
     step("Export-controlled?",
          f"Jev: {pct(ex['p'])} likely ITAR / CUI. Restricted queue at "
          f"{pct(th['export_control_restrict'])} or above.{where}",
@@ -352,8 +377,12 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
         step("What kind of email?",
              f"Jev: {et_label} ({pct(et.get('p'))}). Restricted handling applies either way.", "info")
     else:
+        paired = ""
+        if pair and pair[1] > et_conf:
+            paired = (f" {EMAIL_TYPE_LABELS.get(pair[2], pair[2])} and {EMAIL_TYPE_LABELS.get(pair[3], pair[3])} "
+                      f"go to the same place: together {pct(pair[0])}, confidence {pct(pair[1])}.")
         step("What kind of email?",
-             f"Jev: {et_label} ({pct(et.get('p'))}), confidence {pct(et_conf)}. "
+             f"Jev: {et_label} ({pct(et.get('p'))}), confidence {pct(et_conf)}.{paired} "
              f"Auto-route bar is {pct(th['email_type_confidence'])}.",
              "pass" if type_confident else "stop")
 
@@ -381,9 +410,9 @@ def decide(email: Dict[str, Any], answers: Dict[str, Dict[str, Any]], shop: Dict
              f"Jev: {process_label} ({pct(pr.get('p'))}), confidence {pct(pr_conf)}. "
              f"Auto-route bar is {pct(th['process_confidence'])}.",
              "pass" if process_ok else "stop")
-        weakest = min(et_conf, pr_conf)
+        weakest = min(route_conf, pr_conf)
         meter = {"label": "Confidence", "value": weakest,
-                 "threshold": th["process_confidence"] if pr_conf <= et_conf else th["email_type_confidence"]}
+                 "threshold": th["process_confidence"] if pr_conf <= route_conf else th["email_type_confidence"]}
         if pr["choice"] == "mixed_or_unclear":
             lane_id = "review"
             reason = "Mixed processes or not enough detail to pick an estimator."

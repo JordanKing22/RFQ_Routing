@@ -59,11 +59,11 @@ def clean(text: Any) -> str:
     for ch in str(text if text is not None else ""):
         if ch in "\r\n\t":
             out.append(" ")
-        elif ch in "—–":
+        elif ch in "\u2014\u2013":  # em and en dashes
             out.append("-")
-        elif ch in "‘’":
+        elif ch in "\u2018\u2019":  # curly single quotes
             out.append("'")
-        elif ch in "“”":
+        elif ch in "\u201c\u201d":  # curly double quotes
             out.append('"')
         elif ord(ch) >= 32:
             out.append(ch)
