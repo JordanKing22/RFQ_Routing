@@ -8,6 +8,10 @@ RFQ Router demo server. Standard library only.
 
 The browser never sees your API key: the page talks to this local server, and
 this server talks to Jev.
+
+Saved Jev answers: cache/jev_results.json (written as results come in) on top of
+data/saved_results.json (a read-only seed you commit, so replays stay instant after a cloud
+host restarts). Settings > Download saved results gives you that seed file.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ import ipaddress
 import json
 import os
 import queue as queue_mod
+import re
+import secrets
 import signal
 import sys
 import threading
@@ -29,16 +35,18 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import attachments as att_mod
 import jev_client
 import router
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 CONFIG_FILE = HERE / "shop_config.json"
-EMAILS_FILE = HERE / "data" / "sample_emails.json"
-CACHE_FILE = HERE / "cache" / "jev_results.json"
+EMAILS_FILE = Path(os.environ.get("RFQ_EMAILS_FILE") or HERE / "data" / "sample_emails.json")
+CACHE_FILE = Path(os.environ.get("RFQ_CACHE_DIR") or HERE / "cache") / "jev_results.json"
+SEED_FILE = Path(os.environ.get("RFQ_SEED_FILE") or HERE / "data" / "saved_results.json")
 
 # Stop the queue on these: retrying cannot fix them.
 FATAL_KINDS = {"auth", "billing", "validation", "network", "not_found", "config", "bad_response"}
@@ -101,15 +109,34 @@ class Cancelled(Exception):
 # instantly and offline later. Keyed by endpoint + model + exact state + questions.
 # --------------------------------------------------------------------------- #
 class ResultCache:
-    def __init__(self, path: Path):
+    """Live results in `path` (writable), on top of an optional read-only `seed_path`.
+
+    The seed is data/saved_results.json: a file you download from Settings and commit, so a
+    cloud host that restarts with an empty disk still replays every saved answer instantly.
+    """
+
+    def __init__(self, path: Path, seed_path: Optional[Path] = None):
         self.path = path
         self.lock = threading.Lock()
         self.records: Dict[str, Dict[str, Any]] = {}
+        self.seed: Dict[str, Dict[str, Any]] = {}
+        if seed_path is not None and seed_path.is_file():
+            try:
+                self.seed = self._read(seed_path)
+            except (ValueError, OSError, AttributeError) as exc:
+                log(f"Seed file {seed_path.name} unreadable ({exc}); ignoring it.")
         if path.is_file():
             try:
-                self.records = json.loads(path.read_text(encoding="utf-8")).get("records", {})
-            except (ValueError, OSError) as exc:
+                self.records = self._read(path)
+            except (ValueError, OSError, AttributeError) as exc:
                 log(f"Cache file unreadable ({exc}); starting fresh.")
+
+    @staticmethod
+    def _read(path: Path) -> Dict[str, Dict[str, Any]]:
+        records = json.loads(path.read_text(encoding="utf-8")).get("records", {})
+        if not isinstance(records, dict):
+            raise ValueError("'records' is not an object")
+        return {k: v for k, v in records.items() if isinstance(v, dict) and isinstance(v.get("answers"), dict)}
 
     @staticmethod
     def key(state: Any, questions: Dict[str, Any], base_url: str, model: str) -> str:
@@ -120,7 +147,7 @@ class ResultCache:
 
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         with self.lock:
-            return self.records.get(key)
+            return self.records.get(key) or self.seed.get(key)
 
     def put(self, key: str, email_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
         record = dict(result)
@@ -147,8 +174,24 @@ class ResultCache:
                         time.sleep(0.25)
         return record
 
+    def export(self) -> Dict[str, Any]:
+        """Seed plus live results, in the seed file format."""
+        with self.lock:
+            merged = dict(self.seed)
+            merged.update(self.records)
+        return {"question_set": router.QUESTION_SET_VERSION,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "about": "Saved Jev answers for the RFQ Router demo. Commit this file as "
+                         "data/saved_results.json and replays stay instant after a restart.",
+                "records": dict(sorted(merged.items()))}
+
+    @property
+    def seed_count(self) -> int:
+        return len(self.seed)
+
     def __len__(self) -> int:
-        return len(self.records)
+        with self.lock:
+            return len(set(self.records) | set(self.seed))
 
 
 def cache_key_for(cfg: Optional[jev_client.JevConfig], state: Any, questions: Dict[str, Any]) -> str:
@@ -161,20 +204,26 @@ def cache_key_for(cfg: Optional[jev_client.JevConfig], state: Any, questions: Di
 # App state + background worker
 # --------------------------------------------------------------------------- #
 class App:
-    def __init__(self, jev: Optional[jev_client.JevConfig]):
+    def __init__(self, jev: Optional[jev_client.JevConfig], cache_file: Path = CACHE_FILE,
+                 seed_file: Optional[Path] = SEED_FILE):
         self.jev = jev
         self.shop = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         data = json.loads(EMAILS_FILE.read_text(encoding="utf-8"))
         self.paste_examples = data.get("paste_examples", [])
+        for ex in self.paste_examples:
+            ex["attachments"] = [att_mod.normalize(a) for a in ex.get("attachments") or []]
         self.emails: Dict[str, Dict[str, Any]] = {}
         self.order: List[str] = []
         for email in data["emails"]:
+            email["attachments"] = [att_mod.normalize(a) for a in email.get("attachments") or []]
             self.emails[email["id"]] = email
             self.order.append(email["id"])
         self.questions = router.build_questions(self.shop)
         self.thresholds = dict(router.DEFAULT_THRESHOLDS)
         self.thresholds.update(self.shop.get("thresholds", {}))
-        self.cache = ResultCache(CACHE_FILE)
+        self.thresholds_version = 0
+        self.cache = ResultCache(cache_file, seed_file)
+        self.uploads = att_mod.UploadStore()
         self.items: Dict[str, Dict[str, Any]] = {eid: self._blank_item() for eid in self.order}
         self.queue: deque = deque()
         self.cond = threading.Condition(threading.RLock())
@@ -182,6 +231,16 @@ class App:
         self.generation = 0
         self.running_gen: Optional[int] = None  # generation of the item the worker is on
         self.version = 0
+        # /api/state?since=N sends only what changed. Each item's signature is compared on every
+        # snapshot, so nothing can be missed even if some code path forgets to bump the version.
+        self.boot_id = secrets.token_hex(6)
+        self._sig: Dict[str, Any] = {}
+        self._changed_at: Dict[str, int] = {}
+        self._added_at: Dict[str, int] = {eid: 0 for eid in self.order}
+        self._sig_version = -1
+        self.order_version = 0
+        self._keys: Dict[str, str] = {}
+        self._decisions: Dict[str, Any] = {}
         self.live_count = 0
         self.last_call_at: Optional[float] = None
         self.pace_seconds: Optional[float] = None
@@ -195,6 +254,9 @@ class App:
                        "wait_reason": None, "last_error": None, "calls": 0, "cache_hits": 0,
                        "rate_limited": False}
         threading.Thread(target=self._worker_loop, name="jev-worker", daemon=True).start()
+        specs = [a for e in self.emails.values() for a in e["attachments"]]
+        specs += [a for ex in self.paste_examples for a in ex["attachments"]]
+        threading.Thread(target=att_mod.warm, args=(specs,), name="file-warmup", daemon=True).start()
 
     @staticmethod
     def _blank_item() -> Dict[str, Any]:
@@ -204,7 +266,12 @@ class App:
         self.version += 1
 
     def key_for(self, email: Dict[str, Any]) -> str:
-        return cache_key_for(self.jev, router.jev_state(email), self.questions)
+        # Emails never change once added, so the key (a hash of the full Jev state) is computed once.
+        eid = email["id"]
+        key = self._keys.get(eid)
+        if key is None:
+            key = self._keys[eid] = cache_key_for(self.jev, router.jev_state(email), self.questions)
+        return key
 
     # ---- public actions ---------------------------------------------------- #
     def run(self, ids: List[str], use_cache: bool, front: bool = False) -> Dict[str, int]:
@@ -277,9 +344,29 @@ class App:
         body = str(payload.get("body", "")).strip()
         if not subject and not body:
             raise ValueError("Add a subject or a body.")
-        attachments = payload.get("attachments") or []
-        if isinstance(attachments, str):
-            attachments = [a.strip() for a in attachments.replace(";", ",").split(",") if a.strip()]
+        names = payload.get("attachments") or []
+        if isinstance(names, str):
+            names = [a.strip() for a in names.replace(";", ",").split(",") if a.strip()]
+        attachments: List[Any] = []
+        # Sample files that came with a paste example (the user may have removed some).
+        example = payload.get("example")
+        if isinstance(example, str) and example.strip().isdigit():
+            example = int(example)
+        if isinstance(example, int) and not isinstance(example, bool) and 0 <= example < len(self.paste_examples):
+            keep = payload.get("example_files")
+            for att in self.paste_examples[example]["attachments"]:
+                if att.get("kind") in att_mod.SPEC_KINDS and (keep is None or att["name"] in keep):
+                    attachments.append(dict(att))
+        uploads = payload.get("uploads") or []
+        if not isinstance(uploads, list) or len(uploads) > att_mod.MAX_UPLOADS_PER_EMAIL:
+            raise ValueError(f"Attach up to {att_mod.MAX_UPLOADS_PER_EMAIL} files.")
+        for uid in uploads:
+            item = self.uploads.claim(str(uid))
+            if item is None:
+                raise ValueError("An uploaded file is no longer in memory. Remove it and add it again.")
+            attachments.append(att_mod.upload_attachment(item))
+        attachments += [str(a)[:120] for a in names if isinstance(a, (str, int, float))]
+        attachments = [att_mod.normalize(a) for a in attachments][:20]
         with self.cond:
             self.live_count += 1
             eid = f"L{self.live_count:02d}"
@@ -293,12 +380,13 @@ class App:
                 "from_email": str(payload.get("from_email", "")).strip() or "unknown@example.com",
                 "subject": subject,
                 "body": body,
-                "attachments": [str(a)[:120] for a in attachments][:20],
+                "attachments": attachments,
                 "live": True,
             }
             self.order.append(eid)
             self.items[eid] = self._blank_item()
             self._bump()
+            self.order_version = self._added_at[eid] = self.version
         self.run([eid], use_cache=True, front=True)
         return eid
 
@@ -310,6 +398,7 @@ class App:
                 value = float(value)
                 limit = 3.0 if key in ("rush_score", "soon_score") else 1.0
                 self.thresholds[key] = max(0.0, min(limit, value))
+            self.thresholds_version += 1
             self._bump()
             return dict(self.thresholds)
 
@@ -487,52 +576,97 @@ class App:
 
     # ---- views ------------------------------------------------------------- #
     def _decision(self, eid: str) -> Optional[Dict[str, Any]]:
+        """Routing decision for an item, memoized. It depends only on the saved answers, the
+        thresholds, and today's date (for quote-by dates), so those make up the memo key."""
         item = self.items[eid]
         record = item.get("record")
         if not record:
             return None
-        return router.decide(self.emails[eid], record["answers"], self.shop, self.thresholds)
+        memo_key = (record.get("key"), record.get("saved_at"), self.thresholds_version,
+                    time.strftime("%Y-%m-%d"))
+        memo = self._decisions.get(eid)
+        if memo and memo[0] == memo_key:
+            return memo[1]
+        decision = router.decide(self.emails[eid], record["answers"], self.shop, self.thresholds)
+        self._decisions[eid] = (memo_key, decision)
+        return decision
 
-    def snapshot(self) -> Dict[str, Any]:
+    def _signature(self, eid: str) -> Any:
+        item = self.items[eid]
+        record = item.get("record") or {}
+        err = item.get("error")
+        return (item["status"], item["source"], item["routed_at"],
+                json.dumps(err, sort_keys=True) if err else None, record.get("key"), record.get("saved_at"),
+                self.thresholds_version if record else None, time.strftime("%Y-%m-%d") if record else None)
+
+    def _entry(self, eid: str) -> Dict[str, Any]:
+        item = self.items[eid]
+        entry: Dict[str, Any] = {"status": item["status"], "source": item["source"],
+                                 "error": item["error"], "routed_at": item["routed_at"]}
+        record = item.get("record")
+        if record and item["status"] == "done":
+            entry["decision"] = self._decision(eid)
+            entry["jev"] = {k: record.get(k) for k in (
+                "answers", "model", "latency_ms", "input_tokens", "output_tokens", "cost_usd",
+                "cost_is_estimate", "list_price_usd", "saved_at", "generation_id", "request_id")}
+        return entry
+
+    def snapshot(self, since: Any = None, boot: Any = None) -> Dict[str, Any]:
+        """The board. With `since` (a version this browser already has, from this same server run),
+        only the items that changed after it are included, plus any newly added emails."""
         with self.cond:
-            items = {}
+            changed = []
+            for eid in self.order:
+                sig = self._signature(eid)
+                if self._sig.get(eid) != sig:
+                    self._sig[eid] = sig
+                    changed.append(eid)
+            if changed:
+                if self.version == self._sig_version:  # a change nobody announced: make it visible
+                    self.version += 1
+                for eid in changed:
+                    self._changed_at[eid] = self.version
+            self._sig_version = self.version
+            try:
+                since_v = int(since) if since is not None and str(since) != "" else None
+            except (TypeError, ValueError):
+                since_v = None
+            full = since_v is None or since_v > self.version or since_v < 0 or (boot and boot != self.boot_id)
+            send = self.order if full else [e for e in self.order if self._changed_at.get(e, 0) > since_v]
+            items = {eid: self._entry(eid) for eid in send}
+
             latencies: List[float] = []
             cost = list_price = 0.0
             routed = auto = review = matches = graded = 0
             cost_reported = False
             for eid in self.order:
                 item = self.items[eid]
-                entry: Dict[str, Any] = {"status": item["status"], "source": item["source"],
-                                         "error": item["error"], "routed_at": item["routed_at"]}
                 record = item.get("record")
-                if record and item["status"] == "done":
-                    decision = self._decision(eid)
-                    entry["decision"] = decision
-                    entry["jev"] = {k: record.get(k) for k in (
-                        "answers", "model", "latency_ms", "input_tokens", "output_tokens", "cost_usd",
-                        "cost_is_estimate", "list_price_usd", "saved_at", "generation_id", "request_id")}
-                    routed += 1
-                    if decision["lane"] == "review":
-                        review += 1
-                    else:
-                        auto += 1
-                    if decision["matches_expected"] is not None:
-                        graded += 1
-                        matches += 1 if decision["matches_expected"] else 0
-                    if record.get("latency_ms"):
-                        latencies.append(float(record["latency_ms"]))
-                    cost += float(record.get("cost_usd") or 0.0)
-                    list_price += float(record.get("list_price_usd") or 0.0)
-                    cost_reported = cost_reported or not record.get("cost_is_estimate", True)
-                items[eid] = entry
+                if not (record and item["status"] == "done"):
+                    continue
+                decision = self._decision(eid)
+                routed += 1
+                if decision["lane"] == "review":
+                    review += 1
+                else:
+                    auto += 1
+                if decision["matches_expected"] is not None:
+                    graded += 1
+                    matches += 1 if decision["matches_expected"] else 0
+                if record.get("latency_ms"):
+                    latencies.append(float(record["latency_ms"]))
+                cost += float(record.get("cost_usd") or 0.0)
+                list_price += float(record.get("list_price_usd") or 0.0)
+                cost_reported = cost_reported or not record.get("cost_is_estimate", True)
             worker = dict(self.worker)
             worker["queue_length"] = len(self.queue)
             worker["pace_seconds"] = self.pace_seconds
             worker["now"] = time.time()
             latencies.sort()
-            return {
+            state: Dict[str, Any] = {
                 "version": self.version,
-                "order": list(self.order),
+                "boot_id": self.boot_id,
+                "full": bool(full),
                 "items": items,
                 "worker": worker,
                 "thresholds": dict(self.thresholds),
@@ -542,14 +676,71 @@ class App:
                     "avg_latency_ms": (sum(latencies) / len(latencies)) if latencies else None,
                     "median_latency_ms": latencies[len(latencies) // 2] if latencies else None,
                     "cost_usd": cost, "list_price_usd": list_price, "cost_reported": cost_reported,
-                    "cache_size": len(self.cache),
+                    "cache_size": len(self.cache), "seed_size": self.cache.seed_count,
                 },
             }
+            if full or self.order_version > since_v:
+                state["order"] = list(self.order)
+            if not full:
+                added = [eid for eid in self.order if self._added_at.get(eid, 0) > since_v]
+                if added:
+                    state["emails"] = [self.public_email(self.emails[eid]) for eid in added]
+            return state
+
+    # ---- attachments ------------------------------------------------------- #
+    def _attachment_list(self, eid: str) -> Optional[List[Dict[str, Any]]]:
+        if re.fullmatch(r"X\d{1,2}", eid):
+            idx = int(eid[1:]) - 1
+            if 0 <= idx < len(self.paste_examples):
+                return self.paste_examples[idx]["attachments"]
+            return None
+        with self.cond:
+            email = self.emails.get(eid)
+        return email["attachments"] if email else None
+
+    def attachment(self, eid: str, idx: int) -> Optional[Dict[str, Any]]:
+        atts = self._attachment_list(eid)
+        if atts is None or not (0 <= idx < len(atts)):
+            return None
+        return att_mod.normalize(atts[idx])
+
+    def attachment_text(self, eid: str, idx: int) -> Optional[Dict[str, Any]]:
+        """The text Jev reads for one attachment, exactly as it goes into the state."""
+        atts = self._attachment_list(eid)
+        if atts is None or not (0 <= idx < len(atts)):
+            return None
+        entries = att_mod.jev_entries(atts)
+        full = att_mod.jev_text(att_mod.normalize(atts[idx]))
+        sent = entries[idx]["content"]
+        return {"name": entries[idx]["file"], "text": sent, "truncated": sent.endswith("[truncated]"),
+                "full_chars": len(full)}
+
+    def _describe(self, base_id: str, idx: int, att: Dict[str, Any]) -> Dict[str, Any]:
+        att = att_mod.normalize(att)
+        kind = att.get("kind")
+        base = f"/api/att/{base_id}/{idx}" if kind in att_mod.SPEC_KINDS or kind == "upload" else None
+        available = True
+        if kind == "upload":
+            available = self.uploads.get(att.get("upload_id") or "") is not None
+        return att_mod.describe(att, base, available)
+
+    def public_email(self, email: Dict[str, Any]) -> Dict[str, Any]:
+        out = {k: v for k, v in email.items() if k != "attachments"}
+        out["attachments"] = [self._describe(email["id"], i, a) for i, a in enumerate(email.get("attachments") or [])]
+        return out
+
+    def public_examples(self) -> List[Dict[str, Any]]:
+        out = []
+        for i, ex in enumerate(self.paste_examples, start=1):
+            entry = {k: v for k, v in ex.items() if k != "attachments"}
+            entry["attachments"] = [self._describe(f"X{i}", j, a) for j, a in enumerate(ex["attachments"])]
+            out.append(entry)
+        return out
 
     def bootstrap(self) -> Dict[str, Any]:
         lanes = router.lane_index(self.shop)
         with self.cond:
-            emails = [self.emails[eid] for eid in self.order]
+            emails = [self.public_email(self.emails[eid]) for eid in self.order]
         questions = []
         for name, q in self.questions.items():
             questions.append({"name": name, "label": router.QUESTION_LABELS.get(name, name),
@@ -568,10 +759,12 @@ class App:
             "email_type_labels": router.EMAIL_TYPE_LABELS,
             "volume_labels": router.VOLUME_LABELS,
             "question_set_version": router.QUESTION_SET_VERSION,
-            "paste_examples": self.paste_examples,
+            "paste_examples": self.public_examples(),
             "customers": {c["domain"].lower(): c for c in self.shop.get("customers", [])},
             "jev": jev_info,
             "free_tier_pace_seconds": FREE_TIER_PACE,
+            "uploads": {"max_files": att_mod.MAX_UPLOADS_PER_EMAIL, "max_bytes": att_mod.MAX_UPLOAD_BYTES,
+                        "types": sorted(att_mod.UPLOAD_TYPES), "pdf_text": att_mod.pypdf_available()},
             "state": self.snapshot(),
         }
 
@@ -589,12 +782,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, body: bytes, content_type: str,
               headers: Optional[Dict[str, str]] = None) -> None:
+        headers = dict(headers or {})
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", headers.pop("Cache-Control", "no-store"))
         self.send_header("X-Content-Type-Options", "nosniff")
-        for name, value in (headers or {}).items():
+        for name, value in headers.items():
             self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
@@ -602,6 +796,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj: Any, status: int = 200, headers: Optional[Dict[str, str]] = None) -> None:
         self._send(status, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8", headers)
+
+    @staticmethod
+    def _disposition(kind: str, filename: str) -> str:
+        ascii_name = re.sub(r'[^A-Za-z0-9 ._()+-]', "_", filename) or "file"
+        return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+    def _file(self, data: bytes, content_type: str, filename: str, download: bool, cacheable: bool) -> None:
+        headers = {"Content-Disposition": self._disposition("attachment" if download else "inline", filename),
+                   "X-Frame-Options": "SAMEORIGIN"}
+        if cacheable:  # sample files never change while the server runs; URLs carry a content hash
+            headers["Cache-Control"] = "private, max-age=3600"
+        self._send(200, data, content_type, headers)
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
@@ -636,11 +842,13 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/healthz":  # for cloud health checks: no password needed, no data returned
             return self._json({"ok": True})
         if not self._allowed():
             return
+        query = parse_qs(parsed.query)
         if path in ("/", "/index.html"):
             return self._static("index.html")
         if path.startswith("/static/"):
@@ -650,8 +858,58 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/bootstrap":
             return self._json(self.app.bootstrap())
         if path == "/api/state":
-            return self._json(self.app.snapshot())
+            return self._json(self.app.snapshot((query.get("since") or [None])[0], (query.get("boot") or [None])[0]))
+        if path == "/api/saved_results":
+            body = json.dumps(self.app.cache.export(), indent=1).encode("utf-8")
+            return self._send(200, body, "application/json; charset=utf-8",
+                              {"Content-Disposition": self._disposition("attachment", "saved_results.json")})
+        match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|mesh\.json|text)", path)
+        if match:
+            return self._attachment(match.group(1), int(match.group(2)), match.group(3), "download" in query)
+        match = re.fullmatch(r"/api/upload/([0-9a-f]{16})/(file|text)", path)
+        if match:
+            return self._upload(match.group(1), match.group(2), "download" in query)
         return self._json({"error": "not found"}, 404)
+
+    def _attachment(self, eid: str, idx: int, what: str, download: bool) -> None:
+        app = self.app
+        att = app.attachment(eid, idx)
+        if att is None:
+            return self._json({"error": "not found"}, 404)
+        kind = att.get("kind")
+        if what == "text":
+            return self._json(app.attachment_text(eid, idx))
+        if kind == "upload":
+            if what != "file":
+                return self._json({"error": "not found"}, 404)
+            return self._upload(att.get("upload_id") or "", "file", download)
+        if kind not in att_mod.SPEC_KINDS:
+            return self._json({"error": "This attachment is a file name only."}, 404)
+        try:
+            if what == "file":
+                data, ctype = att_mod.spec_file(att)
+                return self._file(data, ctype, att["name"], download, True)
+            if what == "thumb.svg":
+                return self._send(200, att_mod.spec_thumb(att).encode("utf-8"), "image/svg+xml",
+                                  {"Cache-Control": "private, max-age=3600"})
+            if what == "mesh.json" and kind == "model":
+                return self._send(200, json.dumps(att_mod.spec_mesh(att)).encode("utf-8"),
+                                  "application/json; charset=utf-8", {"Cache-Control": "private, max-age=3600"})
+        except Exception as exc:  # noqa: BLE001 - a bad spec should not take the page down
+            log(f"Could not build {eid}/{idx} {what}: {exc!r}")
+            return self._json({"error": "could not build this file"}, 500)
+        return self._json({"error": "not found"}, 404)
+
+    def _upload(self, uid: str, what: str, download: bool) -> None:
+        item = self.app.uploads.get(uid)
+        if item is None:
+            return self._json({"error": "This uploaded file is no longer in memory."}, 410)
+        if what == "text":
+            entry = att_mod.jev_entries([att_mod.upload_attachment(item)])[0]
+            return self._json({"name": item["name"], "text": entry["content"],
+                               "truncated": entry["content"].endswith("[truncated]"),
+                               "full_chars": len(item["text"] or "")})
+        return self._file(item["data"], att_mod.MEDIA_TYPES[item["media"]], item["name"], download, False)
 
     def do_HEAD(self) -> None:  # noqa: N802
         self.do_GET()
@@ -670,6 +928,8 @@ class Handler(BaseHTTPRequestHandler):
         # JSON-only POSTs: a random web page cannot trigger calls without a CORS preflight.
         # Match the media type exactly: "text/plain; application/json" would skip the preflight.
         media_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if urlparse(self.path).path == "/api/uploads":
+            return self._receive_upload(media_type)
         if media_type != "application/json":
             return self._json({"error": "JSON body required"}, 415)
         try:
@@ -681,29 +941,61 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "invalid JSON"}, 400)
         path = urlparse(self.path).path
         app = self.app
+        if not isinstance(payload, dict):
+            return self._json({"error": "JSON object required"}, 400)
+        since, boot = payload.pop("since", None), payload.pop("boot", None)
         try:
             if path == "/api/run":
                 ids = payload.get("ids") or list(app.order)
                 ids = [i for i in ids if i in app.items]
                 result = app.run(ids, bool(payload.get("use_cache", True)), bool(payload.get("front", False)))
-                return self._json({"ok": True, **result, "state": app.snapshot()})
+                return self._json({"ok": True, **result, "state": app.snapshot(since, boot)})
             if path == "/api/stop":
                 app.stop()
-                return self._json({"ok": True, "state": app.snapshot()})
+                return self._json({"ok": True, "state": app.snapshot(since, boot)})
             if path == "/api/reset":
                 app.reset()
-                return self._json({"ok": True, "state": app.snapshot()})
+                return self._json({"ok": True, "state": app.snapshot(since, boot)})
             if path == "/api/emails":
                 eid = app.add_email(payload)
-                return self._json({"ok": True, "id": eid, "email": app.emails[eid], "state": app.snapshot()})
+                return self._json({"ok": True, "id": eid, "email": app.public_email(app.emails[eid]),
+                                   "state": app.snapshot(since, boot)})
             if path == "/api/thresholds":
                 app.set_thresholds(payload)
-                return self._json({"ok": True, "state": app.snapshot()})
+                return self._json({"ok": True, "state": app.snapshot(since, boot)})
             if path == "/api/test":
                 return self._json(app.test_connection())
         except ValueError as exc:
             return self._json({"ok": False, "error": {"message": str(exc)}}, 400)
         return self._json({"error": "not found"}, 404)
+
+
+    def _receive_upload(self, media_type: str) -> None:
+        """Raw file body (not JSON, not a form): the non-simple Content-Type still forces a CORS
+        preflight, so another site cannot post files here. The bytes decide the real type."""
+        if media_type not in ("application/pdf", "image/png", "image/jpeg", "image/jpg", "application/octet-stream"):
+            return self._json({"ok": False, "error": {"message": "Only PDF, PNG, and JPG files can be attached."}}, 415)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length <= 0:
+            return self._json({"ok": False, "error": {"message": "The file is empty."}}, 400)
+        if length > att_mod.MAX_UPLOAD_BYTES:
+            self.close_connection = True
+            return self._json({"ok": False, "error": {"message": "Files can be up to 10 MB each."}}, 413)
+        try:
+            data = self.rfile.read(length)
+        except OSError:
+            return self._json({"ok": False, "error": {"message": "The upload was interrupted."}}, 400)
+        name = unquote(self.headers.get("X-File-Name") or "upload")
+        try:
+            item = self.app.uploads.add(name, data)
+        except ValueError as exc:
+            return self._json({"ok": False, "error": {"message": str(exc)}}, 400)
+        log(f"Upload {item['name']} ({item['size']:,} bytes, {item['media']}"
+            + (f", {len(item['text']):,} characters of text" if item["media"] == "pdf" else "") + ")")
+        return self._json({"ok": True, "upload": att_mod.upload_public(item)})
 
 
 class DemoHTTPServer(ThreadingHTTPServer):
@@ -768,8 +1060,11 @@ def main() -> None:
         lines.append("  Jev:    NO API KEY FOUND. Cached results can still be replayed.")
         lines.append("          Set AI_GATEWAY_API_KEY=vck_... as an environment variable, or in .env")
         lines.append("          next to server.py or in the folder above it.")
-    lines += [f"  Cache:  {len(app.cache)} saved Jev results in cache/jev_results.json",
+    lines += [f"  Cache:  {len(app.cache)} saved Jev results ({app.cache.seed_count} from data/saved_results.json)",
               f"  Open:   {url}" + (f"  (listening on {args.host}:{port} for other machines)" if public else "")]
+    if not att_mod.pypdf_available():
+        lines.append("  Note:   pypdf is not installed, so Jev sees only the names of uploaded PDFs.")
+        lines.append("          Run: pip install -r requirements.txt")
     if password:
         lines.append("  Login:  any user name, password = RFQ_DEMO_PASSWORD")
     lines += ["  Stop:   close this window or press Ctrl+C", ""]
