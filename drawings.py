@@ -3655,6 +3655,7 @@ def _build_other(p: Part) -> None:
         return
     if p.shape == "sheet_metal":
         t = _clamp(mn * .04, (0.8 if u == "mm" else .03), (4.0 if u == "mm" else .19))
+        t = min(t, mn * .2)  # the stock minimum on a tiny part would fold the profile through itself
         tm = _sheet_thickness(clean(p.spec.get("material") or ""), u)  # "16 GA (.060)"
         if tm and mn * .002 < tm < mn * .3:
             t = tm
