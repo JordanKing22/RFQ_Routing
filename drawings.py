@@ -5835,7 +5835,8 @@ def _cast_side(page: Page, T: Xf, p: Part, span: float) -> None:
     page.line(T.x(c), T.y(H) - 5, T.x(c), T.y(0) + 5, THIN, dash=CENTER_DASH)
     y = T.y(p.tb)
     page.line(T.x(0) - 6, y, T.x(span) + 6, y, THIN, dash=PHANTOM_DASH)
-    page.text(T.x(0) + 3, y + 7.5, "P/L", 5.6, True)  # under the line, where the ribs cannot run through it
+    # under the line, where the ribs cannot run through it, when the base below is tall enough to hold it
+    page.text(T.x(0) + 3, y + 7.5 if T.y(0) - y > 10 else y - 3, "P/L", 5.6, True)
     _machine_mark(page, T.x(c + top_r * .45), T.y(H))
     _machine_mark(page, T.x(span * .1) + 4, T.y(0), up=True)
 
