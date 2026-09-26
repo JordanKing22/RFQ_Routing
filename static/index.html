@@ -466,6 +466,69 @@ code { font-family: var(--mono); font-size: 12px; background: #f1f0ec; padding: 
 .mfoot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 14px 20px; border-top: 1px solid var(--line); position: sticky; bottom: 0; z-index: 5; background: var(--surface); border-radius: 0 0 14px 14px; }
 .mfoot .note { margin: 0 auto 0 0; }
 
+/* ---------- import emails ---------- */
+.imp-lead { margin: 0; font-size: 13px; color: var(--ink-2); }
+.imp-help { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.imp-help-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; border-radius: 10px; background: none; font-size: 12.5px; font-weight: 600; color: var(--ink); text-align: left; }
+.imp-help-btn > svg:first-child { color: var(--muted); }
+.imp-help-btn .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
+.imp-help-btn[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.imp-help-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.imp-help-list { list-style: none; margin: 0; padding: 0 12px 11px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 18px; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.imp-help-list b { display: block; font-weight: 600; color: var(--ink); }
+.imp-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.imp-list:empty { display: none; }
+.imp-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 9px 10px 9px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.imp-item:last-child { border-bottom: 0; }
+.imp-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.imp-ic { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: #eaeff6; color: var(--blue-strong); }
+.imp-ic.zip { background: #f3eee4; color: #7a5b1c; }
+.imp-item[data-state="error"] .imp-ic { background: #fdf0f0; color: var(--critical); }
+.imp-main { min-width: 0; }
+.imp-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.imp-name { min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.imp-size { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.imp-st { display: flex; align-items: flex-start; gap: 6px; margin-top: 2px; font-size: 12px; line-height: 17px; color: var(--ink-2); min-width: 0; }
+.imp-st > svg, .imp-st > .spin { margin-top: 2px; }
+.imp-st .spin { width: 12px; height: 12px; border-width: 1.5px; }
+.imp-st .msg { min-width: 0; flex: 0 1 auto; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.imp-st.ok > svg { color: var(--good-text); }
+.imp-st.warn > svg, .imp-st.gone > svg { color: #9a6a00; }
+.imp-st.gone { color: #5a3d00; }
+.imp-st.err { color: var(--critical); }
+.imp-bar { height: 4px; margin-top: 6px; border-radius: 2px; background: var(--blue-track); overflow: hidden; }
+.imp-bar i { display: block; height: 100%; width: 0; background: var(--blue); transition: width .15s; }
+.imp-acts { display: flex; align-items: center; gap: 6px; }
+.imp-acts .btn.icon.small { width: 30px; }
+.imp-more { margin-left: 6px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--blue-strong); cursor: pointer; white-space: nowrap; }
+.imp-more:hover { text-decoration: underline; }
+.imp-more:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.imp-det { margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+.imp-det h4 { margin: 7px 0 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.imp-det ul { list-style: none; margin: 0; padding: 0; }
+.imp-det li { position: relative; padding-left: 11px; overflow-wrap: anywhere; }
+.imp-det li + li { margin-top: 3px; }
+.imp-det li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--line-2); }
+.imp-det .src { color: var(--muted); }
+.imp-det .warn { display: flex; gap: 5px; align-items: flex-start; color: #6f4b00; }
+.imp-det .warn svg { margin-top: 2px; color: #9a6a00; }
+.imp-sum { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 12.5px; color: var(--ink-2); }
+.imp-sum[hidden] { display: none; }
+.imp-sum-t { flex: 1 1 220px; min-width: 0; }
+.imp-sum-acts { display: flex; gap: 6px; margin-left: auto; }
+/* Inbox rows and the drawer: where an imported email came from. */
+.row .line1 .imp-tag { display: inline-flex; color: var(--muted); }
+.row .line1 .imp-tag svg.i.sm { width: 12px; height: 12px; }
+.imp-info { display: grid; gap: 4px; margin-bottom: 8px; font-size: 12px; line-height: 1.45; color: var(--ink-2); overflow-wrap: anywhere; }
+.imp-info .l { display: flex; gap: 6px; align-items: flex-start; min-width: 0; }
+.imp-info .l > span { min-width: 0; }
+.imp-info .l > svg { margin-top: 2px; color: var(--muted); }
+.imp-info b { font-weight: 600; color: var(--ink); }
+.imp-info .w { color: #6f4b00; }
+.imp-info .w > svg { color: #9a6a00; }
+.fread { position: absolute; left: 6px; top: 6px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; line-height: 1.3; color: var(--ink-2); background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.fread .spin { width: 9px; height: 9px; border-width: 1.5px; }
+
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow-lg); transition: all .2s; z-index: 90; pointer-events: none; max-width: calc(100vw - 32px); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
@@ -557,8 +620,10 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   footer { padding: 0 24px 10px; }
 }
 @media (max-width: 1180px) { .lanes.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); } .conn .long { display: none; } }
-/* The download button goes icon-only before the brand and the Jev pill would have to squeeze. */
-@media (max-width: 1320px) { #detailsBtn { width: 36px; padding: 0; justify-content: center; } #detailsBtn .label { display: none; } }
+/* The download button goes icon-only before the brand and the Jev pill would have to squeeze, and
+   Import emails follows it on a small laptop screen. */
+@media (max-width: 1500px) { #detailsBtn { width: 36px; padding: 0; justify-content: center; } #detailsBtn .label { display: none; } }
+@media (max-width: 1320px) { #importBtn { width: 36px; padding: 0; justify-content: center; } #importBtn .label { display: none; } }
 @media (min-width: 981px) and (max-width: 1180px) { .group.est { flex-grow: 2; min-height: 440px; } }
 @media (max-width: 980px) {
   .main { grid-template-columns: minmax(0, 1fr); }
@@ -605,6 +670,8 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .mfoot { flex-wrap: wrap; }
   .mfoot .note { flex-basis: 100%; }
   .mfoot .note:empty { display: none; }
+  .imp-help-list { grid-template-columns: minmax(0, 1fr); }
+  .imp-item { gap: 8px; padding-left: 10px; }
   .group-head span { display: none; }
   /* At 360 px and below, a long answer ("Qty not stated · confidence 60%") and the draft's To line
      would push the drawer sideways: let them wrap. */
@@ -634,6 +701,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   <div class="actions">
     <button class="btn primary" id="routeBtn"></button>
     <button class="btn" id="pasteBtn"><svg class="i"><use href="#i-paste"/></svg><span class="label">Paste an RFQ</span></button>
+    <button class="btn" id="importBtn" hidden aria-label="Import emails" title="Import Outlook emails: .eml, .msg, or .zip files"><svg class="i" aria-hidden="true"><use href="#i-import"/></svg><span class="label">Import emails</span></button>
     <a class="btn" id="detailsBtn" href="/api/rfq_details.csv" download="rfq_details.csv" hidden title="Download the details of every RFQ as one CSV file, one row per part line" aria-label="Download RFQ details (CSV)"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg><span class="label">RFQ details</span></a>
     <button class="btn ghost" id="resetBtn" title="Clear the board. Saved Jev results replay instantly."><svg class="i"><use href="#i-reset"/></svg><span class="label">Reset</span></button>
     <button class="btn ghost icon" id="settingsBtn" title="Settings and rules" aria-label="Settings and rules"><svg class="i"><use href="#i-sliders"/></svg></button>
@@ -700,6 +768,40 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   </form>
 </div>
 
+<div class="modal" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importTitle" aria-describedby="importLead">
+  <div class="mhead">
+    <svg class="i lg" aria-hidden="true"><use href="#i-import"/></svg>
+    <h2 id="importTitle">Import emails</h2>
+    <div class="spacer"></div>
+    <button class="btn ghost icon" type="button" data-close="import" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="mbody">
+    <p class="imp-lead" id="importLead">Add Outlook emails to the inbox with their attachments. They wait there, not routed, until you route them.</p>
+    <div class="imp-help">
+      <button type="button" class="imp-help-btn" id="iHelpBtn" aria-expanded="true" aria-controls="iHelp"><svg class="i sm" aria-hidden="true"><use href="#i-info"/></svg>How to get emails out of Outlook<svg class="i sm chev" aria-hidden="true"><use href="#i-chev-right"/></svg></button>
+      <ul class="imp-help-list" id="iHelp">
+        <li><b>Classic Outlook for Windows</b>Select the emails and drag them to a folder on your computer, then drop the .msg files here.</li>
+        <li><b>New Outlook and Outlook on the web</b>Select them and choose Forward, then save that one email as a file (it carries the others as attachments) and drop the .eml here.</li>
+        <li><b>Outlook for Mac</b>Drag the emails to a folder, then drop them here.</li>
+        <li><b>A lot of emails</b>Zip a folder of them and drop the .zip.</li>
+      </ul>
+    </div>
+    <div class="dropzone" id="iDrop">
+      <svg class="i lg dz-i" aria-hidden="true"><use href="#i-upload"/></svg>
+      <span class="dz-t" id="iDropText"><b>Drop emails here</b> or add them. .eml, .msg, or .zip files.</span>
+      <button type="button" class="btn small" id="iAddFiles" aria-describedby="iDropText"><svg class="i sm" aria-hidden="true"><use href="#i-clip"/></svg>Add files</button>
+      <input type="file" id="iFileInput" multiple accept=".eml,.msg,.zip,message/rfc822,application/vnd.ms-outlook,application/zip" hidden>
+    </div>
+    <ul class="imp-list" id="iList" aria-label="Files to import"></ul>
+    <div class="imp-sum" id="iSum" hidden><span class="imp-sum-t" id="iSumText" role="status" aria-live="polite"></span><span class="imp-sum-acts" id="iSumActs"></span></div>
+  </div>
+  <div class="mfoot">
+    <span class="note" id="iFootNote"></span>
+    <button type="button" class="btn ghost" data-close="import">Close</button>
+    <button type="button" class="btn primary" id="iRoute" disabled><svg class="i play" aria-hidden="true"><use href="#i-play"/></svg>Route imported emails</button>
+  </div>
+</div>
+
 <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-labelledby="vName" hidden>
   <div class="vbar">
     <span class="ficon" id="vIcon" aria-hidden="true"></span>
@@ -757,6 +859,8 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3v10"/><path d="m8 9 4 4 4-4"/><path d="M3 15h4.5l1.5 2.5h6l1.5-2.5H21"/><path d="M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
     <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
     <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
@@ -857,7 +961,14 @@ function loadBoot(boot) {
   boot.customers = boot.customers || {};
   boot.uploads = boot.uploads || { max_files: 5, max_bytes: 10485760, types: ["application/pdf", "image/png", "image/jpeg"], pdf_text: false };
   boot.features = boot.features || {};
+  boot.import = Object.assign({ max_bytes: 40 * 1048576, max_emails: 500, types: [".eml", ".msg", ".zip"] }, boot.import || {});
+  boot.import.types = (Array.isArray(boot.import.types) ? boot.import.types : []).map((t) => String(t).toLowerCase());
   $("#detailsBtn").hidden = !boot.features.rfq_details;
+  $("#importBtn").hidden = !boot.features.import;
+  const imb = boot.import.max_bytes > 0 ? `, up to ${importLimitText(boot.import.max_bytes)} each` : "";
+  const cap = boot.import.max_emails > 0 ? ` This server keeps up to ${Number(boot.import.max_emails).toLocaleString("en-US")} imported emails.` : "";
+  $("#iDropText").innerHTML = `<b>Drop emails here</b> or add them. ${esc(importTypesText())} files${imb}, several at once.${cap}`;
+  IM.btnSig = "";
   RD.map.clear();  // records belong to the server that made them
   VW.texts.clear(); VW.regionsCache.clear();  // and so do file texts and detected regions
   S.lanes = {}; for (const lane of boot.lanes) S.lanes[lane.id] = lane;
@@ -893,12 +1004,16 @@ async function rebootstrap() {
     S.state = null;
     loadBoot(boot);
     restorePasteAfterRestart(keepExample, keepNames);
+    const lostImports = importAfterRestart();
     applyState(boot.state);
-    // A pasted email is gone after a restart. Close only the drawer: Paste an RFQ may be open on top of it.
+    // A pasted or imported email is gone after a restart. Close only the drawer: Paste an RFQ or
+    // Import emails may be open on top of it.
     if (S.drawer === "email" && !S.emails[hadEmail]) closeDrawer();
     else if (S.drawer === "email") renderEmailDrawer(true);
     else if (S.drawer === "settings") renderSettings();
-    toast("The demo server restarted, so the board was reloaded. Route the inbox to replay saved results.");
+    toast(lostImports
+      ? `The demo server restarted, so the board was reloaded and the ${plural(lostImports, "imported email")} ${lostImports === 1 ? "is" : "are"} gone. Import emails lists the files to import again.`
+      : "The demo server restarted, so the board was reloaded. Route the inbox to replay saved results.");
   } catch (e) {
     /* still restarting: the next poll tries again */
   } finally { S.rebooting = false; }
@@ -973,6 +1088,7 @@ function bindEvents() {
     if (t && t.tagName === "IMG" && t.closest(".fprev")) t.closest(".fprev").classList.add("broken");
   }, true);
   bindPasteFiles();
+  bindImport();
   bindViewer();
   document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(50); });
 }
@@ -986,6 +1102,7 @@ function onKeydown(e) {
     return;
   }
   if (e.key === "Escape") closeOverlays();
+  else if (e.key === "Tab" && importOpen()) trapFocus(e, $("#importModal"));
 }
 
 function trapFocus(e, root) {
@@ -1129,6 +1246,7 @@ function renderAll() {
   renderRouteBtn(); renderStats(); renderInbox(); renderBoard();
   if (S.drawer === "email") renderEmailDrawer(false);
   if (S.drawer === "settings") updateSettings();
+  if (importOpen()) renderImportFoot();  // an imported email routed from the board no longer counts
 }
 
 /* ---------------------------------------------------------------- top */
@@ -1228,9 +1346,11 @@ function rowInner(id) {
   else if (state === "queued") dest = `<span class="snip">Queued for Jev</span>`;
   else if (state === "asking") dest = `<span class="snip">Asking Jev</span>`;
   else dest = `<span class="snip">${esc((e.body || "").replace(/\s+/g, " ").slice(0, 110))}</span>`;
+  // An icon, not the word: the 340 px inbox has no room for both the date and a label beside the sender.
+  const imp = e.imported ? `<span class="imp-tag" title="${esc(`Imported from ${e.import_source || "a file"}`)}">${ic("import", "sm")}<span class="sr-only">imported</span></span>` : "";
   return `<span class="st">${statusIcon(id, state)}</span>
     <span class="rmain">
-      <span class="line1"><span class="who">${esc(e.from_name || "Unknown sender")}</span><span class="org">${esc(orgOf(e, d))}</span><span class="time">${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}${esc(e.received || "")}</span></span>
+      <span class="line1"><span class="who">${esc(e.from_name || (e.imported && e.from_email) || "Unknown sender")}</span><span class="org">${esc(orgOf(e, d))}</span><span class="time">${imp}${att ? `<span class="clip" title="${plural(att, "attachment")}">${ic("clip", "sm")}${att}</span>` : ""}${esc(e.received || "")}</span></span>
       <span class="subj">${esc(e.subject || "(no subject)")}</span>
       ${dest}
     </span>`;
@@ -1455,6 +1575,7 @@ function openDrawer(mode) {
 
 function closeOverlays() {
   if (!$("#viewer").hidden) return closeViewer();
+  if (importOpen()) return closeImport();
   if (pasteOpen()) return closePaste();
   closeDrawer();
 }
@@ -1462,12 +1583,13 @@ function closeOverlays() {
 function closeDrawer() {
   const prev = S.selected, drawer = $("#drawer");
   const hadFocus = drawer.contains(document.activeElement);
+  const modal = pasteOpen() || importOpen();
   S.drawer = null; S.selected = null; S.drawerVersion = null;
   markSelected(prev, null);
   drawer.classList.remove("show"); drawer.setAttribute("aria-hidden", "true");
-  if (!pasteOpen()) $("#scrim").classList.remove("show");
+  if (!modal) $("#scrim").classList.remove("show");
   // The closed drawer is hidden, so focus inside it would fall back to the top of the page: return it to the opener.
-  if (hadFocus && !pasteOpen()) {
+  if (hadFocus && !modal) {
     const card = prev && S.dom.cards.get(prev), row = prev && S.dom.rows.get(prev), opener = S.drawerReturn;
     // Opened from a card or an inbox row: go back to the one for the email shown last.
     const same = opener && opener.dataset && opener.dataset.id ? (opener.classList.contains("row") ? row : card) : null;
@@ -1578,10 +1700,12 @@ function tileHtml(att, opts) {
   // A scan, photo, or screenshot has no text layer: its text came from OCR.
   const ocrConf = att.scanned ? ocrInfo(att.text_from) : null;
   const ocr = att.scanned && !opts.state ? `<span class="focr" title="${esc(`No text layer: the text was read with OCR${ocrConf && ocrConf.conf != null ? `, ${ocrConf.conf}% confidence` : ""}`)}">OCR</span>` : "";
+  // An imported email's file is read in the background after the import; the tile says so until it is.
+  const reading = att.reading && !opts.state && !ocr ? `<span class="fread" title="The server is still reading this file"><span class="spin" aria-hidden="true"></span>Reading</span>` : "";
   const openable = opts.idx != null && !opts.state;
   const cls = `ftile${att.kind === "name_only" ? " nofile" : ""}${opts.state === "error" ? " err" : ""}`;
   const aria = `${openable ? "Open " : ""}${att.name}, ${meta}${legendLabel ? `, ${legendLabel}` : ""}${ocr ? ", text read with OCR" : ""}${opts.marked ? ", export-control marking found in this file" : ""}`;
-  const inner = `${previewHtml(att, opts).replace(/<\/span>$/, `${mark}</span>`)}${ocr}${legend}
+  const inner = `${previewHtml(att, opts).replace(/<\/span>$/, `${mark}</span>`)}${ocr}${reading}${legend}
       <span class="ffoot"><span class="ficon ${t}">${ic(TYPE_ICON[t])}</span><span class="ftext"><span class="fname">${esc(att.name)}</span><span class="fmeta">${esc(meta)}</span></span></span>`;
   const tile = openable
     ? `<button type="button" class="${cls}" data-att="${opts.idx}" title="${esc(att.name)}" aria-label="${esc(aria)}">${inner}</button>`
@@ -1599,6 +1723,8 @@ function attachmentsHtml(e, d) {
   let hint = withFile ? "Jev reads the text of each file" : "Jev sees the file names only";
   if (atts.some((a) => a.scanned)) hint += ", read with OCR for scans and photos";
   if (withFile && withFile < atts.length) hint += "; for a name-only file, just the name";
+  const reading = atts.filter((a) => a.reading).length;
+  if (reading) hint += reading === withFile ? `; the server is still reading ${reading === 1 ? "it" : "them"}` : `; the server is still reading ${reading} of them`;
   let note = "";
   if (d && marked.size) {
     const names = [...marked].map((n) => `<b>${esc(n)}</b>`).join(", ");
@@ -1620,7 +1746,7 @@ function renderEmailDrawer(force) {
   ensureRfq(id);  // fetches only when the decision or the files changed; the section updates itself
   // The files are part of the version: the server reads them in the background (OCR can take a few
   // seconds), and each tile's label and OCR badge change when it has.
-  const files = (e.attachments || []).map((a) => [a.label, a.text_from, a.legend, a.thumb].join("|"));
+  const files = (e.attachments || []).map((a) => [a.label, a.text_from, a.legend, a.thumb, a.reading ? 1 : 0].join("|"));
   const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.decision && it.decision.export_marked, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey, it.error && it.error.message, files]);
   if (!force && S.drawerVersion === version) return;
   const oldBody = $("#drawer .dbody");
@@ -1669,11 +1795,11 @@ function renderEmailDrawer(force) {
       ${it.jev.request_id ? `<dt>Request ID</dt><dd>${esc(it.jev.request_id)}</dd>` : ""}
     </dl>
     <button class="btn small" id="rerun" style="margin-top:10px">${ic("refresh", "sm")}Ask Jev again (live call)</button></div>` : "";
-  const email = `<div class="sec"><div class="sec-title">Email</div><div class="email-body">${esc(e.body)}</div>${attachmentsHtml(e, d)}</div>`;
+  const email = `<div class="sec"><div class="sec-title">Email</div>${e.imported ? importInfoHtml(e) : ""}<div class="email-body">${esc(e.body)}</div>${attachmentsHtml(e, d)}</div>`;
   const detailsHtml = rfqEnabled() ? rfqInnerSafe(id) : null;
   const details = detailsHtml != null ? `<section class="sec" id="rfqSec" aria-label="RFQ details">${detailsHtml}</section>` : "";
   $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1;min-width:0"><h2>${esc(e.subject || "(no subject)")}</h2>
-      <div class="meta">${esc(e.from_name || "Unknown sender")} &lt;${esc(e.from_email)}&gt; · ${esc(e.received || "")}${e.live ? " · pasted live" : ""}</div></div>
+      <div class="meta">${esc(e.from_name || "Unknown sender")} &lt;${esc(e.from_email)}&gt; · ${esc(e.received || "")}${e.live ? " · pasted live" : ""}${e.imported ? " · imported" : ""}</div></div>
       <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
     <div class="dbody thin-scroll">${top}${details}${email}${after}${meta}</div>`;
   if (detailsHtml != null) $("#rfqSec")._html = detailsHtml;
@@ -2093,7 +2219,7 @@ function openPaste() {
 
 function closePaste() {
   $("#pasteModal").classList.remove("show");
-  if (!S.drawer) $("#scrim").classList.remove("show");
+  if (!S.drawer && !importOpen()) $("#scrim").classList.remove("show");
 }
 
 function bindPasteFiles() {
@@ -2104,14 +2230,14 @@ function bindPasteFiles() {
   let depth = 0;
   zone.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; depth++; zone.classList.add("over"); });
   zone.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) zone.classList.remove("over"); });
-  // Dropping a file anywhere must never navigate away from the demo. Outside the modal it opens Paste an RFQ.
+  // Dropping a file anywhere must never navigate away from the demo. Emails open Import emails;
+  // PDFs and images open Paste an RFQ (routeDrop splits a mixed drop).
   window.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
   window.addEventListener("drop", (e) => {
     if (!hasFiles(e)) return;
-    e.preventDefault(); depth = 0; zone.classList.remove("over");
+    e.preventDefault(); depth = 0; zone.classList.remove("over"); resetImportDrop();
     if (!$("#viewer").hidden) return;
-    if (!pasteOpen()) openPaste();
-    addFiles(e.dataTransfer.files);
+    routeDrop(e.dataTransfer.files);
   });
   $("#pFiles").addEventListener("click", (e) => {
     const rm = e.target.closest("[data-remove]");
@@ -2276,6 +2402,491 @@ async function submitPaste(ev) {
   finally { delete btn.dataset.sending; renderPasteFiles(); }
 }
 
+/* ---------------------------------------------------------------- import emails */
+/* Outlook emails arrive as files: .eml and .msg hold one email each, a .zip holds many, and an email
+   can carry others as attachments (a forward from new Outlook). The server unpacks them and adds every
+   email to the inbox, not routed. Files go up one at a time, in the order they were added, so each
+   one's progress means something and the server parses one file at a time. The list is this page's
+   record of what it sent and what came back; "Route" sends Jev only the emails this list added. */
+const IM = { files: [], seq: 0, returnEl: null, helpOpen: null, dom: new Map(), btnSig: "", footSig: "", sumSig: "", wasBusy: false, dragDepth: 0 };
+const IMPORT_MIME = ["message/rfc822", "application/vnd.ms-outlook", "application/zip", "application/x-zip-compressed"];
+
+function importEnabled() { return !!(S.boot && S.boot.features && S.boot.features.import); }
+function importOpen() { return $("#importModal").classList.contains("show"); }
+function importBusy() { return IM.files.some((f) => f.state === "queued" || f.state === "uploading" || f.state === "reading"); }
+function importActive() { return IM.files.findIndex((f) => f.state === "uploading" || f.state === "reading"); }
+function fileExt(name) { const m = /\.([^./\\]+)$/.exec(String(name || "").toLowerCase()); return m ? "." + m[1] : ""; }
+
+// ".eml, .msg, or .zip", from what the server says it takes.
+function importTypesText() {
+  const t = (S.boot && S.boot.import && S.boot.import.types.length) ? S.boot.import.types : [".eml", ".msg", ".zip"];
+  return t.length < 2 ? t.join("") : `${t.slice(0, -1).join(", ")}, or ${t[t.length - 1]}`;
+}
+
+// The name decides; a file with no extension counts when the browser says it is an email or a zip.
+function isEmailFile(file) {
+  const ext = fileExt(file.name);
+  return ext ? S.boot.import.types.includes(ext) : IMPORT_MIME.includes(file.type);
+}
+
+function bindImport() {
+  $("#importBtn").addEventListener("click", () => openImport(false));
+  document.querySelectorAll("[data-close=import]").forEach((b) => b.addEventListener("click", closeImport));
+  $("#iHelpBtn").addEventListener("click", () => { IM.helpOpen = $("#iHelp").hidden; setImportHelp(IM.helpOpen); });
+  const input = $("#iFileInput"), zone = $("#iDrop");
+  $("#iAddFiles").addEventListener("click", () => input.click());
+  input.addEventListener("change", () => { addImportFiles(input.files); input.value = ""; });
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+  // The drop itself is handled by the page-wide drop handler (routeDrop), which sends it here while this is open.
+  zone.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; IM.dragDepth++; zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => { IM.dragDepth = Math.max(0, IM.dragDepth - 1); if (!IM.dragDepth) zone.classList.remove("over"); });
+  $("#iList").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"), row = b && b.closest("[data-key]");
+    if (!row) return;
+    const f = IM.files.find((x) => x.key === row.dataset.key);
+    if (!f) return;
+    if (b.dataset.act === "remove") removeImportFile(f);
+    else if (b.dataset.act === "retry") retryImport([f]);
+    else if (b.dataset.act === "more") { f.open = !f.open; renderImportList(); }
+  });
+  $("#iSumActs").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    if (b.dataset.act === "retry-all") retryImport(IM.files.filter((f) => (f.state === "error" && f.retry) || f.state === "gone"));
+    else if (b.dataset.act === "clear") clearImport();
+  });
+  $("#iRoute").addEventListener("click", routeImported);
+}
+
+function resetImportDrop() { IM.dragDepth = 0; $("#iDrop").classList.remove("over"); }
+
+function setImportHelp(open) {
+  $("#iHelpBtn").setAttribute("aria-expanded", open ? "true" : "false");
+  $("#iHelp").hidden = !open;
+}
+
+function openImport(withFiles) {
+  if (!importEnabled() || importOpen()) return;
+  const opener = document.activeElement;
+  IM.returnEl = opener && opener !== document.body && !$("#importModal").contains(opener) ? opener : null;
+  if (pasteOpen()) $("#pasteModal").classList.remove("show");  // hidden, not cleared: the draft is still there
+  $("#importModal").classList.add("show"); $("#scrim").classList.add("show");
+  // The help is open for a first import; once there is a list (or files were dropped) the list comes first.
+  setImportHelp(IM.helpOpen != null ? IM.helpOpen : !(IM.files.length || withFiles));
+  renderImport();
+  setTimeout(() => { if (importOpen() && !$("#importModal").contains(document.activeElement)) $("#iAddFiles").focus(); }, 50);
+}
+
+function closeImport() {
+  if (!importOpen()) return;
+  const modal = $("#importModal"), hadFocus = modal.contains(document.activeElement) || document.activeElement === document.body;
+  modal.classList.remove("show");
+  resetImportDrop();
+  if (!S.drawer && !pasteOpen()) $("#scrim").classList.remove("show");
+  if (hadFocus) {
+    const canFocus = (el) => el && el.isConnected && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+    const back = [IM.returnEl, $("#importBtn")].find(canFocus);
+    if (back) back.focus({ preventScroll: true });
+  }
+  IM.returnEl = null;
+  renderImportBtn();
+}
+
+/* A drop anywhere on the page. Emails go to Import emails and PDFs and images to Paste an RFQ, as
+   they always did; a drop of both is split, and a toast says where each part went. */
+function routeDrop(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const mails = importEnabled() ? files.filter(isEmailFile) : [];
+  if (!importOpen() && !mails.length) {
+    if (!pasteOpen()) openPaste();
+    addFiles(files);
+    return;
+  }
+  const docs = files.filter((f) => !isEmailFile(f) && uploadType(f));
+  const rest = files.filter((f) => !isEmailFile(f) && !uploadType(f));  // shown in the list with the reason
+  const toImport = [...mails, ...rest];
+  if (toImport.length) { openImport(true); addImportFiles(toImport, !docs.length); }
+  if (docs.length) {
+    addFiles(docs);
+    const what = docs.length === 1 ? docs[0].name : `${docs.length} PDFs and images`;
+    toast(toImport.length
+      ? `${plural(toImport.length, "file")} went to Import emails. ${what} went to Paste an RFQ, which attaches files to an email you write.`
+      : `${what} went to Paste an RFQ, which attaches files to an email you write. Import emails takes ${importTypesText()} files.`);
+  }
+}
+
+function importLimitText(n) { return n >= 1048576 && n % 1048576 === 0 ? `${n / 1048576} MB` : fmtBytes(n); }
+
+function addImportFiles(list, sayWhy = true) {
+  const lim = S.boot.import, bad = [];
+  for (const file of [...(list || [])]) {
+    const f = { key: "f" + (++IM.seq), name: file.name || "file", size: file.size, file, state: "queued", progress: 0, result: null, valid: [], error: "", retry: true, open: false, xhr: null, lost: 0 };
+    // Checked here so a wrong file never goes up; the server checks again, from the bytes.
+    const why = !isEmailFile(file) ? (uploadType(file) ? "A PDF or an image is not an email. Attach it in Paste an RFQ instead." : `Only ${importTypesText()} files can be imported.`)
+      : !file.size ? "The file is empty."
+      : lim.max_bytes > 0 && file.size > lim.max_bytes ? `Over the ${importLimitText(lim.max_bytes)} limit (${fmtBytes(file.size)}). Split a big .zip into smaller ones.`
+      : "";
+    if (why) { Object.assign(f, { state: "error", error: why, retry: false }); bad.push(f); }
+    IM.files.push(f);
+  }
+  if (bad.length && sayWhy) toast(bad.length === 1 ? `${bad[0].name}: ${bad[0].error}` : `${bad.length} files cannot be imported. The list says why.`);
+  // With files on the way the list matters more than the help, unless the help was opened on purpose.
+  if (IM.helpOpen == null && !$("#iHelp").hidden) setImportHelp(false);
+  pumpImport();
+}
+
+// Start the next queued file when none is on its way.
+function pumpImport() {
+  if (importActive() < 0) {
+    const next = IM.files.find((f) => f.state === "queued");
+    if (next) startImport(next);
+    else finishImportRun();
+  }
+  renderImport();
+}
+
+function startImport(f) {
+  const xhr = new XMLHttpRequest();
+  Object.assign(f, { xhr, state: "uploading", progress: 0, error: "", result: null, valid: [], lost: 0, open: false });
+  IM.wasBusy = true;
+  const current = () => f.xhr === xhr;  // events from a cancelled request are ignored
+  xhr.open("POST", "/api/import");
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.setRequestHeader("X-File-Name", encodeURIComponent(f.name));
+  xhr.upload.onprogress = (e) => { if (current() && e.lengthComputable) { f.progress = e.total ? e.loaded / e.total : 0; updateImportProgress(f); } };
+  // Every byte is there: the server is unpacking and reading the emails now.
+  xhr.upload.onload = () => { if (current() && f.state === "uploading") { f.state = "reading"; f.progress = 1; renderImport(); } };
+  xhr.onload = () => {
+    if (!current()) return;
+    f.xhr = null;
+    let data = null;
+    try { data = JSON.parse(xhr.responseText || "null"); } catch (e) { /* not JSON */ }
+    if (xhr.status >= 200 && xhr.status < 300 && data && data.ok) {
+      const list = (x) => arr(x).filter((o) => o && typeof o === "object");
+      f.result = { added: list(data.added), duplicates: list(data.duplicates), skipped: list(data.skipped) };
+      f.valid = f.result.added.map((a) => String(a.id || "")).filter(Boolean);
+      f.state = "done";
+      schedulePoll(60);  // the new emails reach the inbox with the next state
+    } else {
+      const err = data && data.error;
+      f.state = "error";
+      f.error = (err && typeof err.message === "string" && err.message) || (typeof err === "string" && err)
+        || (xhr.status === 401 ? "Sign in again, then retry." : `The import failed (${xhr.status || "no response"}).`);
+      f.retry = xhr.status !== 413;  // too big stays too big
+    }
+    pumpImport();
+  };
+  xhr.onerror = () => {
+    if (!current()) return;
+    Object.assign(f, { xhr: null, state: "error", error: "The upload failed. Check the connection and try again.", retry: true });
+    pumpImport();
+  };
+  xhr.send(f.file);
+}
+
+function finishImportRun() {
+  if (!IM.wasBusy) return;
+  IM.wasBusy = false;
+  if (importOpen()) return;  // the list is on screen
+  const t = importTotals();
+  const failed = t.errors ? `, ${plural(t.errors, "file")} failed` : "";
+  toast(t.added
+    ? `Import finished: ${plural(t.added, "email")} added${t.dups ? `, ${t.dups} already in the inbox` : ""}${failed}. Open Import emails to route them.`
+    : `Import finished: no new emails${t.dups ? ` (${t.dups} already in the inbox)` : ""}${failed}. Import emails says why.`);
+}
+
+function importTotals() {
+  const t = { files: 0, added: 0, dups: 0, skipped: 0, errors: 0, retryable: 0, gone: 0 };
+  for (const f of IM.files) {
+    if (f.state === "done") { t.files++; t.added += f.valid.length; t.dups += f.result.duplicates.length; t.skipped += f.result.skipped.length; }
+    else if (f.state === "error") { t.errors++; if (f.retry) t.retryable++; }
+    else if (f.state === "gone") t.gone++;
+  }
+  return t;
+}
+
+function removeImportFile(f) {
+  const i = IM.files.indexOf(f);
+  if (i < 0 || f.state === "reading" || f.state === "done") return;  // the server has it: nothing to take back
+  if (f.xhr) { const x = f.xhr; f.xhr = null; x.abort(); }
+  IM.files.splice(i, 1);
+  pumpImport();
+  // Focus goes to the file that took its place, or the one before, or Add files.
+  const near = IM.files[i] || IM.files[i - 1], r = near && IM.dom.get(near.key);
+  const target = r ? r.el.querySelector("button") || r.el : $("#iAddFiles");
+  target.focus({ preventScroll: true });
+}
+
+function retryImport(files) {
+  for (const f of files) if ((f.state === "error" && f.retry) || f.state === "gone") Object.assign(f, { state: "queued", error: "", progress: 0 });
+  pumpImport();
+}
+
+function clearImport() {
+  if (importBusy()) return;
+  IM.files = [];
+  renderImport();
+  $("#iAddFiles").focus({ preventScroll: true });
+}
+
+/* The emails this list added that Jev has not seen yet. Before the next poll brings them in, the page
+   does not know them, so they count a moment later. */
+function importedIds() {
+  const ids = [];
+  for (const f of IM.files) if (f.state === "done") for (const id of f.valid) if (!ids.includes(id)) ids.push(id);
+  return ids;
+}
+function routableImported() {
+  return importedIds().filter((id) => { const it = S.state && S.state.items[id]; return !!(it && S.emails[id] && (it.status === "idle" || it.status === "error")); });
+}
+
+async function routeImported() {
+  const btn = $("#iRoute");
+  if (btn.dataset.sending || importBusy()) return;
+  btn.dataset.sending = "1"; renderImportFoot();
+  try {
+    // After a restart the server numbers its imports from M01 again, so an id from this list could name
+    // another email: check the server is the one that made them before sending any.
+    const q = S.state ? `?since=${encodeURIComponent(S.state.version)}&boot=${encodeURIComponent(S.state.boot_id)}` : "";
+    const st = await api("/api/state" + q);
+    const restarted = S.state && st.boot_id !== S.state.boot_id;
+    applyState(st);  // a new boot id reloads the board, and the list says those emails are gone
+    if (restarted) return;
+    const ids = routableImported();
+    if (!ids.length) { toast("These emails are already routed or on their way to Jev."); return; }
+    const r = await api("/api/run", { ids, use_cache: S.useCache });
+    applyState(r.state);
+    if (r.cached && !r.queued) toast(`Replaying ${plural(r.cached, "saved Jev result")}`);
+    else if (r.queued) toast(`Sending ${plural(r.queued, "imported email")} to Jev${r.cached ? `, replaying ${r.cached} saved` : ""}`);
+    // Routed: the next import starts a new list. Files dropped while this was sending keep going.
+    IM.files = IM.files.filter((f) => f.state === "queued" || f.state === "uploading" || f.state === "reading");
+    closeImport();
+    const row = S.dom.rows.get(ids[0]);
+    if (row) row.el.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+  } catch (e) { toast(e.message); }
+  finally { delete btn.dataset.sending; renderImport(); }
+}
+
+/* After a server restart the imported emails are gone: they lived in the old server's memory. An id
+   still counts only if it names an imported email from the same file with the same subject; files
+   whose emails are all gone say so and offer to import them again. Returns how many were lost. */
+function importAfterRestart() {
+  let lost = 0;
+  const trim = (s) => String(s || "").trim();
+  for (const f of IM.files) {
+    if (f.state !== "done") continue;
+    const had = f.valid.length;
+    f.valid = f.valid.filter((id) => {
+      const e = S.emails[id], a = f.result.added.find((x) => String(x.id) === id);
+      return !!(e && a && e.imported && e.import_source === a.source && trim(e.subject) === trim(a.subject));
+    });
+    lost += had - f.valid.length;
+    if (!f.valid.length && (had || f.result.duplicates.length)) Object.assign(f, { state: "gone", lost: had + f.result.duplicates.length, open: false });
+  }
+  IM.btnSig = "";
+  renderImport();
+  return lost;
+}
+
+function renderImport() {
+  renderImportBtn();
+  renderImportList();
+  renderImportSummary();
+  renderImportFoot();
+}
+
+// While files go up with the dialog closed, the top-bar button shows a spinner.
+function renderImportBtn() {
+  const b = $("#importBtn"), busy = importBusy(), i = importActive();
+  const sig = busy ? `busy|${i}|${IM.files.length}` : "idle";
+  if (IM.btnSig === sig) return;
+  IM.btnSig = sig;
+  b.innerHTML = `${busy ? `<span class="spin" aria-hidden="true"></span>` : ic("import")}<span class="label">Import emails</span>`;
+  b.title = busy ? `Importing emails: file ${Math.max(0, i) + 1} of ${IM.files.length}` : "Import Outlook emails: .eml, .msg, or .zip files";
+  b.setAttribute("aria-label", busy ? "Import emails, importing" : "Import emails");
+}
+
+function importResultLine(r) {
+  const a = r.added.length, d = r.duplicates.length, s = r.skipped.length;
+  if (!a && !d && !s) return "No emails found in this file";
+  return [`${a} added`, d ? `${d} already in the inbox` : "", s ? `${s} left out` : ""].filter(Boolean).join(", ");
+}
+
+// Where in the file an email was: "Inbox/RFQ 123.msg" for "orders.zip/Inbox/RFQ 123.msg", since the row names the file.
+function importPlace(source, fileName) {
+  const s = String(source || "");
+  if (s.startsWith(fileName)) { const rest = s.slice(fileName.length).replace(/^\s*(?:\/|>)\s*/, ""); if (rest) return rest; }
+  return s;
+}
+
+function importDetailsHtml(f) {
+  const r = f.result, src = (x) => (x.source && x.source !== f.name ? `<span class="src"> · ${esc(importPlace(x.source, f.name))}</span>` : "");
+  let h = "";
+  if (r.skipped.length) h += `<h4>Left out</h4><ul>${r.skipped.map((x) => `<li>${esc(importPlace(x.source, f.name) || f.name)}: ${esc(x.reason || "not read")}</li>`).join("")}</ul>`;
+  if (r.duplicates.length) h += `<h4>Already in the inbox</h4><ul>${r.duplicates.map((x) => `<li>${esc(x.subject || "(no subject)")}<span class="src"> · ${esc(x.id || "")}</span>${src(x)}</li>`).join("")}</ul>`;
+  if (r.added.length) {
+    h += `<h4>Added</h4><ul>${r.added.map((x) => {
+      const n = Number(x.attachments) || 0;
+      const warns = arr(x.warnings).filter(Boolean).map((w) => `<span class="warn">${ic("alert", "sm")}<span>${esc(w)}</span></span>`).join("");
+      return `<li>${esc(x.subject || "(no subject)")}<span class="src"> · ${esc(x.id || "")}${n ? ` · ${plural(n, "attachment")}` : ""}</span>${src(x)}${warns}</li>`;
+    }).join("")}</ul>`;
+  }
+  return h;
+}
+
+function importRowSig(f) {
+  const r = f.result;
+  return JSON.stringify([f.state, f.name, f.size, f.error, f.retry, f.open, f.lost, f.valid.length, r ? [r.added.length, r.duplicates.length, r.skipped.length] : null]);
+}
+
+function importRowInner(f) {
+  const zip = fileExt(f.name) === ".zip", name = esc(f.name);
+  const xBtn = (label) => `<button type="button" class="btn ghost icon small" data-act="remove" aria-label="${esc(label)}" title="${esc(label)}">${ic("x", "sm")}</button>`;
+  const textBtn = (act, text, label) => `<button type="button" class="btn small" data-act="${act}" aria-label="${esc(label)}">${ic("refresh", "sm")}${esc(text)}</button>`;
+  let st = "", acts = "", extra = "";
+  if (f.state === "queued") {
+    st = `<div class="imp-st"><span class="msg">Queued</span></div>`;
+    acts = xBtn(`Remove ${f.name} from the list`);
+  } else if (f.state === "uploading") {
+    const p = Math.round(f.progress * 100);
+    st = `<div class="imp-st"><span class="spin" aria-hidden="true"></span><span class="msg imp-pct">Uploading ${p}%</span></div><div class="imp-bar" aria-hidden="true"><i style="width:${p}%"></i></div>`;
+    acts = xBtn(`Cancel the upload of ${f.name}`);
+  } else if (f.state === "reading") {
+    st = `<div class="imp-st"><span class="spin" aria-hidden="true"></span><span class="msg">Reading the emails</span></div><div class="imp-bar" aria-hidden="true"><i style="width:100%"></i></div>`;
+  } else if (f.state === "done") {
+    const r = f.result, any = r.added.length + r.duplicates.length + r.skipped.length;
+    const tone = r.added.length || r.duplicates.length ? "ok" : "warn";
+    const more = any ? `<button type="button" class="imp-more" data-act="more" aria-expanded="${f.open}" aria-controls="iDet-${f.key}">${f.open ? "Hide details" : "Details"}</button>` : "";
+    st = `<div class="imp-st ${tone}">${ic(tone === "ok" ? "check" : "alert", "sm")}<span class="msg">${esc(importResultLine(r))}${more}</span></div>`;
+    if (any) extra = `<div class="imp-det" id="iDet-${f.key}"${f.open ? "" : " hidden"}>${f.open ? importDetailsHtml(f) : ""}</div>`;
+  } else if (f.state === "error") {
+    st = `<div class="imp-st err">${ic("alert", "sm")}<span class="msg">${esc(f.error)}</span></div>`;
+    acts = (f.retry ? textBtn("retry", "Retry", `Retry ${f.name}`) : "") + xBtn(`Remove ${f.name} from the list`);
+  } else if (f.state === "gone") {
+    const n = f.lost;
+    st = `<div class="imp-st gone">${ic("alert", "sm")}<span class="msg">The server restarted, so ${n === 1 ? "the email from this file is" : `the ${n} emails from this file are`} gone from the inbox.</span></div>`;
+    acts = textBtn("retry", "Import again", `Import ${f.name} again`);
+  }
+  return `<span class="imp-ic${zip ? " zip" : ""}" aria-hidden="true">${ic(zip ? "archive" : "mail")}</span>
+    <div class="imp-main"><div class="imp-top"><span class="imp-name" title="${name}">${name}</span><span class="imp-size">${esc(fmtBytes(f.size))}</span></div>${st}${extra}</div>
+    <div class="imp-acts">${acts}</div>`;
+}
+
+/* Keyed like the inbox: a row is rebuilt only when its signature changes, and upload progress moves
+   only the bar and the percent. A rebuilt row gives focus back to the same control. */
+function renderImportList() {
+  const list = $("#iList"), keys = new Set(IM.files.map((f) => f.key));
+  for (const [k, r] of IM.dom) if (!keys.has(k)) { r.el.remove(); IM.dom.delete(k); }
+  let ref = list.firstElementChild;
+  for (const f of IM.files) {
+    let r = IM.dom.get(f.key);
+    if (!r) {
+      const el = document.createElement("li");
+      el.className = "imp-item"; el.dataset.key = f.key; el.tabIndex = -1;
+      r = { el, sig: null }; IM.dom.set(f.key, r);
+    }
+    const sig = importRowSig(f);
+    if (r.sig !== sig) {
+      const active = document.activeElement, had = r.el.contains(active), act = had && active !== r.el ? active.dataset.act : null;
+      r.el.innerHTML = importRowInner(f); r.el.dataset.state = f.state; r.sig = sig;
+      r.el.setAttribute("aria-busy", f.state === "uploading" || f.state === "reading" ? "true" : "false");
+      if (had) ((act && r.el.querySelector(`[data-act="${act}"]`)) || r.el.querySelector("button") || r.el).focus({ preventScroll: true });
+    }
+    if (r.el !== ref) list.insertBefore(r.el, ref);
+    else ref = ref.nextElementSibling;
+  }
+}
+
+function updateImportProgress(f) {
+  const r = IM.dom.get(f.key);
+  if (!r || f.state !== "uploading") return;
+  const p = Math.round(f.progress * 100), bar = r.el.querySelector(".imp-bar i"), label = r.el.querySelector(".imp-pct");
+  if (bar) bar.style.width = p + "%";
+  if (label) label.textContent = `Uploading ${p}%`;
+}
+
+function renderImportSummary() {
+  const n = IM.files.length, t = importTotals(), busy = importBusy(), i = importActive();
+  let text = "";
+  if (busy) {
+    const queued = IM.files.filter((f) => f.state === "queued").length;
+    text = i >= 0 ? `Importing file ${i + 1} of ${n}${queued ? `, ${queued} waiting` : ""}.` : "Starting the import.";
+  } else if (n) {
+    const parts = [];
+    if (t.files) parts.push(`${plural(t.files, "file")} read: ${plural(t.added, "email")} added${t.dups ? `, ${t.dups} already in the inbox` : ""}${t.skipped ? `, ${t.skipped} left out` : ""}.`);
+    if (t.errors) parts.push(`${plural(t.errors, "file")} could not be imported.`);
+    if (t.gone) parts.push(`${plural(t.gone, "file")} must be imported again.`);
+    text = parts.join(" ");
+  }
+  const acts = [];
+  if (!busy && t.retryable + t.gone > 1) acts.push(`<button type="button" class="btn small" data-act="retry-all">${ic("refresh", "sm")}${t.retryable ? "Retry all" : "Import all again"}</button>`);
+  if (!busy && n) acts.push(`<button type="button" class="btn small ghost" data-act="clear" title="Empty this list. The emails stay in the inbox.">Clear list</button>`);
+  const sig = JSON.stringify([text, acts]);
+  if (IM.sumSig === sig) return;
+  IM.sumSig = sig;
+  $("#iSum").hidden = !n;
+  const tx = $("#iSumText"); if (tx.textContent !== text) tx.textContent = text;
+  const box = $("#iSumActs"), had = box.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+  box.innerHTML = acts.join("");
+  if (had) ((box.querySelector(`[data-act="${had}"]`)) || $("#iAddFiles")).focus({ preventScroll: true });
+}
+
+// "about one email a minute" at the free tier's pace (61 seconds a call), or the pace this server uses.
+const paceIsAMinute = (pace) => pace >= 45 && pace <= 90;
+function paceText(pace) {
+  return paceIsAMinute(pace) ? "about one email a minute" : `one email every ${Math.round(pace)} seconds or so`;
+}
+
+function renderImportFoot() {
+  const btn = $("#iRoute"), busy = importBusy(), sending = !!btn.dataset.sending;
+  const n = routableImported().length, all = importedIds().length;
+  const pace = Number(S.boot.free_tier_pace_seconds) > 0 ? Number(S.boot.free_tier_pace_seconds) : 61;
+  const mins = paceIsAMinute(pace) ? Math.max(1, n) : Math.max(1, Math.round((n * pace) / 60));
+  const label = sending ? `<span class="spin" aria-hidden="true"></span>Routing`
+    : busy ? `<span class="spin" aria-hidden="true"></span>Waiting for files`
+    : `${ic("play", "play")}${n ? `Route ${plural(n, "imported email")}` : "Route imported emails"}`;
+  const note = n ? `On the AI Gateway free tier Jev answers ${paceText(pace)}, so routing ${plural(n, "email")} takes about ${plural(mins, "minute")} there.`
+    : all && !busy ? "Every email this list added is routed or on its way to Jev."
+    : `On the AI Gateway free tier Jev answers ${paceText(pace)}, so a big import takes a while to route there.`;
+  // While it sends, the button stays enabled (clicks are ignored) so it keeps keyboard focus; a
+  // disabled button would drop focus to the page behind the dialog.
+  const sig = JSON.stringify([label, note, busy || !n, sending]);
+  if (IM.footSig === sig) return;
+  IM.footSig = sig;
+  const hadFocus = document.activeElement === btn;
+  btn.innerHTML = label;
+  btn.disabled = busy || !n;
+  btn.setAttribute("aria-disabled", sending ? "true" : "false");
+  $("#iFootNote").textContent = note;
+  if (hadFocus && btn.disabled) ($("#iList [data-act=retry]") || $("#iAddFiles")).focus({ preventScroll: true });
+}
+
+// Where an imported email came from, its date with the year, who else got it, and what the import left out.
+function importInfoHtml(e) {
+  const to = arr(e.to).filter(Boolean), cc = arr(e.cc).filter(Boolean), warns = arr(e.import_warnings).filter(Boolean);
+  const sent = fmtSent(e.date);
+  const hdr = [sent ? `Sent ${sent}` : "", to.length ? `To: ${to.join(", ")}` : "", cc.length ? `Cc: ${cc.join(", ")}` : ""].filter(Boolean);
+  return `<div class="imp-info">
+      <div class="l">${ic("import", "sm")}<span>Imported from <b>${esc(e.import_source || "a file")}</b></span></div>
+      ${hdr.length ? `<div class="l">${ic("mail", "sm")}<span>${hdr.map(esc).join(" · ")}</span></div>` : ""}
+      ${warns.map((w) => `<div class="l w">${ic("alert", "sm")}<span>${esc(w)}</span></div>`).join("")}
+    </div>`;
+}
+
+// "2026-09-24T08:15:00-07:00" -> "Thu, Sep 24, 2026, 08:15 (UTC-07:00)": the sender's own clock, like the
+// inbox row, with the year the row leaves out.
+function fmtSent(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(String(iso || "").trim());
+  if (!m) return "";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (isNaN(d) || d.getUTCMonth() !== +m[2] - 1) return "";
+  const day = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const z = (m[6] || "").replace(/^([+-]\d{2})(\d{2})$/, "$1:$2");
+  const tz = !z ? "" : z === "Z" || z === "+00:00" || z === "-00:00" ? " (UTC)" : ` (UTC${z})`;
+  return `${day}, ${m[4]}:${m[5]}${tz}`;
+}
+
 /* ---------------------------------------------------------------- file viewer */
 const VW = { list: [], idx: 0, returnEl: null, selFor: null, model: null, token: 0, stageToken: 0, texts: new Map(), meshes: new Map(),
   regionsCache: new Map(), panelOpen: true, regionsOn: false, reg: null, regRO: null, emailId: null };
@@ -2383,7 +2994,7 @@ function refreshViewerFiles() {
   const att = e.attachments[VW.idx];
   if (!att || att.name !== old.name) return;
   VW.list = e.attachments.slice();
-  const sig = (a) => [a.label, a.text_from, a.legend, a.size, a.pages, a.width, a.height, a.title].join("|");
+  const sig = (a) => [a.label, a.text_from, a.legend, a.size, a.pages, a.width, a.height, a.title, a.reading ? 1 : 0].join("|");
   if (sig(att) === sig(old) && att.url === old.url && canRegions(att) === canRegions(old)) return;
   renderViewerHead(att);
   if (att.url !== old.url || canRegions(att) !== canRegions(old)) renderStage(att);
@@ -2624,7 +3235,8 @@ function renderJevPanel(att, token) {
     body.innerHTML = `<p class="vp-note">This attachment is a file name with no file behind it, so Jev gets only the name.</p><pre class="jtext">${esc(att.name)}</pre>`;
     return;
   }
-  body.innerHTML = `<div class="vp-loading"><span class="spin"></span>Loading what Jev reads</div>`;
+  // The server answers once the file is read, so an imported file still being read waits here.
+  body.innerHTML = `<div class="vp-loading"><span class="spin"></span>${att.reading ? "The server is reading this file (a scan can take a minute)" : "Loading what Jev reads"}</div>`;
   getJson(att.text_url, VW.texts).then((r) => {
     if (token !== VW.token) return;
     const trunc = r.truncated ? r.text.replace(/\s*\[truncated\]$/, "").length : 0;

@@ -1,3 +1,5 @@
 # Windows batch files need CRLF; shell scripts must stay LF (they also run inside Docker).
 *.bat text eol=crlf
 *.sh  text eol=lf
+# Email fixtures are byte-exact (CRLF line endings, binary .msg and .zip): never convert them.
+tests/emails/** -text

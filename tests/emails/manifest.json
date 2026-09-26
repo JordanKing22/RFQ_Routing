@@ -1,0 +1,264 @@
+{
+ "about": "Answer key for the emails in this folder. tests/test_import.py parses every file listed here and checks the emails in it, then imports them into a running server. Generated fixtures come from tools/make_email_fixtures.py; scrubbed real emails come from tools/scrub_email.py (review them before committing). lane is where the email belongs; is_rfq says whether it asks for a quote.",
+ "files": [
+  {
+   "file": "01_rfq_pump_shaft_plain.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "Plain text from new Outlook, one drawing with a text layer.",
+   "emails": [
+    {
+     "subject": "RFQ: pump shaft HPV-3310 Rev C, 150 and 300 pcs",
+     "from_email": "glindqvist@halvorsenpv.com",
+     "attachments": [
+      "HPV-3310_shaft_RevC.pdf"
+     ],
+     "lane": "turning",
+     "is_rfq": true,
+     "part_numbers": [
+      "HPV-3310"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "02_rfq_heatsink_html_only.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "HTML only with a signature logo (left out), a faxed drawing read with OCR, and a STEP model.",
+   "emails": [
+    {
+     "subject": "RFQ: heat sink plate FR-2290, price breaks please",
+     "from_email": "lfischer@ferroviarobotics.com",
+     "attachments": [
+      "FR-2290_heatsink.pdf",
+      "FR-2290_heatsink.step"
+     ],
+     "lane": "milling_3axis",
+     "is_rfq": true,
+     "part_numbers": [
+      "FR-2290"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "03_rfq_cover_plate_cui_fax.msg",
+   "source": "generated",
+   "format": "msg",
+   "note": "Classic Outlook .msg. The CUI marking is only on the faxed drawing, so it takes OCR to route it.",
+   "emails": [
+    {
+     "subject": "Quote request: 316L cover plate AGI-3052, 12 pcs",
+     "from_email": "alindgren@ashgroveinst.com",
+     "attachments": [
+      "AGI-3052_RevA.pdf"
+     ],
+     "lane": "itar",
+     "is_rfq": true,
+     "part_numbers": [
+      "AGI-3052"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "04_po_followup_exchange_ansi.msg",
+   "source": "generated",
+   "format": "msg",
+   "note": "Older .msg with 8-bit (cp1252) strings and an Exchange sender address.",
+   "emails": [
+    {
+     "subject": "PO 45890: please confirm the ship date for QA-41127",
+     "from_email": "rkim@quillonaero.com",
+     "attachments": [],
+     "lane": "orders",
+     "is_rfq": false
+    }
+   ]
+  },
+  {
+   "file": "05_vendor_promo_latin1.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "A vendor newsletter in Latin-1, quoted-printable.",
+   "emails": [
+    {
+     "subject": "Fall tooling sale: 20% off carbide end mills",
+     "from_email": "kbrennan@apexcuttingsupply.com",
+     "attachments": [],
+     "lane": "filtered",
+     "is_rfq": false
+    }
+   ]
+  },
+  {
+   "file": "06_forward_bundle_three_emails.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "How new Outlook and Outlook on the web export several emails: forwarded as attachments. The bundle itself is not imported, only the three emails in it.",
+   "emails": [
+    {
+     "subject": "RFQ: brass contact pin NPE-0062, 2,500 pcs",
+     "from_email": "hortiz@northpeakenergy.com",
+     "attachments": [
+      "NPE-0062_pin.pdf"
+     ],
+     "lane": "turning",
+     "is_rfq": true,
+     "part_numbers": [
+      "NPE-0062"
+     ]
+    },
+    {
+     "subject": "PO 77120 status?",
+     "from_email": "ncastellanos@kestrelfluid.com",
+     "attachments": [],
+     "lane": "orders",
+     "is_rfq": false
+    },
+    {
+     "subject": "Experienced CNC machinist looking for work",
+     "from_email": "jvance.machinist@example.net",
+     "attachments": [
+      "Jordan_Vance_resume.pdf"
+     ],
+     "lane": "filtered",
+     "is_rfq": false
+    }
+   ]
+  },
+  {
+   "file": "07_rfq_pivot_pin_rtf_only.msg",
+   "source": "generated",
+   "format": "msg",
+   "note": "A .msg whose body exists only as compressed RTF, as older Outlook versions saved it.",
+   "emails": [
+    {
+     "subject": "RFQ: pivot pin BWM-3105 Rev A, 200 pcs",
+     "from_email": "dmireles@brightwatermed.com",
+     "attachments": [
+      "BWM-3105_RevA.pdf"
+     ],
+     "lane": "turning",
+     "is_rfq": true,
+     "part_numbers": [
+      "BWM-3105"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "08_quantity_change_with_original.msg",
+   "source": "generated",
+   "format": "msg",
+   "note": "A .msg that carries the customer's earlier email as an attached Outlook item: both are imported.",
+   "emails": [
+    {
+     "subject": "RE: RFQ end plate KF-3412 Rev A, quantity change",
+     "from_email": "ncastellanos@kestrelfluid.com",
+     "attachments": [
+      "KF-3412_RevA.pdf"
+     ],
+     "lane": "milling_3axis",
+     "is_rfq": true,
+     "part_numbers": [
+      "KF-3412"
+     ]
+    },
+    {
+     "subject": "RFQ: end plate KF-3412 Rev A",
+     "from_email": "ncastellanos@kestrelfluid.com",
+     "attachments": [],
+     "lane": "milling_3axis",
+     "is_rfq": true,
+     "part_numbers": [
+      "KF-3412"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "09_capability_question.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "A vague question with no part named: someone has to look at it.",
+   "emails": [
+    {
+     "subject": "Do you do sheet metal enclosures?",
+     "from_email": "blee@lumenfieldsolar.com",
+     "attachments": [],
+     "lane": "review",
+     "is_rfq": false
+    }
+   ]
+  },
+  {
+   "file": "10_rfq_mirror_mount_screenshot.eml",
+   "source": "generated",
+   "format": "eml",
+   "note": "A screenshot of a drawing instead of the PDF, read with OCR.",
+   "emails": [
+    {
+     "subject": "RFQ: fold mirror mount LO-1186 Rev A, qty 8",
+     "from_email": "fdurand@lucerneopto.com",
+     "attachments": [
+      "LO-1186_RevA_screenshot.png"
+     ],
+     "lane": "milling_5axis",
+     "is_rfq": true,
+     "part_numbers": [
+      "LO-1186"
+     ]
+    }
+   ]
+  },
+  {
+   "file": "11_outlook_folder_export.zip",
+   "source": "generated",
+   "format": "zip",
+   "note": "A zipped Outlook folder: a .msg, two .eml files (one a copy of 01, so a second import reports it as already in the inbox), the junk a Mac adds, and a text file that is left out.",
+   "emails": [
+    {
+     "subject": "RE: RFQ WS-26-0388, output shaft WS-4471 Rev B",
+     "from_email": "thaverford@wexcombesys.com",
+     "attachments": [
+      "WS-4471_RevB.pdf"
+     ],
+     "lane": "itar",
+     "is_rfq": true,
+     "part_numbers": [
+      "WS-4471"
+     ]
+    },
+    {
+     "subject": "Request for quote: lens cell TO-5520, 40 pcs",
+     "from_email": "omarsh@tessaractoptics.com",
+     "attachments": [
+      "TO-5520_lens_cell_CUI.pdf"
+     ],
+     "lane": "itar",
+     "is_rfq": true,
+     "part_numbers": [
+      "TO-5520"
+     ]
+    },
+    {
+     "subject": "RFQ: pump shaft HPV-3310 Rev C, 150 and 300 pcs",
+     "from_email": "glindqvist@halvorsenpv.com",
+     "attachments": [
+      "HPV-3310_shaft_RevC.pdf"
+     ],
+     "lane": "turning",
+     "is_rfq": true,
+     "part_numbers": [
+      "HPV-3310"
+     ]
+    }
+   ],
+   "skipped": [
+    "Inbox/notes.txt"
+   ]
+  }
+ ]
+}

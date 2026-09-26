@@ -689,6 +689,10 @@ UPLOAD_TYPES = {"application/pdf": "pdf", "image/png": "png", "image/jpeg": "jpg
 MEDIA_TYPES = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg", "step": "model/step"}
 
 
+def sniff_step(data: bytes) -> bool:
+    return data[:64].lstrip(b"\xef\xbb\xbf\x00\t\r\n ").startswith(b"ISO-10303-21")
+
+
 def sniff(data: bytes) -> Optional[str]:
     """Trust the bytes, not the file name or the browser's type."""
     if data[:1024].lstrip(b"\x00\t\r\n ").startswith(b"%PDF-") or b"%PDF-" in data[:1024]:
@@ -729,7 +733,7 @@ def safe_filename(name: str, media: str) -> str:
     name = str(name or "").replace("\\", "/").split("/")[-1]
     name = re.sub(r"[\x00-\x1f\x7f\"<>|:*?]", "", name)
     name = re.sub(r"\s+", " ", clean(name)).strip(" .") or "upload"
-    ext = {"pdf": (".pdf",), "png": (".png",), "jpg": (".jpg", ".jpeg")}[media]
+    ext = {"pdf": (".pdf",), "png": (".png",), "jpg": (".jpg", ".jpeg"), "step": (".step", ".stp")}[media]
     if not name.lower().endswith(ext):
         name = name.rsplit(".", 1)[0] if "." in name[-6:] else name
         name = f"{name}{ext[0]}"
@@ -866,6 +870,20 @@ class UploadStore:
             self._evict()
         return item
 
+    def add_raw(self, filename: str, data: bytes, media: str) -> Dict[str, Any]:
+        """Keep an imported email's attachment without reading it: a mass import must not wait for
+        OCR. The server reads it in the background (prepare_file with these bytes)."""
+        item: Dict[str, Any] = {
+            "id": secrets.token_hex(8), "name": safe_filename(filename, media), "media": media,
+            "size": len(data), "data": data, "created": time.time(), "attached": True,
+            "sha256": hashlib.sha256(data).hexdigest(), "pages": None, "width": None, "height": None,
+            "text": "", "text_error": None,
+        }
+        with self.lock:
+            self.items[item["id"]] = item
+            self._evict()
+        return item
+
     def _evict(self) -> None:
         now = time.time()
         for uid in [u for u, it in self.items.items() if not it["attached"] and now - it["created"] > UNATTACHED_TTL]:
@@ -984,19 +1002,22 @@ def resolve_data_path(data_dir: Any, rel: str) -> Optional[str]:
     return target if target.startswith(base + os.sep) and os.path.isfile(target) else None
 
 
-def prepare_file(att: Dict[str, Any], data_dir: Any, cache: Any = None) -> Dict[str, Any]:
+def prepare_file(att: Dict[str, Any], data_dir: Any, cache: Any = None, *, data: Optional[bytes] = None,
+                 effort: str = "best") -> Dict[str, Any]:
     """Read one real attachment: its bytes, its text (text layer, OCR, or STEP header), and what it
-    is. Updates the attachment dict in place and returns it. Never raises."""
-    path = resolve_data_path(data_dir, att.get("path", ""))
-    if not path:
-        att.update(prepared=True, available=False, text="", text_error="the file is missing")
-        return att
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    except OSError as exc:
-        att.update(prepared=True, available=False, text="", text_error=f"could not read the file ({exc})")
-        return att
+    is. Updates the attachment dict in place and returns it. Never raises. data: the bytes of an
+    imported email's attachment (kept in memory, no path); otherwise the file is read from data/."""
+    if data is None:
+        path = resolve_data_path(data_dir, att.get("path", ""))
+        if not path:
+            att.update(prepared=True, available=False, text="", text_error="the file is missing")
+            return att
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as exc:
+            att.update(prepared=True, available=False, text="", text_error=f"could not read the file ({exc})")
+            return att
     media = att.get("media") or sniff(data) or ("step" if data[:12] == b"ISO-10303-21" else None)
     att.update(media=media, size=len(data), sha256=hashlib.sha256(data).hexdigest(), available=True)
     if media in ("png", "jpg"):
@@ -1010,7 +1031,7 @@ def prepare_file(att: Dict[str, Any], data_dir: Any, cache: Any = None) -> Dict[
     mod = _ocr()
     if mod and hasattr(mod, "file_text"):
         try:
-            result = mod.file_text(data, media or "", att.get("name", ""), cache=cache)
+            result = mod.file_text(data, media or "", att.get("name", ""), cache=cache, effort=effort)
         except Exception as exc:  # noqa: BLE001 - fall back to the readers below
             result = {"method": "none", "text": "", "confidence": None, "pages": None, "error": repr(exc)}
     if not result or (not (result.get("text") or "").strip() and media in ("pdf", "step")):
@@ -1065,17 +1086,19 @@ def ocr_capture(result: Optional[Dict[str, Any]], media: Optional[str]) -> Optio
 
 _thumb_lock = threading.Lock()
 _thumbs: Dict[str, Tuple[bytes, str]] = {}
+THUMB_CACHE_MAX = 400  # previews run 10 to 60 KB
 
 
-def file_thumb(att: Dict[str, Any], data_dir: Any) -> Optional[Tuple[bytes, str]]:
+def file_thumb(att: Dict[str, Any], data_dir: Any, data: Optional[bytes] = None) -> Optional[Tuple[bytes, str]]:
     """A small preview of a real file: page 1 of a PDF (pdftoppm), a shrunk image (Pillow), or the
-    shaded 3D view of a STEP model. None when the tools for it are missing."""
+    shaded 3D view of a STEP model. None when the tools for it are missing. data: the bytes of an
+    imported attachment (no path)."""
     key = att.get("sha256") or ""
     with _thumb_lock:
         if key in _thumbs:
             return _thumbs[key]
-    path = resolve_data_path(data_dir, att.get("path", ""))
-    if not path:
+    path = resolve_data_path(data_dir, att.get("path", "")) if data is None else None
+    if data is None and not path:
         return None
     media, out = att.get("media"), None
     try:
@@ -1085,12 +1108,14 @@ def file_thumb(att: Dict[str, Any], data_dir: Any) -> Optional[Tuple[bytes, str]
             import shutil
             if shutil.which("pdftoppm"):
                 proc = subprocess.run(["pdftoppm", "-f", "1", "-l", "1", "-scale-to", "560", "-jpeg",
-                                       "-jpegopt", "quality=78", path], capture_output=True, timeout=30)
+                                       "-jpegopt", "quality=78", path or "-"], input=data,
+                                      capture_output=True, timeout=30)
                 if proc.returncode == 0 and proc.stdout.startswith(b"\xff\xd8"):
                     out = (proc.stdout, "image/jpeg")
         elif media in ("png", "jpg"):
             from PIL import Image
-            with Image.open(path) as im:
+            with Image.open(path if data is None else io.BytesIO(data)) as im:
+                im.draft("RGB", (1120, 1120))  # a big JPEG decodes at a fraction of its size
                 im = im.convert("RGB")
                 im.thumbnail((560, 560))
                 buf = io.BytesIO()
@@ -1101,6 +1126,8 @@ def file_thumb(att: Dict[str, Any], data_dir: Any) -> Optional[Tuple[bytes, str]
     if out:
         with _thumb_lock:
             _thumbs[key] = out
+            while len(_thumbs) > THUMB_CACHE_MAX:  # imported emails can bring hundreds of files
+                _thumbs.pop(next(iter(_thumbs)))
     return out
 
 
@@ -1293,6 +1320,9 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
             if info["scanned"] else ""
         info["label"] = f"{doc} ({how}, {info['text_from']})" if how and doc not in ("Photo", "Image") else \
             (f"{doc} ({info['text_from']})" if info["scanned"] else doc)
+        if att.get("upload_id") and not att.get("prepared"):
+            info["reading"] = True
+            info["label"] = f"{doc} (reading)"
         if media == "step":
             step = att.get("step") or {}
             info["kind"] = "model"  # the viewer shows it in 3D, from the mesh in the file itself

@@ -62,6 +62,19 @@ try:
     import rfq_details
 except Exception:  # noqa: BLE001 - the demo still routes without the details extractor
     rfq_details = None  # type: ignore[assignment]
+try:
+    import mailfile
+except Exception:  # noqa: BLE001 - the demo still runs without email import
+    mailfile = None  # type: ignore[assignment]
+
+# Importing Outlook emails (.eml, .msg, and .zip files of them). Imported emails live in memory like
+# pasted ones; their attachment bytes share the upload memory budget (RFQ_UPLOAD_MEMORY_MB).
+IMPORT_MAX_EMAILS = int(os.environ.get("RFQ_IMPORT_MAX_EMAILS", "500"))
+# Imported scans are read with the one-pass settings, like uploads: a mass import on a tenth of a
+# CPU would otherwise take minutes a page. Files already in the OCR cache are not read again.
+IMPORT_OCR_EFFORT = os.environ.get("RFQ_IMPORT_OCR_EFFORT", att_mod.UPLOAD_OCR_EFFORT)
+IMPORT_TYPES = ("application/octet-stream", "message/rfc822", "application/vnd.ms-outlook",
+                "application/zip", "application/x-zip-compressed")
 
 # Stop the queue on these: retrying cannot fix them.
 FATAL_KINDS = {"auth", "billing", "validation", "network", "not_found", "config", "bad_response"}
@@ -264,6 +277,11 @@ class App:
         self._details: Dict[str, Any] = {}
         self.ocr_cache = self._open_ocr_cache()
         self.live_count = 0
+        self.import_count = 0
+        self._import_keys: Dict[str, str] = {}  # Message-ID (or a content hash) -> email id
+        self._prep_queue: deque = deque()
+        self._prep_cond = threading.Condition()
+        threading.Thread(target=self._prep_loop, name="import-reader", daemon=True).start()
         self.last_call_at: Optional[float] = None
         self.pace_seconds: Optional[float] = None
         pace = os.environ.get("JEV_PACE_SECONDS", "").strip()
@@ -310,6 +328,8 @@ class App:
     def _cached(self, att: Dict[str, Any]) -> bool:
         if att.get("media") == "step" or self.ocr_cache is None:
             return att.get("media") == "step"
+        if att.get("upload_id"):
+            return self.ocr_cache.get(att.get("sha256") or "") is not None
         path = att_mod.resolve_data_path(DATA_DIR, att.get("path", ""))
         if not path:
             return True  # missing file: preparing it is instant
@@ -330,7 +350,17 @@ class App:
             email = self.emails[eid]
             started = time.time()
             for att in email.get("attachments") or []:
-                if att.get("kind") == "file" and not att.get("prepared"):
+                if att.get("kind") != "file" or att.get("prepared"):
+                    continue
+                if att.get("upload_id"):
+                    # An imported email's attachment: its bytes are in memory, not in data/.
+                    item = self.uploads.get(att["upload_id"])
+                    if item is None:
+                        att.update(prepared=True, available=False, text="", text_error=(
+                            "The file was dropped from memory before it could be read. Import the email again."))
+                        continue
+                    att_mod.prepare_file(att, DATA_DIR, self.ocr_cache, data=item["data"], effort=IMPORT_OCR_EFFORT)
+                else:
                     att_mod.prepare_file(att, DATA_DIR, self.ocr_cache)
             if self.ocr_cache is not None:
                 self.ocr_cache.save()
@@ -478,6 +508,131 @@ class App:
             self.order_version = self._added_at[eid] = self.version
         self.run([eid], use_cache=True, front=True)
         return eid
+
+    # ---- importing Outlook emails --------------------------------------------- #
+    def _prep_loop(self) -> None:
+        """Reads imported emails' attachments one email at a time, in import order."""
+        while True:
+            with self._prep_cond:
+                while not self._prep_queue:
+                    self._prep_cond.wait()
+                eid = self._prep_queue.popleft()
+            try:
+                self.prepare_email(eid)
+            except Exception as exc:  # noqa: BLE001 - one bad file must not stop the reader
+                log(f"Reading the attachments of {eid} failed: {exc!r}")
+                with self.cond:
+                    self._prepared.add(eid)
+                    self._bump()
+
+    @staticmethod
+    def _import_key(parsed: Dict[str, Any]) -> str:
+        mid = str(parsed.get("message_id") or "").strip().lower()
+        if mid:
+            return "mid:" + mid
+        blob = "\n".join(str(parsed.get(k) or "") for k in ("from_email", "subject", "date"))
+        blob += "\n" + str(parsed.get("body") or "")[:4000]
+        return "sha:" + hashlib.sha256(blob.encode("utf-8", "replace")).hexdigest()
+
+    @staticmethod
+    def _received(date_iso: Optional[str]) -> str:
+        """"Sep 24 08:15" in the sender's own time, from the email's Date. Imported emails are not
+        today's, so the day is shown too."""
+        try:
+            import datetime as dt
+            d = dt.datetime.fromisoformat(str(date_iso))
+            return f"{d:%b} {d.day} {d:%H:%M}"
+        except (TypeError, ValueError):
+            return time.strftime("%H:%M")
+
+    def _imported_attachment(self, att: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """A parsed attachment as an inbox attachment: PDF, PNG, JPG, and STEP files keep their bytes
+        (in the upload store) and are read like the beta's real files; anything else keeps its name."""
+        name = str(att.get("name") or "attachment")
+        data = att.get("data")
+        if name.lower() == "winmail.dat" or str(att.get("content_type") or "").lower() == "application/ms-tnef":
+            return None  # Outlook's rich-text wrapper: not readable, and the email's warning says so
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return {"name": name, "kind": "name_only"}
+        media = att_mod.sniff(data) or ("step" if att_mod.sniff_step(data) else None)
+        if media is None or len(data) > att_mod.MAX_UPLOAD_BYTES:
+            return {"name": name, "kind": "name_only"}
+        item = self.uploads.add_raw(name, bytes(data), media)
+        return {"name": item["name"], "kind": "file", "media": media, "upload_id": item["id"],
+                "sha256": item["sha256"], "size": item["size"], "imported": True}
+
+    def import_file(self, filename: str, data: bytes) -> Dict[str, Any]:
+        """Add every email in one uploaded .eml, .msg, or .zip file to the inbox (not routed yet).
+        Returns what was added, what was already in the inbox, and what was left out and why."""
+        if mailfile is None:
+            raise ValueError("Email import is not available on this server (mailfile.py is missing).")
+        parsed = mailfile.load(filename, data)
+        added: List[Dict[str, Any]] = []
+        duplicates: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = list(parsed.get("skipped") or [])
+        new_ids: List[str] = []
+        for pe in parsed.get("emails") or []:
+            source = str(pe.get("source") or filename)
+            if pe.get("container_only"):
+                continue  # a forward bundle: its attached emails follow it in the list
+            if not (str(pe.get("subject") or "").strip() or str(pe.get("body") or "").strip()):
+                skipped.append({"source": source, "reason": "no subject and no text"})
+                continue
+            key = self._import_key(pe)
+            with self.cond:
+                existing = self._import_keys.get(key)
+                if existing is None and self.import_count >= IMPORT_MAX_EMAILS:
+                    skipped.append({"source": source, "reason": f"this server holds at most {IMPORT_MAX_EMAILS} "
+                                    "imported emails (RFQ_IMPORT_MAX_EMAILS); restart it to start over"})
+                    continue
+            if existing is not None:
+                duplicates.append({"source": source, "subject": pe.get("subject") or "", "id": existing})
+                continue
+            attachments = [att_mod.normalize(a) for a in (self._imported_attachment(x) for x in pe.get("attachments") or [])
+                           if a is not None][:20]
+            with self.cond:
+                if key in self._import_keys:  # the same email in two files imported at once
+                    duplicates.append({"source": source, "subject": pe.get("subject") or "",
+                                       "id": self._import_keys[key]})
+                    continue
+                self.import_count += 1
+                eid = f"M{self.import_count:02d}"
+                while eid in self.emails:
+                    self.import_count += 1
+                    eid = f"M{self.import_count:02d}"
+                self._import_keys[key] = eid
+                self.emails[eid] = {
+                    "id": eid,
+                    "received": self._received(pe.get("date")),
+                    "date": pe.get("date"),
+                    "from_name": str(pe.get("from_name") or "").strip(),
+                    "from_email": str(pe.get("from_email") or "").strip() or "unknown@example.com",
+                    "to": list(pe.get("to") or [])[:20],
+                    "cc": list(pe.get("cc") or [])[:20],
+                    "subject": str(pe.get("subject") or "").strip(),
+                    "body": str(pe.get("body") or "").strip(),
+                    "attachments": attachments,
+                    "imported": True,
+                    "import_source": source,
+                    "import_warnings": list(pe.get("warnings") or [])[:10],
+                }
+                self.order.append(eid)
+                self.items[eid] = self._blank_item()
+                if not any(a.get("kind") == "file" for a in attachments):
+                    self._prepared.add(eid)
+                self._bump()
+                self.order_version = self._added_at[eid] = self.version
+            new_ids.append(eid)
+            added.append({"id": eid, "source": source, "subject": pe.get("subject") or "",
+                          "from": pe.get("from_email") or "", "attachments": len(attachments),
+                          "warnings": list(pe.get("warnings") or [])[:10]})
+        with self._prep_cond:
+            self._prep_queue.extend(e for e in new_ids if e not in self._prepared)
+            self._prep_cond.notify()
+        if added or duplicates:
+            log(f"Imported {filename}: {len(added)} added, {len(duplicates)} already in the inbox, "
+                f"{len(skipped)} left out")
+        return {"added": added, "duplicates": duplicates, "skipped": skipped}
 
     def set_thresholds(self, updates: Dict[str, Any]) -> Dict[str, float]:
         with self.cond:
@@ -832,7 +987,7 @@ class App:
         kind = att.get("kind")
         base = f"/api/att/{base_id}/{idx}" if kind in att_mod.SPEC_KINDS or kind in ("upload", "file") else None
         available = True
-        if kind == "upload":
+        if kind == "upload" or (kind == "file" and att.get("upload_id")):
             available = self.uploads.get(att.get("upload_id") or "") is not None
         return att_mod.describe(att, base, available)
 
@@ -932,7 +1087,9 @@ class App:
                         "types": sorted(att_mod.UPLOAD_TYPES), "pdf_text": att_mod.pypdf_available(),
                         "ocr": att_mod.ocr_ready()},
             "features": {"rfq_details": rfq_details is not None, "ocr": att_mod.ocr_ready(),
-                         "layout": att_mod.layout_ready()},
+                         "layout": att_mod.layout_ready(), "import": mailfile is not None},
+            "import": {"max_bytes": mailfile.LIMITS.max_file_bytes if mailfile else 0,
+                       "max_emails": IMPORT_MAX_EMAILS, "types": [".eml", ".msg", ".zip"]},
             "state": self.snapshot(),
         }
 
@@ -1089,31 +1246,49 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     def _real_file(self, eid: str, att: Dict[str, Any], what: str, download: bool) -> None:
-        """A real attachment file on disk (the RFQ details beta inbox)."""
-        path = att_mod.resolve_data_path(DATA_DIR, att.get("path", ""))
-        if not path:
-            return self._json({"error": "This file is missing on the server."}, 404)
+        """A real attachment file: on disk (the RFQ details beta inbox) or, for an imported email,
+        in the upload store's memory."""
+        memory: Optional[bytes] = None
+        path = None
+        if att.get("upload_id"):
+            item = self.app.uploads.get(att["upload_id"])
+            if item is None:
+                return self._json({"error": "This imported file is no longer in memory."}, 410)
+            memory = item["data"]
+        else:
+            path = att_mod.resolve_data_path(DATA_DIR, att.get("path", ""))
+            if not path:
+                return self._json({"error": "This file is missing on the server."}, 404)
+
+        def read() -> bytes:
+            if memory is not None:
+                return memory
+            with open(path, "rb") as fh:
+                return fh.read()
+
         if what == "file":
             media = att.get("media") or "pdf"
             ctype = att_mod.MEDIA_TYPES.get(media, "application/octet-stream")
-            with open(path, "rb") as fh:
-                return self._file(fh.read(), ctype, att["name"], download or media == "step", True)
+            return self._file(read(), ctype, att["name"], download or media == "step", True)
         if what in ("thumb.jpg", "thumb.svg"):
-            if eid in self.app.emails:
+            if eid in self.app.emails and memory is None:
                 self.app.prepare_email(eid)
-            thumb = att_mod.file_thumb(att, DATA_DIR)
+            if memory is not None and att.get("media") == "step" and "_mesh" not in att:
+                att["_mesh"] = att_mod.stepfile.parse(memory).get("mesh")
+            thumb = att_mod.file_thumb(att, DATA_DIR, data=memory)
             if not thumb:
                 return self._json({"error": "no preview"}, 404)
             return self._send(200, thumb[0], thumb[1], {"Cache-Control": "private, max-age=3600"})
         if what in ("page.jpg", "regions.json"):
-            if eid in self.app.emails:
+            if eid in self.app.emails and memory is None:
                 self.app.prepare_email(eid)
-            with open(path, "rb") as fh:
-                data = fh.read()
+            data = read()
             return self._page(data, att.get("media") or "", att.get("sha256") or hashlib.sha256(data).hexdigest(), what)
         if what == "mesh.json":
-            if eid in self.app.emails:
+            if eid in self.app.emails and memory is None:
                 self.app.prepare_email(eid)
+            if memory is not None and att.get("media") == "step" and "_mesh" not in att:
+                att["_mesh"] = att_mod.stepfile.parse(memory).get("mesh")
             if not att.get("_mesh"):
                 return self._json({"error": "no mesh in this file"}, 404)
             return self._send(200, json.dumps(att["_mesh"]).encode("utf-8"), "application/json; charset=utf-8",
@@ -1161,6 +1336,8 @@ class Handler(BaseHTTPRequestHandler):
         media_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if urlparse(self.path).path == "/api/uploads":
             return self._receive_upload(media_type)
+        if urlparse(self.path).path == "/api/import":
+            return self._receive_import(media_type)
         if media_type != "application/json":
             return self._json({"error": "JSON body required"}, 415)
         try:
@@ -1227,6 +1404,34 @@ class Handler(BaseHTTPRequestHandler):
         log(f"Upload {item['name']} ({item['size']:,} bytes, {item['media']}"
             + (f", {len(item['text']):,} characters of text" if item["media"] == "pdf" else "") + ")")
         return self._json({"ok": True, "upload": att_mod.upload_public(item)})
+
+
+    def _receive_import(self, media_type: str) -> None:
+        """One .eml, .msg, or .zip file as the raw body, like an upload (the non-simple Content-Type
+        forces a CORS preflight). The bytes decide what it is, not the name or the type."""
+        if media_type not in IMPORT_TYPES:
+            return self._json({"ok": False, "error": {"message": "Send .eml, .msg, or .zip files."}}, 415)
+        limit = mailfile.LIMITS.max_file_bytes if mailfile else 0
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length <= 0:
+            return self._json({"ok": False, "error": {"message": "The file is empty."}}, 400)
+        if length > limit:
+            self.close_connection = True
+            return self._json({"ok": False, "error": {"message": f"Files can be up to {limit // (1024 * 1024)} MB each. "
+                                                      "Split a big .zip into smaller ones."}}, 413)
+        try:
+            data = self.rfile.read(length)
+        except OSError:
+            return self._json({"ok": False, "error": {"message": "The upload was interrupted."}}, 400)
+        name = unquote(self.headers.get("X-File-Name") or "emails")[:200]
+        try:
+            result = self.app.import_file(name, data)
+        except ValueError as exc:
+            return self._json({"ok": False, "error": {"message": str(exc)}}, 400)
+        return self._json({"ok": True, **result, "boot": self.app.boot_id})
 
 
 class DemoHTTPServer(ThreadingHTTPServer):
