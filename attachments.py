@@ -877,19 +877,27 @@ class UploadStore:
             "id": secrets.token_hex(8), "name": safe_filename(filename, media), "media": media,
             "size": len(data), "data": data, "created": time.time(), "attached": True,
             "sha256": hashlib.sha256(data).hexdigest(), "pages": None, "width": None, "height": None,
-            "text": "", "text_error": None,
+            "text": "", "text_error": None, "pending": True,
         }
         with self.lock:
             self.items[item["id"]] = item
             self._evict()
         return item
 
+    def discard(self, uids: List[str]) -> None:
+        with self.lock:
+            for uid in uids:
+                self.items.pop(uid, None)
+
     def _evict(self) -> None:
         now = time.time()
         for uid in [u for u, it in self.items.items() if not it["attached"] and now - it["created"] > UNATTACHED_TTL]:
             del self.items[uid]
+        # Past the budget, drop the oldest files that were already read (their text stays on the
+        # email) before any imported file still waiting to be read; only then the oldest waiting one.
         while self.items and self.total() > self.max_total:
-            self.items.popitem(last=False)
+            done = next((u for u, it in self.items.items() if not it.get("pending")), None)
+            self.items.pop(done if done is not None else next(iter(self.items)))
 
     def get(self, uid: str) -> Optional[Dict[str, Any]]:
         with self.lock:

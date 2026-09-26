@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import hashlib
 import hmac
 import ipaddress
@@ -69,10 +70,13 @@ except Exception:  # noqa: BLE001 - the demo still runs without email import
 
 # Importing Outlook emails (.eml, .msg, and .zip files of them). Imported emails live in memory like
 # pasted ones; their attachment bytes share the upload memory budget (RFQ_UPLOAD_MEMORY_MB).
-IMPORT_MAX_EMAILS = int(os.environ.get("RFQ_IMPORT_MAX_EMAILS", "500"))
+IMPORT_MAX_EMAILS = min(9999, int(os.environ.get("RFQ_IMPORT_MAX_EMAILS", "500")))  # ids M01 to M9999
 # Imported scans are read with the one-pass settings, like uploads: a mass import on a tenth of a
 # CPU would otherwise take minutes a page. Files already in the OCR cache are not read again.
 IMPORT_OCR_EFFORT = os.environ.get("RFQ_IMPORT_OCR_EFFORT", att_mod.UPLOAD_OCR_EFFORT)
+# Jev reads the first 8,000 characters of a body (router.py); keep a little more for the details
+# extractor and the drawer, not megabytes of pasted logs that every page load would carry.
+IMPORT_LIMITS = dataclasses.replace(mailfile.LIMITS, max_body_chars=20_000) if mailfile else None
 IMPORT_TYPES = ("application/octet-stream", "message/rfc822", "application/vnd.ms-outlook",
                 "application/zip", "application/x-zip-compressed")
 
@@ -357,9 +361,11 @@ class App:
                     item = self.uploads.get(att["upload_id"])
                     if item is None:
                         att.update(prepared=True, available=False, text="", text_error=(
-                            "The file was dropped from memory before it could be read. Import the email again."))
+                            "The file was dropped from memory before it could be read. Import the email again "
+                            "to read it."))
                         continue
                     att_mod.prepare_file(att, DATA_DIR, self.ocr_cache, data=item["data"], effort=IMPORT_OCR_EFFORT)
+                    item["pending"] = False  # read: the store may drop its bytes under memory pressure now
                 else:
                     att_mod.prepare_file(att, DATA_DIR, self.ocr_cache)
             if self.ocr_cache is not None:
@@ -442,6 +448,11 @@ class App:
                 eid = self.queue.popleft()
                 if self.items[eid]["status"] == "queued":
                     self.items[eid]["status"] = "idle"
+            # The email whose files the worker is reading is out of the queue but still "queued":
+            # free it, or Route could not queue it again (the worker drops it when the read ends).
+            current = self.worker.get("current")
+            if current and self.items.get(current, {}).get("status") == "queued":
+                self.items[current]["status"] = "idle"
             if self.worker["state"] == "waiting":
                 self.worker.update(message="Stopping", resume_at=None, wait_reason=None)
             self._bump()
@@ -561,12 +572,44 @@ class App:
         return {"name": item["name"], "kind": "file", "media": media, "upload_id": item["id"],
                 "sha256": item["sha256"], "size": item["size"], "imported": True}
 
+    def _restore_dropped(self, eid: str, parsed: Dict[str, Any]) -> bool:
+        """The same email imported again: if some of its files were dropped from memory before they
+        were read, take the new copies and read them. True when the email needs reading again."""
+        with self.cond:
+            email = self.emails.get(eid)
+            lost = [i for i, a in enumerate(email["attachments"] if email else [])
+                    if a.get("kind") == "file" and a.get("upload_id") and self.uploads.get(a["upload_id"]) is None
+                    and not (a.get("text") or "").strip()]
+        if not lost:
+            return False
+        fresh = {}
+        for att in parsed.get("attachments") or []:
+            new = self._imported_attachment(att)
+            if new and new.get("upload_id"):
+                fresh.setdefault(new["name"], att_mod.normalize(new))
+        with self.cond:
+            restored = 0
+            for i in lost:
+                new = fresh.pop(email["attachments"][i]["name"], None)
+                if new is not None:
+                    email["attachments"][i] = new
+                    restored += 1
+            self.uploads.discard([a["upload_id"] for a in fresh.values()])
+            if not restored:
+                return False
+            self._prepared.discard(eid)
+            self._keys.pop(eid, None)
+            self._bump()
+            self._email_changed_at[eid] = self.version
+        log(f"Import: {restored} dropped file(s) of {eid} restored from a new copy")
+        return True
+
     def import_file(self, filename: str, data: bytes) -> Dict[str, Any]:
         """Add every email in one uploaded .eml, .msg, or .zip file to the inbox (not routed yet).
         Returns what was added, what was already in the inbox, and what was left out and why."""
         if mailfile is None:
             raise ValueError("Email import is not available on this server (mailfile.py is missing).")
-        parsed = mailfile.load(filename, data)
+        parsed = mailfile.load(filename, data, IMPORT_LIMITS)
         added: List[Dict[str, Any]] = []
         duplicates: List[Dict[str, Any]] = []
         skipped: List[Dict[str, Any]] = list(parsed.get("skipped") or [])
@@ -586,6 +629,8 @@ class App:
                                     "imported emails (RFQ_IMPORT_MAX_EMAILS); restart it to start over"})
                     continue
             if existing is not None:
+                if self._restore_dropped(existing, pe):
+                    new_ids.append(existing)
                 duplicates.append({"source": source, "subject": pe.get("subject") or "", "id": existing})
                 continue
             attachments = [att_mod.normalize(a) for a in (self._imported_attachment(x) for x in pe.get("attachments") or [])
@@ -594,6 +639,7 @@ class App:
                 if key in self._import_keys:  # the same email in two files imported at once
                     duplicates.append({"source": source, "subject": pe.get("subject") or "",
                                        "id": self._import_keys[key]})
+                    self.uploads.discard([a["upload_id"] for a in attachments if a.get("upload_id")])
                     continue
                 self.import_count += 1
                 eid = f"M{self.import_count:02d}"
@@ -767,7 +813,7 @@ class App:
                 self.prepare_email(eid)  # OCR can take a while: never hold the lock for it
             with self.cond:
                 if needs_files and (self.generation != gen or item["status"] != "queued"):
-                    if item["status"] == "queued":
+                    if item["status"] == "queued" and eid not in self.queue:  # not routed again meanwhile
                         item["status"] = "idle"
                     self._bump()
                     continue
@@ -1426,7 +1472,7 @@ class Handler(BaseHTTPRequestHandler):
             data = self.rfile.read(length)
         except OSError:
             return self._json({"ok": False, "error": {"message": "The upload was interrupted."}}, 400)
-        name = unquote(self.headers.get("X-File-Name") or "emails")[:200]
+        name = re.sub(r"[\x00-\x1f\x7f]", " ", unquote(self.headers.get("X-File-Name") or "emails"))[:200]
         try:
             result = self.app.import_file(name, data)
         except ValueError as exc:

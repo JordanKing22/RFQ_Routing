@@ -14,6 +14,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -196,7 +197,8 @@ class ServerImportTests(unittest.TestCase):
         self.assertTrue(att["text_from"].startswith("OCR"), att)  # a fax: its text came from OCR (the cache)
         status, text = self.c.json(f"/api/att/{eid}/0/text")
         self.assertIn("AGI-3052", text["text"])
-        for what in ("file", "thumb.jpg", "page.jpg"):
+        # A PDF's preview and page image come from pdftoppm (poppler); without it they are 404s.
+        for what in ("file", "thumb.jpg", "page.jpg") if shutil.which("pdftoppm") else ("file",):
             self.assertEqual(self.c.call(att["url"].split("?")[0].replace("/file", f"/{what}"))[0], 200, what)
         status, _, data = self.c.call(att["url"])
         self.assertEqual(data, (ROOT / "data" / "rfq_beta" / "files" / "E52" / "AGI-3052_RevA.pdf").read_bytes())
@@ -262,6 +264,69 @@ class ServerImportTests(unittest.TestCase):
         conn.close()
         status, _, _ = self.c.call("/api/import", raw=b"x", ctype="application/octet-stream", auth=False)
         self.assertEqual(status, 401)
+
+
+class ImportMemoryTests(unittest.TestCase):
+    """The import against a tiny upload memory budget, in process (no HTTP, no Jev)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        os.environ.setdefault("RFQ_CACHE_DIR", cls.tmp.name)
+        import server
+        cls.server = server
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def make_app(self, budget):
+        app = self.server.App(None, cache_file=Path(self.tmp.name) / "jev.json", seed_file=None)
+        app.uploads.max_total = budget
+        return app
+
+    def fixture(self, name):
+        return (EMAIL_DIR / name).read_bytes()
+
+    def test_unread_imports_are_kept_before_read_files(self):
+        import attachments as att_mod
+        store = att_mod.UploadStore(max_total=100)
+        done = store.add_raw("a.pdf", b"%PDF-1.4 " + b"a" * 60, "pdf")
+        done["pending"] = False
+        waiting = store.add_raw("b.pdf", b"%PDF-1.4 " + b"b" * 60, "pdf")
+        self.assertIsNone(store.get(done["id"]), "the file already read goes first")
+        self.assertIsNotNone(store.get(waiting["id"]))
+
+    def test_importing_again_restores_files_dropped_before_they_were_read(self):
+        app = self.make_app(budget=1)  # every file is dropped at once
+        with app._prep_cond:  # hold the background reader so the drop happens before any read
+            first = app.import_file("03.msg", self.fixture("03_rfq_cover_plate_cui_fax.msg"))
+            eid = first["added"][0]["id"]
+            app._prep_queue.clear()
+        app.prepare_email(eid)
+        att = app.emails[eid]["attachments"][0]
+        self.assertIn("dropped from memory", att["text_error"])
+        app.uploads.max_total = 50 * 1024 * 1024
+        again = app.import_file("03.msg", self.fixture("03_rfq_cover_plate_cui_fax.msg"))
+        self.assertEqual(again["added"], [])
+        self.assertEqual([d["id"] for d in again["duplicates"]], [eid])
+        deadline = time.time() + 120
+        while time.time() < deadline and eid not in app._prepared:
+            time.sleep(0.2)
+        att = app.emails[eid]["attachments"][0]
+        self.assertTrue(att.get("prepared") and "AGI-3052" in att.get("text", ""), att.get("text_error"))
+
+    def test_stop_while_reading_does_not_strand_the_email(self):
+        app = self.make_app(budget=50 * 1024 * 1024)
+        with app._prep_cond:
+            added = app.import_file("03.msg", self.fixture("03_rfq_cover_plate_cui_fax.msg"))["added"]
+            app._prep_queue.clear()
+        eid = added[0]["id"]
+        with app.cond:  # what the worker looks like while it reads this email's files
+            app.items[eid]["status"] = "queued"
+            app.worker["current"] = eid
+        app.stop()
+        self.assertEqual(app.items[eid]["status"], "idle")
 
 
 if __name__ == "__main__":

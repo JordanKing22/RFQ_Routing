@@ -298,7 +298,7 @@ Classic Outlook's drag and drop does not reach a web page directly, so drag the 
 - The body comes from the plain text part, or from the HTML, or, for old `.msg` files, from the compressed RTF. Signature logos under 30 KB are left out. Other pictures pasted into the email are kept, because they are often screenshots of a drawing.
 - PDF, PNG, JPG, and STEP attachments up to 10 MB are kept and read in the background, one email at a time, with the same text layer, OCR, and STEP reading as the beta's files. Files already in the OCR cache are not read again, and scans are read with the fast settings (`RFQ_IMPORT_OCR_EFFORT`). They get the same tiles, viewer, 3D view, and Detected regions. Other attachments (spreadsheets, DXF, winmail.dat) keep only their name, which Jev still reads. Routing waits until an email's files are read.
 - Relative dates in an imported email ("within two weeks") count from the day it was sent.
-- Imported emails live in memory, like pasted ones: a restart (a Render redeploy or sleep) clears them. Their attachment bytes share the upload memory budget (`RFQ_UPLOAD_MEMORY_MB`, 100 MB); once it is full, the oldest files are dropped and keep only the text already read.
+- Imported emails live in memory, like pasted ones: a restart (a Render redeploy or sleep) clears them. Their attachment bytes share the upload memory budget (`RFQ_UPLOAD_MEMORY_MB`, 100 MB). Once it is full, the oldest files that were already read are dropped first (their text stays on the email, only the viewer loses them); files still waiting to be read go last. If one is dropped anyway, importing the same email again brings it back and reads it. Bodies are kept to 20,000 characters (Jev reads the first 8,000).
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -429,7 +429,7 @@ print(result.answers["is_rfq"].noul, result.answers["machine"].choice)
 | Detected regions says the page image could not be made | For PDFs, install poppler (`pdftoppm`) |
 | The downloaded RFQ details differ from `data/rfq_beta/rfq_details.csv` | Relative dates ("within two weeks") resolve against the server's date, and the committed file uses September 25, 2026. After routing, Jev decides which emails are RFQs (see [The consolidated file](#the-consolidated-file)) |
 | Import emails lists a file as "not an email file" | Only `.eml` and `.msg` files (and zips of them) are read. Save the emails from Outlook as described in [Import Outlook emails](#import-outlook-emails-mass-upload-beta) |
-| An imported attachment says it "was dropped from memory before it could be read" | Many imports filled the upload memory budget before the file was read. Import that email again, or raise `RFQ_UPLOAD_MEMORY_MB` on a bigger host |
+| An imported attachment says it "was dropped from memory before it could be read" | Imports filled the upload memory budget before the file was read. Import the same file again: the email is recognized and its missing files are read. Or raise `RFQ_UPLOAD_MEMORY_MB` on a bigger host |
 | Imported emails are gone | The server restarted (a redeploy or a free-plan sleep). Import the files again |
 | Replays are slow again after a cloud restart | Commit a fresh `data/saved_results.json` (Settings, Download saved results). Saved answers only match the exact emails, attachments, and questions they were made with |
 
