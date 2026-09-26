@@ -860,8 +860,9 @@ class App:
                 texts[att["name"]] = att.get("_file_text") or {"method": att.get("text_method") or "none",
                                                                "text": att.get("text") or ""}
             elif kind == "upload":
-                texts[att["name"]] = {"method": att.get("text_method") or ("text-layer" if att.get("text") else "none"),
-                                      "text": att.get("text") or "", "confidence": att.get("text_conf")}
+                texts[att["name"]] = att.get("_file_text") or {
+                    "method": att.get("text_method") or ("text-layer" if att.get("text") else "none"),
+                    "text": att.get("text") or "", "confidence": att.get("text_conf")}
             elif kind in att_mod.SPEC_KINDS:
                 texts[att["name"]] = {"method": "step-header" if kind == "model" else "text-layer",
                                       "text": att_mod.spec_text(att)}

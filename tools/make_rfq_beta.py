@@ -1,6 +1,7 @@
 """
 Build the RFQ details beta inbox: 22 emails from data/sample_emails.json and exactly 30 real
-attachment files, 13 of them uncopyable (image-only scans, a fax, a phone photo, a screenshot)
+attachment files, 13 of them uncopyable (image-only office and copier scans, two faxes, a phone
+photo, a screenshot)
 so the text has to come from OCR.
 
     pip install pillow            (needed only to run this tool)
@@ -20,7 +21,6 @@ from __future__ import annotations
 
 import io
 import json
-import math
 import random
 import sys
 import zlib

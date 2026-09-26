@@ -31,6 +31,7 @@ import csv
 import datetime as dt
 import difflib
 import io
+import itertools
 import json
 import re
 import sys
@@ -53,8 +54,8 @@ SAMPLE_INBOX_DATE = dt.date(2026, 9, 25)
 
 # Below this line confidence an OCR value that no other source confirms gets a "verify" note.
 LOW_OCR_CONF = 60.0
-
-FILE_TYPES = ("RFQ form", "drawing", "3D model", "photo", "screenshot", "other")
+# Fields whose record value carries its own OCR line confidence ("conf") next to the source.
+VALUE_CONF_FIELDS = ("part_number", "rev", "description", "material", "finish")
 
 # --------------------------------------------------------------------------- #
 # Text cleanup and fuzzy helpers
@@ -274,7 +275,6 @@ RFQ_NO_RE = re.compile(r"\bRFQ(?:[-\s#:]*(?:NO\.?|NUMBER|#))?[\s#:]*((?:[A-Z]{1,
 RFQ_ID_RE = re.compile(r"\b((?:RFQ|RF[O0Q]|[A-Z]{1,4})-?[0-9OISB]{2}-[0-9OISB]{3,5})\b")
 QUOTE_REF_RE = re.compile(r"\b(Q(?:T|UOTE)?-?\d{2}-\d{3,6}|Q\d{5,8})\b", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s)>\]]+", re.IGNORECASE)
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 MATERIAL_STRONG = re.compile(
     r"\b(?:[1-7]\d{3}-T\d{1,4}(?:\s*OR\s*T\d{1,4})?|[1-7]\d{3}\s+(?:ALUMINUM|ALUMINIUM|AL)\b|(?:AL|ALUMINUM)\s+[1-7]\d{3}"
@@ -618,7 +618,9 @@ class Doc:
         if isinstance(hint, str) and hint:
             cells = {fold(c) for c in hint.split("|") if fold(c)}
             where = {c: {ln.region for ln in self.lines if fold(ln.text) == c} for c in cells}
-            for group in ([c for c in cells if key in c], list(cells)):
+            # a one- or two-letter value (a rev) is "in" nearly any long cell ('B' folds to '8',
+            # which 'BOTTOM' also holds): for it only a cell that reads exactly the same votes first
+            for group in ([c for c in cells if key in c and (len(key) >= 3 or c == key)], list(cells)):
                 votes = [next(iter(where[c])) for c in group if len(where[c]) == 1]
                 if votes:
                     return pick(votes)
@@ -1557,7 +1559,7 @@ def parse_quantities(text: str) -> Tuple[Optional[List[int]], bool]:
     """A quantity cell ('25 / 75 / 150', '250 / 500 / 1,000', '25, 50, 100') -> ([ints], complete).
     complete is False when OCR left a dangling separator or an unreadable piece."""
     t = clean(text).replace("|", " ")
-    t = re.sub(r"\bPCS?\b|\bPIECES\b|\bEA\b", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bPCS?\b|\bPIECES\b|\bEA\b|\bEACH\b", " ", t, flags=re.IGNORECASE)
     # a thousands group OCR read with a letter ('1,O00') is still a thousands group
     t = re.sub(r"(?<=\d),([0-9OQDIlSB]{3})(?![0-9A-Za-z])",
                lambda m: "," + "".join(_TO_DIGIT.get(c, c) for c in m.group(1).upper()), t)
@@ -1620,11 +1622,6 @@ def _split_desc_matfin(text: str) -> Tuple[str, str]:
     if "/" in before or re.match(r"^[A-Z]?\d", before) or SPEC_WORDS.search(before.upper()):
         return "", text.strip()  # "H1025 / PASSIVATE PER": all of it continues the material cell
     return before, text[m.start():].strip()
-
-
-class _FormTable:
-    def __init__(self) -> None:
-        self.rows: List[Dict[str, Any]] = []
 
 
 # Column labels anywhere in a line, for header rows OCR read as one line.
@@ -2699,6 +2696,8 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             a = re.match(r"\s*(?:,?\s*rev\.?\s*[A-Z0-9]{1,2}\s*)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*){0,2})(?=[\s,.;:!?]|$)",
                          text[idx + len(p["pn"]):] if idx >= 0 else "")
             words = a.group(1).split() if a else []
+            # "BWM-3106 and pivot pin BWM-3105": the words after "and" describe the next part
+            words = list(itertools.takewhile(lambda w: w.lower() not in ("and", "or", "plus", "with", "to"), words))
 
             def noun(w: str) -> bool:
                 w = w.upper()
@@ -3133,6 +3132,7 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
 
     # ---- part lines -------------------------------------------------------- #
     lines: List[Dict[str, Any]] = []
+    named_keys = {fold(p) for p in named if p}
 
     def find_line(pn: Optional[str], allow_prefix: bool = True) -> List[Dict[str, Any]]:
         if not pn:
@@ -3149,7 +3149,9 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         if not pn:
             return []
         key = fold(pn)
+        # a sibling the email or a form names exactly (BWM-3105 next to BWM-3106) is its own part, not a slip
         near = [ln for ln in lines if ln["_key"] and ln["_key"] != key and _near_key(ln["_key"], key)
+                and ln["_key"] not in named_keys
                 and ln["_c"]["part_number"] and all("(OCR" in c[2] for c in ln["_c"]["part_number"])]
         if len(near) != 1:
             return []
@@ -3218,7 +3220,11 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         if not targets and p.get("ref"):
             continue
         if not targets:
-            if lines and (forms or drawings) and p["src"] == "subject" and len(em["part_numbers"]) > len(lines):
+            # a subject number no file gives is often the product the part goes on ("for SB-400
+            # turbo blower"), unless it is a sibling of a number a file gives (BWM-3106 beside BWM-3105)
+            if lines and (forms or drawings) and p["src"] == "subject" and len(em["part_numbers"]) > len(lines) \
+                    and not any(ln["_key"] and ln["_key"] != fold(p["pn"]) and _near_key(ln["_key"], fold(p["pn"]))
+                                for ln in lines):
                 continue
             targets = [new_line(p["pn"])]
         src = "subject" if p["src"] == "subject" else "email body"
@@ -3346,6 +3352,11 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                     check.append(f"Line {n} quantities may be incomplete: OCR could not read every break in {source}")
             if ocr_win and conf is not None and conf < LOW_OCR_CONF and field in ("part_number", "rev", "quantities"):
                 confirmed = any("(OCR" not in s2 and fold(str(v2)) == fold(str(value)) for _, v2, s2, _ in c[field])
+                if field == "part_number" and not confirmed:
+                    # the customer typed the file name: 'AW-310_frame_assy.pdf' confirms AW-310
+                    # (and not AW-3105 or AW-310-02, which are other parts)
+                    confirmed = any(re.search(r"(?:^|[_\s.-])" + re.escape(str(value)) + r"(?:[_\s.]|$)", d.name, re.I)
+                                    for d in docs)
                 if field == "quantities" and ln["_qty_complete"] and all(a < b for a, b in zip(value, value[1:])):
                     # Tesseract scores a slash list like '25/ 75/150' near 0 even when every digit is
                     # right, so for breaks the score says little: a list that read completely into
@@ -3356,7 +3367,12 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                     check.append(f"Line {n} {field.replace('_', ' ')} {shown}: OCR read it at {conf:.0f}% confidence "
                                  f"on {re.sub(r' [(](?:OCR|text layer|STEP header)[^)]*[)]$', '', source)} "
                                  f"and no other source confirms it; verify")
-            rec[field] = _v(value, source)
+            # The source says how well OCR read the whole file ('(OCR 92%)'); an identity value also
+            # carries the confidence of its own line, which can be far lower (AW-310 at 42% on a
+            # 92% page). Quantities do not: Tesseract scores a right slash list near 0.
+            extra = {"conf": round(conf, 1)} if (ocr_win and conf is not None and "(OCR" in source
+                                                   and field in VALUE_CONF_FIELDS) else {}
+            rec[field] = _v(value, source, **extra)
         out_lines.append(rec)
 
     # ---- files, missing info, routing --------------------------------------- #
@@ -3440,8 +3456,8 @@ def extract_all(emails: List[Dict[str, Any]], texts_by_email: Dict[str, Dict[str
 # The consolidated file
 # --------------------------------------------------------------------------- #
 CSV_COLUMNS = ["Email", "Received", "Customer", "Tier", "Contact", "Contact email", "RFQ number", "Quote ref",
-               "Request", "Respond by", "Delivery", "Line", "Part number", "Rev", "Description", "Material", "Finish",
-               "Size", "Quantities", "Annual usage", "Export control", "Export control found in", "Requirements",
+               "Request", "Respond by", "Delivery", "Terms", "Line", "Part number", "Rev", "Description", "Material",
+               "Finish", "Size", "Quantities", "Annual usage", "Export control", "Export control found in", "Requirements",
                "Files", "Missing info", "Check", "Lane", "Estimator", "Priority", "Quote by"]
 
 
@@ -3453,7 +3469,12 @@ def _cell(value: Any) -> str:
     s = _SURROGATES.sub("�", s)  # the id and received time are passed through as they came
     if len(s) > 32_000:
         s = s[:32_000] + " ..."  # Excel cuts a cell at 32,767 characters
-    if s[:1] in ("=", "+", "@", "\t", "\r") or (s[:1] == "-" and len(s) > 1 and not re.match(r"-\d", s)):
+    # A leading minus starts a formula too ("-2+3+cmd|' /C calc'!A0"): only a plain negative number,
+    # perhaps with a unit after it ('-5', '-1,250', '-5 C'), stays as it is. Leading spaces do not
+    # hide the formula character from a spreadsheet, so they do not hide it here either.
+    head = s.lstrip(" ")
+    if head[:1] in ("=", "+", "@", "\t", "\r") or (
+            head[:1] == "-" and len(head) > 1 and not re.fullmatch(r"-\d[\d.,]*(?: [A-Za-z%]+)*", head)):
         return "'" + s
     return s
 
@@ -3476,7 +3497,8 @@ def to_csv(records: List[Dict[str, Any]], bom: bool = False) -> str:
                 r.get("email_id"), r.get("received"), r.get("customer"), r.get("customer_tier"), r.get("contact"),
                 r.get("contact_email"), (r.get("rfq_number") or {}).get("value"),
                 (r.get("quote_ref") or {}).get("value"), r.get("request"), (r.get("respond_by") or {}).get("value"),
-                (r.get("delivery") or {}).get("value"), ln.get("line"), (ln.get("part_number") or {}).get("value"),
+                (r.get("delivery") or {}).get("value"), (r.get("terms") or {}).get("value"), ln.get("line"),
+                (ln.get("part_number") or {}).get("value"),
                 (ln.get("rev") or {}).get("value"), (ln.get("description") or {}).get("value"),
                 (ln.get("material") or {}).get("value"), (ln.get("finish") or {}).get("value"),
                 (ln.get("size") or {}).get("value"), " / ".join(str(x) for x in q) if q else "",

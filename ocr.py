@@ -59,14 +59,19 @@ OCR_MAX_PAGES = max(1, int(os.environ.get("RFQ_OCR_MAX_PAGES", "6") or 6))
 OCR_TESSDATA = os.environ.get("RFQ_OCR_TESSDATA", "").strip() or None
 # The biggest picture handed to tesseract. A letter page at 400 dpi is 15 million pixels.
 MAX_OCR_PIXELS = 36_000_000
-# Refuse to decode pictures bigger than this at all (a small PNG can claim a huge size).
-MAX_INPUT_PIXELS = 80_000_000
+# Refuse to decode pictures bigger than this at all (a small PNG can claim a huge size). An
+# 11 x 17 in drawing at 600 dpi (67 million pixels, 1-bit) got a used server killed on 512 MB.
+MAX_INPUT_PIXELS = 40_000_000
 # And bigger than this once decoded (Pillow keeps RGB, RGBA, and CMYK at 4 bytes a pixel). The
-# clean-up adds about half that again: a 48 megapixel phone photo (192 MB decoded) peaks at
-# 286 MB, which leaves room on a 512 MB host; a 79 megapixel RGBA PNG (316 MB) is refused. A
-# JPEG over this or MAX_INPUT_PIXELS is decoded at a half, a quarter, or an eighth of its size
-# instead, which the JPEG decoder does for free (docs/ocr_settings.md, "Very large pages").
-MAX_INPUT_BYTES = 200_000_000
+# clean-up adds about half that again, and Tesseract runs beside it. The budget is for a server
+# that has been used, not an idle one: with the viewer's detector loaded and its page caches
+# full the server sits at 200 to 250 MB, and a 48 megapixel phone photo read whole (192 MB
+# decoded) then took it to 490 to 520 MB, 690 with Tesseract. A JPEG over this or
+# MAX_INPUT_PIXELS is decoded at a half, a quarter, or an eighth of its size instead, which the
+# JPEG decoder does for free: that photo is read at 4000 x 3000 (still above the photo recipe's
+# 300 dpi on a letter page) and peaks at 265 MB, 362 with Tesseract. A PNG over 25 megapixels in
+# color is refused (docs/ocr_settings.md, "Very large pages").
+MAX_INPUT_BYTES = 100_000_000
 # A scan finer than this is rendered down to it: on 600 dpi office scans of the held-out
 # drawings, 300 dpi found 19 of 20 key fields against 17 at 600 or 400 dpi, for less than half
 # the time (docs/ocr_settings.md, "Review").
@@ -303,8 +308,13 @@ def _open_image(data: bytes) -> "Image.Image":
         img = Image.open(io.BytesIO(data))
         w, h = img.size
 
+        # A CMYK picture (print workflows save JPEGs that way) goes through a whole RGB copy on its
+        # way to gray: an 8900 x 8900 one read at half size still took a used server to 510 MB
+        # with Tesseract, so it counts double.
+        per = 2 if img.mode == "CMYK" else 1
+
         def too_big(size: Tuple[int, int]) -> bool:
-            return size[0] * size[1] > MAX_INPUT_PIXELS or _decoded_bytes(img.mode, size) > MAX_INPUT_BYTES
+            return size[0] * size[1] > MAX_INPUT_PIXELS or _decoded_bytes(img.mode, size) * per > MAX_INPUT_BYTES
         if img.format == "JPEG" and too_big(img.size):
             k = 2
             while k < 8 and too_big((w // k, h // k)):

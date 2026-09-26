@@ -1,8 +1,9 @@
 """
 Build the training data for the page layout detector (layout.py, models/rfq_layout.onnx).
 
-The detector finds the regions of a page that matter to the RFQ extractor, so Tesseract can read
-each one with settings suited to it and the extractor knows where every piece of text came from:
+The detector finds the regions of a page that matter to the RFQ extractor, so the extractor knows
+where every piece of text was printed (reading each region with its own OCR settings was measured
+and is off; see docs/layout_model.md):
 
     0 title_block         drawing title block: company, TITLE, MATERIAL, FINISH, DWG NO., REV,
                           SCALE, SHEET cells and the tolerance block beside them
@@ -48,7 +49,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import zlib
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple

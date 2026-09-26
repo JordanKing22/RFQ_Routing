@@ -51,23 +51,28 @@
      "line": 1,
      "part_number": {
       "value": "QA-41127",
-      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)",
+      "conf": 91.6
      },
      "rev": {
       "value": "B",
-      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)",
+      "conf": 90.3
      },
      "description": {
       "value": "BRACKET, SENSOR MOUNTING",
-      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)",
+      "conf": 95.3
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)",
+      "conf": 92.6
      },
      "finish": {
       "value": "BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2",
-      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)",
+      "conf": 90.3
      },
      "quantities": {
       "value": [
@@ -540,23 +545,28 @@
      "line": 1,
      "part_number": {
       "value": "FR-2290",
-      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)",
+      "conf": 39.4
      },
      "rev": {
       "value": "A",
-      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)",
+      "conf": 95.9
      },
      "description": {
       "value": "HEAT SINK PLATE, SERVO DRIVE",
-      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)",
+      "conf": 95.7
      },
      "material": {
       "value": "ALUMINUM 6063-T6 PER ASTM B221",
-      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)",
+      "conf": 93.3
      },
      "finish": {
       "value": "CLEAR ANODIZE PER MIL-A-8625 TYPE II CLASS 1",
-      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)",
+      "conf": 91.8
      },
      "quantities": {
       "value": null,
@@ -644,23 +654,28 @@
      "line": 1,
      "part_number": {
       "value": "HPV-2045",
-      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)",
+      "conf": 91.4
      },
      "rev": {
       "value": "D",
-      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)",
+      "conf": 70.1
      },
      "description": {
       "value": "MANIFOLD BLOCK, VALVE, 4-PORT",
-      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)",
+      "conf": 94.3
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)",
+      "conf": 92.5
      },
      "finish": {
       "value": "HARD ANODIZE PER MIL-A-8625 TYPE III CLASS 1",
-      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)",
+      "conf": 91.5
      },
      "quantities": {
       "value": [
@@ -749,23 +764,28 @@
      "line": 1,
      "part_number": {
       "value": "AW-310",
-      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)",
+      "conf": 42.0
      },
      "rev": {
       "value": "B",
-      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)",
+      "conf": 92.0
      },
      "description": {
       "value": "FRAME ASSY, SEED METER MOUNT, WELDED",
-      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)",
+      "conf": 94.7
      },
      "material": {
       "value": "STEEL, ASTM A36: 2 X 2 X .188 SQ TUBE, .50 PLATE",
-      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)",
+      "conf": 92.1
      },
      "finish": {
       "value": "POWDER COAT RAL 6018, 2-4 MILS, AFTER MACHINING",
-      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)",
+      "conf": 94.0
      },
      "quantities": {
       "value": [
@@ -798,9 +818,7 @@
     }
    ],
    "missing": [],
-   "check": [
-    "Line 1 part number AW-310: OCR read it at 42% confidence on AW-310_frame_assy.pdf, title block and no other source confirms it; verify"
-   ],
+   "check": [],
    "routing": null
   },
   {
@@ -985,23 +1003,28 @@
      "line": 2,
      "part_number": {
       "value": "FR-3102",
-      "source": "FR-3102.pdf, title block (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)",
+      "conf": 63.5
      },
      "rev": {
       "value": "B",
-      "source": "FR-3102.pdf, notes (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)",
+      "conf": 88.6
      },
      "description": {
       "value": "COVER, DRIVE ENCLOSURE",
-      "source": "FR-3102.pdf, title block (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)",
+      "conf": 95.3
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "FR-3102.pdf, title block (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)",
+      "conf": 91.6
      },
      "finish": {
       "value": "CHEM FILM PER MIL-DTL-5541 TYPE II CLASS 3, CLEAR",
-      "source": "FR-3102.pdf, title block (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)",
+      "conf": 94.7
      },
      "quantities": {
       "value": null,
@@ -1139,23 +1162,28 @@
      "line": 1,
      "part_number": {
       "value": "OPM-22817",
-      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)",
+      "conf": 60.5
      },
      "rev": {
       "value": "B",
-      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)",
+      "conf": 92.9
      },
      "description": {
       "value": "BLOCK, KNIFE HOLDER",
-      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)",
+      "conf": 95.8
      },
      "material": {
       "value": "STEEL, AISI 4140 PRE-HARDENED, 28-32 HRC",
-      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)",
+      "conf": 92.7
      },
      "finish": {
       "value": "BLACK OXIDE PER MIL-DTL-13924 CLASS 1, OIL DIP",
-      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)",
+      "conf": 87.5
      },
      "quantities": {
       "value": [
@@ -1517,23 +1545,28 @@
      "line": 1,
      "part_number": {
       "value": "AGI-3052",
-      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)",
+      "conf": 62.9
      },
      "rev": {
       "value": "A",
-      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)",
+      "conf": 96.9
      },
      "description": {
       "value": "COVER PLATE, SENSOR ENCLOSURE",
-      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)",
+      "conf": 96.2
      },
      "material": {
       "value": "STAINLESS STEEL 316L PER ASTM A240, ANNEALED",
-      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)",
+      "conf": 94.0
      },
      "finish": {
       "value": "PASSIVATE PER ASTM A967 NITRIC 2",
-      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)",
+      "conf": 95.1
      },
      "quantities": {
       "value": [
@@ -1638,7 +1671,8 @@
      "line": 1,
      "part_number": {
       "value": "BWM-3140-08",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 91.4
      },
      "rev": {
       "value": "A",
@@ -1646,7 +1680,8 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 8 MM",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 91.4
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1677,7 +1712,8 @@
      "line": 2,
      "part_number": {
       "value": "BWM-3140-10",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 90.9
      },
      "rev": {
       "value": "A",
@@ -1685,7 +1721,8 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 10 MM",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 90.9
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1716,7 +1753,8 @@
      "line": 3,
      "part_number": {
       "value": "BWM-3140-12",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 91.3
      },
      "rev": {
       "value": "A",
@@ -1724,7 +1762,8 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 12 MM",
-      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)",
+      "conf": 91.3
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1839,23 +1878,28 @@
      "line": 1,
      "part_number": {
       "value": "CI-10442",
-      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)",
+      "conf": 33.7
      },
      "rev": {
       "value": "C",
-      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)",
+      "conf": 87.8
      },
      "description": {
       "value": "HOUSING, DRIVE ELECTRONICS",
-      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)",
+      "conf": 96.3
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)",
+      "conf": 93.2
      },
      "finish": {
       "value": "ELECTROLESS NICKEL PER AMS 2404 CLASS 1, .0003-.0005 THK",
-      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)",
+      "conf": 95.3
      },
      "quantities": {
       "value": [
@@ -2128,23 +2172,28 @@
      "line": 1,
      "part_number": {
       "value": "LO-1186",
-      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)",
+      "conf": 92.9
      },
      "rev": {
       "value": "A",
-      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)",
+      "conf": 96.7
      },
      "description": {
       "value": "MOUNT, FOLD MIRROR, COMPOUND ANGLE",
-      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)",
+      "conf": 96.0
      },
      "material": {
       "value": "ALUMINUM 6061-T651 PLATE PER AMS 4027",
-      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)",
+      "conf": 95.1
      },
      "finish": {
       "value": "BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2. MASK PADS, BORES, AND DATUM A",
-      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)",
+      "conf": 92.1
      },
      "quantities": {
       "value": [

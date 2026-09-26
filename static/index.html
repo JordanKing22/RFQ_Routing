@@ -1525,7 +1525,11 @@ function fileType(att) {
 
 function metaLine(att, long) {
   const parts = [];
-  if (att.kind === "upload") parts.push(att.media === "pdf" ? "PDF" : att.media === "png" ? "PNG image" : "JPG image");
+  if (att.kind === "upload") {
+    const type = att.media === "pdf" ? "PDF" : att.media === "png" ? "PNG image" : "JPG image";
+    // the viewer header says how an uploaded scan was read, like a committed file's label does
+    parts.push(long && att.scanned && att.text_from ? `${type} (${att.capture ? att.capture + ", " : ""}${att.text_from})` : type);
+  }
   else if (att.kind === "name_only") parts.push("Name only");
   else if (att.kind === "model") parts.push(long ? `3D model, STEP ${(att.model && att.model.schema) || "AP214"}` : "3D model");
   else parts.push(att.label || "File");
@@ -1812,12 +1816,20 @@ function ocrInfo(source) {
 }
 
 const LOW_OCR = 70;  // below this, Tesseract's own confidence says to check the value against the file
-function ocrChip(source) {
+// The "(OCR nn%)" in a source is the whole file's mean word confidence. A part number, rev, description,
+// material, or finish also carries its own line's confidence (valueConf), which can be far lower
+// (AW-310 read at 42% on a 92% page): the chip shows that one when it is there.
+function ocrChip(source, valueConf) {
   const o = ocrInfo(source);
   if (!o) return "";
-  const low = o.conf != null && o.conf < LOW_OCR;
-  const tip = `Read with Tesseract OCR${o.conf != null ? ` at ${o.conf}% confidence` : ""} from ${source}.${low ? " Low confidence: check this against the file." : ""}`;
-  return `<span class="ocr-chip${low ? " low" : ""}" title="${esc(tip)}">OCR${o.conf != null ? ` ${o.conf}%` : ""}</span>`;
+  const own = typeof valueConf === "number" && isFinite(valueConf) ? Math.round(valueConf) : null;
+  const conf = own != null ? own : o.conf;
+  const low = conf != null && conf < LOW_OCR;
+  const tip = (own != null
+    ? `Tesseract OCR read this value at ${own}% confidence${o.conf != null ? ` (the whole file at ${o.conf}%)` : ""}, from ${source}.`
+    : `Read with Tesseract OCR from ${source}${o.conf != null ? `; the file was read at ${o.conf}% confidence` : ""}.`)
+    + (low ? " Low confidence: check this against the file." : "");
+  return `<span class="ocr-chip${low ? " low" : ""}" title="${esc(tip)}">OCR${conf != null ? ` ${conf}%` : ""}</span>`;
 }
 
 // A source for reading aloud or showing under a value: "From the email body and FR-3101.pdf".
@@ -1849,7 +1861,7 @@ function rdVal(field, fmt, empty = "Not found", after) {
   if (!hasValue(f.value)) return `<span class="rd-miss">${esc(empty)}</span>`;
   const src = f.source ? String(f.source) : "";
   const html = fmt ? fmt(f.value, f) : esc(Array.isArray(f.value) ? f.value.join(", ") : f.value);
-  return `<span class="rd-v"${src ? ` title="${esc("Source: " + src)}"` : ""}>${html}</span>${ocrChip(src)}${after ? after(f.value, f) : ""}${src ? `<span class="rd-src">${esc(srcPhrase(src))}</span>` : ""}`;
+  return `<span class="rd-v"${src ? ` title="${esc("Source: " + src)}"` : ""}>${html}</span>${ocrChip(src, f.conf)}${after ? after(f.value, f) : ""}${src ? `<span class="rd-src">${esc(srcPhrase(src))}</span>` : ""}`;
 }
 
 function rdList(items, key, emptyText) {
@@ -2596,7 +2608,8 @@ function textFromNote(att) {
   const tf = String(att.text_from || ""), o = /^OCR/i.test(tf) ? ocrInfo(tf) : null;
   if (o) {
     const what = att.media === "jpg" ? "This file is a photo with no text layer"
-      : att.media === "png" ? "This file is an image (a screenshot) with no text layer" : "This file has no text layer (a scan)";
+      : att.media === "png" ? "This file is an image (a screenshot) with no text layer"
+      : `This file has no text layer (${att.capture === "fax" ? "a fax" : att.capture === "copier" ? "a copier scan" : "a scan"})`;
     const low = o.conf != null && o.conf < LOW_OCR;
     return `<div class="vp-ocr${low ? " low" : ""}">${ic("scan", "sm")}<span>${what}, so its text was read with Tesseract OCR${o.conf != null ? `, confidence ${o.conf}%` : ""}. Jev reads this OCR text.${low ? " At this confidence some words may be misread: check part numbers and dates against the file." : ""}</span></div>`;
   }

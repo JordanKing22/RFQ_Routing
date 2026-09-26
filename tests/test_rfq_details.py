@@ -225,6 +225,23 @@ class HeuristicTests(unittest.TestCase):
         self.assertEqual(cells["Part number"], "'@SUM(A1)")
         self.assertEqual(cells["Description"], "'-cmd")
         self.assertEqual(cells["Finish"], "-5 C")
+        # a minus and a digit can still start a formula; only a plain negative number passes
+        rec = {"email_id": "X2", "contact": "-2+3+cmd|' /C calc'!A0", "contact_email": "-1+1@evil.example",
+               "customer": "  =1+1", "lines": [{"line": 1, "description": {"value": "-1*HYPERLINK(\"http://e\")"},
+                                                "finish": {"value": "-1,250"}, "material": {"value": "-0.5"}}]}
+        rows = list(csv.reader(io.StringIO(rfq_details.to_csv([rec]), newline="")))
+        cells = dict(zip(rows[0], rows[1]))
+        self.assertEqual(cells["Contact"], "'-2+3+cmd|' /C calc'!A0")
+        self.assertEqual(cells["Contact email"], "'-1+1@evil.example")
+        self.assertEqual(cells["Customer"], "'  =1+1")
+        self.assertEqual(cells["Description"], "'-1*HYPERLINK(\"http://e\")")
+        self.assertEqual((cells["Finish"], cells["Material"]), ("-1,250", "-0.5"))
+
+    def test_payment_terms_have_a_column(self):
+        rec = {"email_id": "X3", "terms": {"value": "NET 45, FOB ORIGIN", "source": "f.pdf (OCR 90%)"},
+               "lines": [{"line": 1}]}
+        rows = list(csv.DictReader(io.StringIO(rfq_details.to_csv([rec]))))
+        self.assertEqual(rows[0]["Terms"], "NET 45, FOB ORIGIN")
 
 
 # --------------------------------------------------------------------------- #
@@ -365,6 +382,7 @@ class FreshEmailTests(unittest.TestCase):
             ("Need a quote on 1ea of the attached bracket, A2 tool steel.", [1]),
             ("Please quote the manifold in 2 pcs for prototype and 50 pcs for production.", [2, 50]),
             ("Please quote 200 fittings per the attached drawing.", [200]),
+            ("Please quote the AH-220 housing.\n\nQuantities: 25 / 50 / 100 each.", [25, 50, 100]),
         ]
         for body, want in cases:
             with self.subTest(body=body):
@@ -411,7 +429,8 @@ class OcrTextTests(unittest.TestCase):
         cases = {"25 / 75 / 150": ([25, 75, 150], True), "250 / 500 / 1,000": ([250, 500, 1000], True),
                  "25, 50, 100": ([25, 50, 100], True), "1,000, 2,500": ([1000, 2500], True),
                  "1,O00": ([1000], True), "SO / 150 / 300": ([50, 150, 300], True),
-                 "250 / 500 /": ([250, 500], False), "10k": ([10000], True)}
+                 "250 / 500 /": ([250, 500], False), "10k": ([10000], True),
+                 "100 / 250 each.": ([100, 250], True), "25/50/100 EACH": ([25, 50, 100], True)}
         for text, want in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(rfq_details.parse_quantities(text), want)
@@ -865,6 +884,68 @@ class RegionTests(unittest.TestCase):
                     f.pop("regions", None)
             return re.sub(r'"source": "([^"]*?), [a-z ]+ \(OCR', r'"source": "\1 (OCR', json.dumps(out))
         self.assertEqual(values(plain), values(beta()["records"]))
+
+
+
+class SiblingPartTests(unittest.TestCase):
+    """Part numbers one character apart (BWM-3105 and BWM-3106) that the email names are two
+    parts, not one part OCR misread; the drawing's values stay on the part it shows."""
+
+    def lines(self, subject, body, name="print.pdf"):
+        res = _regioned(_BLOCK, [_TB])  # a drawing of BWM-3105 whose number OCR read as 'BWM 3105 \u00a9'
+        email = {"id": "T6", "from_name": "Pat Buyer", "from_email": "pat@example.com", "subject": subject,
+                 "body": body, "attachments": [{"name": name, "kind": "upload", "media": "pdf"}]}
+        rec = rfq_details.extract(email, {name: res}, SHOP, today=TODAY)
+        return {value(ln["part_number"]): value(ln["description"]) for ln in rec["lines"]}, rec["check"]
+
+    def test_the_drawing_stays_on_its_own_part(self):
+        want = {"BWM-3105": "PIN, PIVOT, JAW", "BWM-3106": None}
+        for subject, body in (
+                ("RFQ-26-0341: pin and spacer", "Please quote BWM-3106 (print to follow) and BWM-3105 (attached)."),
+                ("RFQ-26-0341: pin and spacer", "Please quote BWM-3105 (attached) and BWM-3106 (print to follow)."),
+                ("RFQ: pivot pin BWM-3105 and spacer BWM-3106", "Please quote both. The spacer print will follow."),
+                ("RFQ: spacer BWM-3106 and pivot pin BWM-3105", "Please quote both. The spacer print will follow.")):
+            with self.subTest(subject=subject, body=body):
+                got, check = self.lines(subject, body)
+                self.assertEqual(got, want)
+                self.assertFalse([c for c in check if "OCR read BWM-3105" in c], check)
+
+    def test_a_single_number_one_character_off_still_gets_the_drawing(self):
+        got, _ = self.lines("RFQ-26-0341: pin", "Please quote BWM-3106 per the attached print.")
+        self.assertEqual(got, {"BWM-3106": "PIN, PIVOT, JAW"})
+
+
+class ValueConfidenceTests(unittest.TestCase):
+    def test_a_value_carries_its_own_line_confidence(self):
+        block = [list(r) for r in _BLOCK]
+        block[7][1] = ("BWM-3105", 1660, 1530, "title_block")  # read whole this time, but at 42%
+        res = _regioned(block, [_TB])
+        pn_line = next(ln for ln in res["lines"] if ln["text"] == "BWM-3105")
+        pn_line["conf"] = 42.0
+        email = {"id": "T7", "from_name": "Pat Buyer", "from_email": "pat@example.com", "subject": "RFQ",
+                 "body": "Please quote 10 pcs per the attached print.", "attachments": []}
+        for name, noted in (("print.pdf", True), ("BWM-3105_pin.pdf", False), ("BWM-31050.pdf", True)):
+            with self.subTest(name=name):
+                email["attachments"] = [{"name": name, "kind": "upload", "media": "pdf"}]
+                rec = rfq_details.extract(email, {name: res}, SHOP, today=TODAY)
+                ln = rec["lines"][0]
+                self.assertEqual(value(ln["part_number"]), "BWM-3105")
+                # the source keeps the file's mean; the value adds its own line's (the UI's chip shows it)
+                self.assertIn("(OCR 90%)", ln["part_number"]["source"])
+                self.assertEqual(ln["part_number"]["conf"], 42.0)
+                self.assertEqual(ln["material"]["conf"], 95.0)
+                self.assertNotIn("conf", ln["quantities"])
+                # a file name the customer typed confirms the number; another number does not
+                self.assertEqual(any("BWM-3105: OCR read it at 42%" in c for c in rec["check"]), noted, rec["check"])
+
+    def test_a_one_letter_rev_takes_its_region_from_its_own_cell(self):
+        # OCR ran a note and the title block onto one row; 'B' folds to '8', which 'BOTTOM' holds too
+        res = _regioned([[("2. MACHINE TOP AND BOTTOM FACES", 100, 900, "notes"), ("FR-3102", 1660, 900, "title_block"),
+                          ("B", 2040, 900, "title_block")]],
+                        [("notes", [90, 880, 1200, 930]), ("title_block", [1280, 850, 2120, 950])])
+        doc = rfq_details.Doc("d.pdf", "pdf", res)
+        self.assertEqual(doc.region_of("B", "2. MACHINE TOP AND BOTTOM FACES | FR-3102 | B"), "title_block")
+        self.assertEqual(doc.region_of("BOTTOM FACES", "2. MACHINE TOP AND BOTTOM FACES | FR-3102 | B"), "notes")
 
 
 if __name__ == "__main__":

@@ -230,10 +230,15 @@ demo's path:
 
 Memory: Tesseract peaks at about 90 MB on a 400 dpi letter page and at about 190 MB on the
 largest picture it is ever given (36 million pixels, see "Very large pages" below). Python's
-side is the decoded picture plus the clean-up: 74 MB for the E22 phone photo, 286 MB for a 48
-megapixel phone photo (577 MB before the third review), and the source picture is let go
-before Tesseract starts. A picture that would take more than 200 MB once decoded is not read
-whole (see "Very large pages"), so one job stays inside the free plan's 512 MB.
+side is the decoded picture plus the clean-up: 74 MB for the E22 phone photo, and the source
+picture is let go before Tesseract starts. The budget is for a server that has been used, not
+an idle one: once the viewer's detector is loaded and its page caches are full the server sits
+at 200 to 250 MB. A 48 megapixel phone photo read whole (192 MB decoded) took an idle server to
+341 MB but a used one to 490 to 520 MB, 690 MB with Tesseract, so the final review halved the
+limit: a picture that would take more than 100 MB once decoded is not read whole (see "Very
+large pages"). That photo is now read at 4000 x 3000, still above the photo recipe's 300 dpi on
+a letter page, and a used server peaks at 265 MB, 362 MB with Tesseract, inside the free plan's
+512 MB.
 
 ## How it was measured
 
@@ -266,8 +271,8 @@ Two sets of pages were scored:
   every candidate on one set of pages, so its choices are fair, but each held-out count is one
   noise sample, good to about 3 keys per kind (see "Review").
 
-Tesseract: 5.3.4 is installed here (Ubuntu 24.04). The Docker image, `python:3.12-slim`, is now
-built on Debian 13 trixie, which installs 5.5.0 (see "Tesseract on Render"). 5.5.0 and Debian
+Tesseract: 5.3.4 is installed here (Ubuntu 24.04). The Docker image, `python:3.12-slim-trixie`, is
+built on Debian 13, which installs 5.5.0 (see "Tesseract on Render"). 5.5.0 and Debian
 bookworm's 5.3.0 were built from the upstream tags (`cmake`, no OpenMP) and the chosen settings
 were run on both (`RFQ_TESSERACT=/path/to/tesseract python ocr.py --evaluate`). All three use the
 same `eng.traineddata` (package `tesseract-ocr-eng` 1:4.1.0 in Ubuntu 24.04, Debian bookworm,
@@ -568,7 +573,7 @@ a 0.1 CPU host and adding 15 MB to the image. The Docker build should keep Debia
 
 ## Tesseract on Render: 5.5.0, not 5.3.0
 
-The Dockerfile starts `FROM python:3.12-slim` without naming a Debian release, and that tag
+The Dockerfile used to start `FROM python:3.12-slim` without naming a Debian release, and that tag
 now points at Debian 13 trixie (docker-library's `library/python` lists `3.12-slim` as
 `3.12.14-slim-trixie`; bookworm is only `3.12-slim-bookworm`). Trixie's apt installs tesseract
 5.5.0, leptonica 1.84.1, poppler 25.03, and the same `eng.traineddata` as bookworm and Ubuntu
@@ -616,9 +621,9 @@ two local builds (no OpenMP) are within 10 % of the packaged 5.3.4; the time est
 page use the packaged 5.3.4.
 
 The committed cache was built with 5.3.4, so the demo on Render shows the 5.3.4 results for
-the beta files; only live uploads run on 5.5.0. The settings hold on all three versions. To
-make the image reproducible, pin the release in the Dockerfile: `python:3.12-slim-trixie`
-(5.5.0) keeps what Render runs now, `python:3.12-slim-bookworm` gives 5.3.0.
+the beta files; only live uploads run on 5.5.0. The settings hold on all three versions. The
+Dockerfile now pins the release, `python:3.12-slim-trixie` (5.5.0), so the image does not move
+to a new Debian on its own; `python:3.12-slim-bookworm` would give 5.3.0.
 
 ## Practical limits
 
@@ -657,13 +662,17 @@ What the measurements above cover: letter-size pages at 120 to 300 dpi, skewed u
   204 dpi, the largest page PDF allows (200 in square) at 30 dpi. Before the review pdftoppm
   rendered the page in full first: a 97 in page took 2.4 GB in pdftoppm and 1.6 GB in Python
   before failing, which would have killed a 512 MB host. A picture file above 36 million
-  pixels is scaled down before OCR, and one claiming more than 80 million is refused (without
-  Pillow, from its header). So is one that would take more than 200 MB once decoded
-  (`MAX_INPUT_BYTES`; Pillow keeps RGB, RGBA, and CMYK at 4 bytes a pixel, so that is 50
+  pixels is scaled down before OCR, and one claiming more than 40 million is refused (without
+  Pillow, from its header; `MAX_INPUT_PIXELS`, 80 million before the final review, when an
+  11 x 17 in 1-bit drawing at 600 dpi, 67 million pixels, got a used server killed on 512 MB).
+  So is one that would take more than 100 MB once decoded (`MAX_INPUT_BYTES`, 200 MB before
+  the final review; Pillow keeps RGB, RGBA, and CMYK at 4 bytes a pixel, so that is 25
   megapixels in color): a 79 megapixel RGBA PNG took 1.2 GB of Python memory before the third
   review. A JPEG over either limit is decoded at a half, a quarter, or an eighth of its size
-  instead, which the JPEG decoder does for free: a 64 or 108 megapixel phone photo is read at
-  16 or 27 megapixels. At most 6 pages of a PDF are read (`RFQ_OCR_MAX_PAGES`).
+  instead, which the JPEG decoder does for free: a 48 or 64 megapixel phone photo is read at
+  12 or 16 megapixels, a 108 megapixel one at 7. A CMYK JPEG (print workflows save them) counts
+  double, because it goes through a whole RGB copy on its way to gray: an 8900 x 8900 one read
+  at 20 megapixels took a used server to 510 MB with Tesseract, and at 5 megapixels to 407. At most 6 pages of a PDF are read (`RFQ_OCR_MAX_PAGES`).
 - **Scans finer than 300 dpi.** Rendered down to 300 dpi (`MAX_RASTER_DPI`): on 600 dpi office
   scans of the five check drawings, 300 dpi found 19 of 20 key fields, 400 dpi and the scan's
   own 600 dpi 17, and 600 dpi took 6.7 CPU seconds a page against 3.0. Only 600 dpi was measured.
@@ -684,8 +693,8 @@ What the measurements above cover: letter-size pages at 120 to 300 dpi, skewed u
   file (`RFQ_OCR_TIMEOUT`): on 0.1 CPU a multi-page scan upload can run into it, and then the
   file shows an error instead of text. The limit stops Tesseract, pdftoppm, and pdftotext
   mid-run; the Python clean-up of one page is not interrupted and can finish up to its own
-  length past the limit (1.5 CPU seconds for a 48 megapixel photo, well under a second for a
-  scanned page). pypdf's text layer read has its own limit in `attachments.py`
+  length past the limit (1.5 CPU seconds for a 48 megapixel photo read whole, well under a
+  second for a scanned page). pypdf's text layer read has its own limit in `attachments.py`
   (`RFQ_PDF_TEXT_TIMEOUT`, 25 s).
 
 ## Review
@@ -853,9 +862,9 @@ and the English word list helps rather than hurts on these files.
 
 | input | before the third review | now |
 | --- | --- | --- |
-| a 48 megapixel phone photo (8000 x 6000 JPEG) | 577 MB of Python memory and 4.0 s before Tesseract started: `exif_transpose` copied the whole picture even with nothing to turn, and the color check converted all of it to HSV | 286 MB and 1.5 s: EXIF turning only when the photo says so, the color and bit depth checks on a 2 megapixel sample |
-| a 79 megapixel RGBA PNG (under the 80 megapixel cap) | 1.2 GB (three full RGBA pictures to lay it on white), enough to get the server killed on a 512 MB host | refused with "the picture is too large to read" (`MAX_INPUT_BYTES`, 200 MB decoded); a transparent picture is laid on white in gray, one byte a pixel |
-| a 64 or 108 megapixel phone photo | 64: decoded whole (256 MB before any copy); 108: refused | decoded at half size by the JPEG decoder: 16 and 27 megapixels |
+| a 48 megapixel phone photo (8000 x 6000 JPEG) | 577 MB of Python memory and 4.0 s before Tesseract started: `exif_transpose` copied the whole picture even with nothing to turn, and the color check converted all of it to HSV | 286 MB and 1.5 s: EXIF turning only when the photo says so, the color and bit depth checks on a 2 megapixel sample (since the final review it is read at half size: 265 MB on a used server) |
+| a 79 megapixel RGBA PNG (under the 80 megapixel cap) | 1.2 GB (three full RGBA pictures to lay it on white), enough to get the server killed on a 512 MB host | refused with "the picture is too large to read" (`MAX_INPUT_BYTES`, 200 MB decoded, 100 MB since the final review); a transparent picture is laid on white in gray, one byte a pixel |
+| a 64 or 108 megapixel phone photo | 64: decoded whole (256 MB before any copy); 108: refused | decoded at a fraction of its size by the JPEG decoder: 16 and 27 megapixels then, 16 and 7 since the final review |
 | the page picture during OCR | the source picture stayed in memory beside Tesseract | let go once cleaned |
 | `pdftotext` in the text layer check | a fixed 30 s, whatever the file's limit | bounded by the file's limit |
 | a PNG claiming 100,000 x 100,000 pixels | "the picture could not be read (DecompressionBombError)" | "the picture is too large to read" |
@@ -909,8 +918,9 @@ words, were corrected with this page.
 - **Tests.** `tests/test_ocr.py` (50 tests, 4 new for the memory budget, EXIF turning,
   transparent pictures, and the pdftotext limit) and `tests/test_beta.py` (10) pass; with an
   empty PATH the 17 OCR tests of `tests/test_ocr.py` skip and the rest pass
-  (`tests/test_beta.py` then fails its page picture check, which needs pdftoppm in
-  `attachments.py`, not OCR).
+  (`tests/test_beta.py` then failed its page picture check, which needs pdftoppm in
+  `attachments.py`, not OCR; the final review made that check expect no picture without
+  pdftoppm).
 
 ## Regions: the YOLO detector paired with Tesseract
 
@@ -999,7 +1009,7 @@ OCR, with the chosen recipes (the text is the same, so only the time moves):
 | 13 real files, side by side | the same | the same | the same | 2.69 / 2.82 | 1.74 / 1.86 |
 | held-out sample 1, 55 pages | best 188/220, fast 186/220 | the same | 0.873, 0.851, the same | 2.46 / 2.56 | 1.72 / 1.82 |
 | held-out sample 2, 55 pages | best 193/220, fast 190/220 | the same | 0.876, 0.852 | 2.59 (after) | 1.83 (after) |
-| `--heldout` (the 25 check pages, fresh render) | before 77, best 83, fast 82 of 100 | HELDOUT_AFTER | | | |
+| `--heldout` (the 25 check pages, fresh render) | before 77, best 83, fast 82 of 100 | the same | 0.875 best, 0.857 fast, the same | 2.58 / 2.64 | 1.78 / 1.82 |
 
 The detector adds 0.10 to 0.13 CPU seconds a page (the first row's larger step is two runs at
 different times on a shared machine; the side-by-side rows are the fair comparison): 4 to 7 %
@@ -1017,10 +1027,14 @@ Extraction (`rfq_details.py`), before regions and with the final code:
 | held-out sample 1, fast | 1,757/1,770 (13 wrong) | 1,762/1,770 (8 wrong) |
 | held-out sample 2, best | 1,761/1,770 (9 wrong) | 1,765/1,770 (5 wrong) |
 | held-out sample 2, fast | 1,758/1,770 (12 wrong) | 1,762/1,770 (8 wrong) |
-| `--check --heldout`, fresh render | CHECKHO_BEFORE | CHECKHO_AFTER |
+| `--check --heldout` (best OCR, fresh render; before is `RFQ_OCR_REGIONS=0`) | 1,763/1,770 (7 wrong) | 1,768/1,770 (2 wrong) |
 | OCR values whose source names a region | 0 of 89 | 85 of 89 |
 
-No field that was right before is wrong after, on any of these.
+No field that was right before is wrong after, on any of these. The fresh render gives sample
+1's answer field for field. The five fields fixed there are the revs of FR-3101 ('CE'), BWM-3105
+('OR') and BWM-3106 ('GR') on the copier, the material of BWM-3105 on the scan ('STAINLESS
+H1025'), and the finish of KF-3412 on the scan ('HARD ANODIZE PER MIL-A-8625 TYPE'). The two left
+are the finish of KF-3408 on the scan and on the photo, where OCR lost the words.
 
 ### What was tried
 

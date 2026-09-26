@@ -1,6 +1,7 @@
 """
-Page layout detection: find the regions of an RFQ page that matter, so OCR can read each one with
-settings suited to it and the extractor knows where every piece of text came from.
+Page layout detection: find the regions of an RFQ page that matter, so the extractor knows where
+every piece of text was printed (reading each region with its own OCR settings was measured and
+is off; see docs/layout_model.md).
 
 A small YOLO detector (YOLO11n, fine-tuned on this demo's drawings, RFQ forms and POs rendered
 through scan, copier, fax, photo and screenshot effects; see docs/layout_model.md) runs from
@@ -37,6 +38,11 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("rfq.layout")
+
+# onnxruntime (1.30) sends usage events (model loads, sessions, device) to Microsoft
+# (mobile.events.data.microsoft.com) unless this is set before it is imported. No document content
+# goes out, but this demo handles ITAR and CUI drawings and should call no one but Jev.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Absolute from the start: the session loads lazily, and a relative RFQ_LAYOUT_MODEL would otherwise be
@@ -195,9 +201,9 @@ def _reduced(img: Any, factor: int) -> Any:
 def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
     """A PIL RGB image and the factors that take its pixels back to the caller's pixels.
     With draft (the detector's path) a big picture is made small early, since the detector only
-    needs 640: JPEGs decode at 1/2, 1/4 or 1/8 scale (JPEG draft mode), and anything else over
-    twice 640 is box-averaged down by a whole factor before the color conversions, which would
-    otherwise copy the full-size picture two or three times.
+    needs 640: JPEGs decode at 1/2, 1/4 or 1/8 scale (JPEG draft mode), and anything else 2560
+    pixels or more across (four times 640) is box-averaged down by a whole factor before the color
+    conversions, which would otherwise copy the full-size picture two or three times.
     Bytes from a phone can carry an EXIF orientation (the pixels are stored sideways and viewers
     turn them); those are turned upright first, because the model only knows upright pages, so
     boxes for such a file are in the upright picture's pixels, the way a viewer shows it."""

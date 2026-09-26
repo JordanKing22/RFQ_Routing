@@ -414,7 +414,7 @@ def to_svg(page: Page, width_px: Optional[float] = None, background: Color = WHI
 
 
 # --------------------------------------------------------------------------- #
-# Raster backend (needs Pillow; only the scan generator in tools/ uses it)
+# Raster backend (needs Pillow; the beta and layout dataset generators in tools/ and tests/test_layout.py use it)
 # --------------------------------------------------------------------------- #
 FONT_FILES = {
     False: ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",

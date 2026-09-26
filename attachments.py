@@ -852,9 +852,13 @@ class UploadStore:
         if not item["text"] and ocr_ready():
             result = _ocr().file_text(data, media, item["name"], effort=UPLOAD_OCR_EFFORT)
             if result.get("method") == "ocr" and (result.get("text") or "").strip():
+                # The whole result (lines with boxes and confidences, the regions) goes to the
+                # extractor, as for the committed files: from the text alone it cannot find the
+                # title block, so a scan's material and finish were lost.
                 item.update(text=tidy_pdf_text(result["text"])[:PDF_TEXT_MAX_CHARS], text_error=None,
                             text_method="ocr", text_conf=result.get("confidence"),
-                            pages=result.get("pages") or item["pages"])
+                            pages=result.get("pages") or item["pages"], _file_text=result,
+                            capture=ocr_capture(result, media))
             elif result.get("error") and media != "pdf":
                 item["text_error"] = result["error"]
         with self.lock:
@@ -886,7 +890,8 @@ def upload_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
     return {"name": item["name"], "kind": "upload", "media": item["media"], "upload_id": item["id"],
             "sha256": item.get("sha256"), "size": item["size"], "pages": item["pages"], "width": item["width"], "height": item["height"],
             "text": item["text"][:PDF_TEXT_MAX_CHARS], "text_error": item["text_error"],
-            "text_method": item.get("text_method"), "text_conf": item.get("text_conf")}
+            "text_method": item.get("text_method"), "text_conf": item.get("text_conf"), "capture": item.get("capture"),
+            "_file_text": item.get("_file_text")}  # for rfq_details only; describe() never sends it
 
 
 def upload_public(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1029,7 +1034,7 @@ def prepare_file(att: Dict[str, Any], data_dir: Any, cache: Any = None) -> Dict[
         text = tidy_pdf_text(text)
     att.update(prepared=True, text=text[:PDF_TEXT_MAX_CHARS], text_method=result.get("method"),
                text_conf=result.get("confidence"), text_error=result.get("error") if not text else None,
-               pages=result.get("pages"), _file_text=result)
+               pages=result.get("pages"), _file_text=result, capture=ocr_capture(result, media))
     att["doc_type"] = classify(text, media)
     att["legend"] = detect_legend(text)
     return att
@@ -1041,6 +1046,21 @@ def text_from_label(att: Dict[str, Any]) -> str:
         conf = att.get("text_conf")
         return f"OCR {round(conf)}%" if conf is not None else "OCR"
     return {"text-layer": "text layer", "step-header": "STEP header"}.get(method or "", "no text")
+
+
+def ocr_capture(result: Optional[Dict[str, Any]], media: Optional[str]) -> Optional[str]:
+    """How an OCR'd file was made (scan, copier, fax, photo, screenshot), from the recipe ocr.py
+    chose for it. rfq_details._capture applies the same rule, so the viewer and the CSV agree."""
+    if not isinstance(result, dict) or result.get("method") != "ocr":
+        return None
+    settings = result.get("settings") if isinstance(result.get("settings"), dict) else {}
+    sources = " ".join(str(p.get("source", "")) for p in settings.get("pages") or [] if isinstance(p, dict))
+    sources = (sources + " " + json.dumps(settings, default=str)).lower()
+    for word, capture in (("photo", "photo"), ("screen", "screenshot"), ("fax", "fax"), ("bilevel", "fax"),
+                          ("1-bit", "fax"), ("lowres", "copier"), ("copier", "copier")):
+        if word in sources:
+            return capture
+    return {"jpg": "photo", "png": "screenshot"}.get(media or "", "scan")
 
 
 _thumb_lock = threading.Lock()
@@ -1095,6 +1115,16 @@ _page_locks: Dict[Tuple[str, int], threading.Lock] = {}
 PAGE_DPI = 150
 PAGE_MAX_PX = 1800
 PAGE_CACHE_MAX = 48  # page JPEGs run 100 to 400 KB; uploads must not grow this without bound
+# A picture that would take more than this to decode gets no page image (and no regions). A
+# server that has been used sits at 200 to 250 MB, so this keeps one render inside 512 MB: an
+# 8900 x 8900 RGBA PNG of 385 KB took the server to 960 MB before (a 48 megapixel JPEG to 580),
+# and JPEGs are now decoded at a fraction of their size first.
+PAGE_MAX_DECODED = 100_000_000
+PAGE_MAX_PIXELS = 60_000_000  # the detector's own limit (layout.MAX_PIXELS)
+# Page renders at the same time, across all files (the per-page lock below only stops two renders
+# of one page). 24 viewers' requests at once ran up to 17 pdftoppm children beside the server,
+# 565 MB together; small hosts have a fraction of one CPU, so running them in parallel gains nothing.
+_render_gate = threading.BoundedSemaphore(max(1, int(os.environ.get("RFQ_PAGE_WORKERS", "1") or 1)))
 
 
 def _remember(cache: Dict[Tuple[str, int], Any], key: Tuple[str, int], value: Any) -> None:
@@ -1142,7 +1172,8 @@ def page_image(data: bytes, media: str, key: str, page: int = 1) -> Optional[Tup
         with _pages_lock:
             if ck in _pages:
                 return _pages[ck]
-        out = _render_page(data, media, page)
+        with _render_gate:
+            out = _render_page(data, media, page)
         if out:
             _remember(_pages, ck, out)
         with _pages_lock:
@@ -1166,10 +1197,19 @@ def _render_page(data: bytes, media: str, page: int) -> Optional[Tuple[bytes, in
         elif media in ("png", "jpg"):
             from PIL import Image
             with Image.open(io.BytesIO(data)) as im:
-                if im.width * im.height > 80_000_000:
+                im.draft("RGB", (PAGE_MAX_PX, PAGE_MAX_PX))  # JPEG only: decode at 1/2, 1/4 or 1/8 of the size
+                # Memory for the whole picture, from the header before any pixel is read: Pillow keeps
+                # RGB and CMYK at 4 bytes a pixel and gray at 1; it shrinks RGBA and LA through a
+                # second full copy, and a 1-bit or palette picture is converted whole first (Pillow
+                # does not smooth those when it shrinks them), which costs a copy too.
+                pixels = im.width * im.height
+                if pixels > PAGE_MAX_PIXELS or \
+                        pixels * {"1": 2, "L": 1, "P": 5, "RGBA": 8, "LA": 8}.get(im.mode, 4) > PAGE_MAX_DECODED:
                     return None
+                if im.mode in ("1", "P"):
+                    im = im.convert("L" if im.mode == "1" else "RGB")
+                im.thumbnail((PAGE_MAX_PX, PAGE_MAX_PX))  # shrink first, then convert the small copy
                 im = im.convert("RGB")
-                im.thumbnail((PAGE_MAX_PX, PAGE_MAX_PX))
                 buf = io.BytesIO()
                 im.save(buf, "JPEG", quality=85)
                 out = (buf.getvalue(), im.width, im.height)
@@ -1242,13 +1282,15 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
         info.update(url=f"{base}/file?v={v}", text_url=f"{base}/text", size=att.get("size"),
                     pages=att.get("pages"), width=att.get("width"), height=att.get("height"),
                     available=bool(available and att.get("available", True)), text_from=text_from_label(att),
-                    scanned=att.get("text_method") == "ocr", text_error=att.get("text_error"))
+                    scanned=att.get("text_method") == "ocr", text_error=att.get("text_error"),
+                    capture=att.get("capture") if att.get("text_method") == "ocr" else None)
         info["thumb"] = f"{base}/thumb.{'svg' if media == 'step' else 'jpg'}?v={v}"
         if media in ("pdf", "png", "jpg"):
             info["page_url"] = f"{base}/page.jpg?v={v}"
             info["regions_url"] = f"{base}/regions.json?v={v}"
         doc = att.get("doc_type") or classify("", media)
-        how = {"jpg": "photo", "png": "screenshot"}.get(media or "", "scan") if info["scanned"] else ""
+        how = (att.get("capture") or {"jpg": "photo", "png": "screenshot"}.get(media or "", "scan")) \
+            if info["scanned"] else ""
         info["label"] = f"{doc} ({how}, {info['text_from']})" if how and doc not in ("Photo", "Image") else \
             (f"{doc} ({info['text_from']})" if info["scanned"] else doc)
         if media == "step":
@@ -1266,7 +1308,8 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
                     height=att.get("height"), text_error=att.get("text_error"), text_chars=len(text),
                     preview=text[:700], available=bool(available and base),
                     scanned=att.get("text_method") == "ocr", text_from=text_from_label(att)
-                    if att.get("text_method") else None)
+                    if att.get("text_method") else None,
+                    capture=att.get("capture") if att.get("text_method") == "ocr" else None)
         if base:
             info["url"] = f"{base}/file"
             info["text_url"] = f"{base}/text"

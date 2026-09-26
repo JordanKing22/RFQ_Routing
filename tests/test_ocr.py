@@ -581,10 +581,21 @@ class PictureModesTest(unittest.TestCase):
                 ocr._open_image(png.getvalue())
             self.assertEqual(ocr._open_image(jpg.getvalue()).size, (200, 150))
         self.assertEqual(ocr._open_image(jpg.getvalue()).size, (400, 300))
-        # Pillow keeps RGB at 4 bytes a pixel: a 48 megapixel phone photo is read whole, a
-        # 79 megapixel RGBA PNG is not (1.2 GB of Python memory before the budget).
-        self.assertLessEqual(ocr._decoded_bytes("RGB", (8000, 6000)), ocr.MAX_INPUT_BYTES)
+        # CMYK goes through a whole RGB copy on its way to gray, so it counts double
+        cmyk = io.BytesIO()
+        Image.new("CMYK", (400, 300), (0, 0, 0, 0)).save(cmyk, "JPEG")
+        with mock.patch.object(ocr, "MAX_INPUT_BYTES", 400 * 300 * 4):
+            self.assertEqual(ocr._open_image(jpg.getvalue()).size, (400, 300))
+            self.assertEqual(ocr._open_image(cmyk.getvalue()).size, (200, 150))
+        # Pillow keeps RGB at 4 bytes a pixel. The budget is for a server that has been used (200
+        # to 250 MB before the upload): a 48 megapixel phone photo is over it, so a JPEG is read at
+        # half size (4000 x 3000, which fits) and a PNG is refused; so is a 79 megapixel RGBA PNG
+        # (1.2 GB of Python memory before the budget) and an 11 x 17 in 1-bit drawing at 600 dpi.
+        self.assertGreater(ocr._decoded_bytes("RGB", (8000, 6000)), ocr.MAX_INPUT_BYTES)
+        self.assertLessEqual(ocr._decoded_bytes("RGB", (4000, 3000)), ocr.MAX_INPUT_BYTES)
         self.assertGreater(ocr._decoded_bytes("RGBA", (8900, 8900)), ocr.MAX_INPUT_BYTES)
+        self.assertGreater(10200 * 6600, ocr.MAX_INPUT_PIXELS)
+        self.assertGreaterEqual(ocr.MAX_INPUT_PIXELS, ocr.MAX_OCR_PIXELS)  # a rendered PDF page always fits
 
     def test_sideways_photo_is_turned_by_its_exif(self):
         from PIL import Image
@@ -632,7 +643,8 @@ class PiecesTest(unittest.TestCase):
                 self.assertIn(recipe.get("threshold"), (None, 0, 1, 2))
 
     def test_parameters_exist_in_tesseract_530(self):
-        # Debian bookworm (the Render image) ships tesseract 5.3.0. Build the command line for
+        # Debian bookworm's tesseract 5.3.0 is the oldest build the recipes must run on (Render's
+        # python:3.12-slim is now Debian 13 with 5.5.0). Build the command line for
         # every recipe, and for one with every optional switch on, and check each option and
         # -c variable against what a 5.3.0 build accepts: its --help-extra options, its
         # --help-psm modes (0 to 13), and these names from its --print-parameters output.

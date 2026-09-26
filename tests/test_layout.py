@@ -211,7 +211,6 @@ class RobustnessTests(unittest.TestCase):
         self.assertEqual(layout.detect(Image.new("RGB", (1275, 1650), "white")), [])
 
     def test_odd_modes_are_accepted(self):
-        from PIL import Image
         img, _ = _page("rfq_beta/files/E71/LO-1186_RevA_screenshot.png")
         for mode in ("L", "1", "RGBA", "P"):
             dets = layout.detect(img.convert(mode))

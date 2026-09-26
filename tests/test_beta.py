@@ -20,7 +20,6 @@ import sys
 import tempfile
 import time
 import unittest
-import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -35,6 +34,7 @@ from test_demo import Client, free_port, wait_http  # noqa: E402
 INBOX = json.loads((ROOT / "data" / "rfq_beta" / "emails.json").read_text(encoding="utf-8"))
 OCR_CACHE = ROOT / "data" / "rfq_beta" / "ocr_cache.json"
 HAVE_TESSERACT = shutil.which("tesseract") is not None
+HAVE_PDFTOPPM = shutil.which("pdftoppm") is not None  # poppler renders the viewer's page images of PDFs
 try:
     import pypdf  # noqa: F401
     HAVE_PYPDF = True
@@ -166,8 +166,9 @@ class BetaServerTests(unittest.TestCase):
         drawing, model = e61["attachments"]
         self.assertEqual((drawing["kind"], drawing["media"]), ("file", "pdf"))
         self.assertEqual(model["kind"], "model")  # a real STEP file opens in the 3D viewer
-        for url in (drawing["url"], drawing["page_url"], model["mesh"], model["thumb"]):
+        for url in (drawing["url"], model["mesh"], model["thumb"]):
             self.assertEqual(self.c.call(url)[0], 200, url)
+        self.assertEqual(self.c.call(drawing["page_url"])[0], 200 if HAVE_PDFTOPPM else 404)
         if HAVE_TESSERACT or OCR_CACHE.is_file():
             self.assertTrue(drawing["scanned"])
             self.assertTrue(drawing["text_from"].startswith("OCR"))
@@ -227,6 +228,31 @@ class BetaServerTests(unittest.TestCase):
         self.assertEqual(status, 200, sent)
         status, text = self.c.json(f"/api/att/{sent['id']}/0/text")
         self.assertIn("WS-4471", text["text"])
+
+    @unittest.skipUnless(HAVE_TESSERACT, "needs tesseract")
+    def test_6_uploaded_scan_and_photo_keep_their_title_blocks(self):
+        # The extractor gets an upload's whole OCR result (lines with boxes, regions), as it does a
+        # committed file's. From the text alone it lost the title blocks: the scan's part line
+        # went missing and the photo's finish with it.
+        ids = []
+        for rel, ctype in (("E61/CI-10442_RevC.pdf", "application/pdf"), ("E22/OPM-22817_RevB_photo.jpg", "image/jpeg")):
+            data = (ROOT / "data" / "rfq_beta" / "files" / rel).read_bytes()
+            status, up = self.c.json("/api/uploads", raw=data, ctype=ctype, headers={"X-File-Name": rel.split("/")[1]})
+            self.assertEqual(status, 200, up)
+            self.assertTrue(up["upload"]["scanned"])
+            self.assertNotIn("_file_text", up["upload"])  # the whole result stays on the server
+            ids.append(up["upload"]["id"])
+        status, sent = self.c.json("/api/emails", {"subject": "RFQ: two parts", "from_email": "buyer@example.com",
+                                                   "body": "Please quote the two parts on the attached prints.\n\n"
+                                                           "Quantities: 10 / 25 pcs", "uploads": ids})
+        self.assertEqual(status, 200, sent)
+        status, one = self.c.json(f"/api/rfq_details/{sent['id']}")
+        self.assertTrue(one["ok"], one)
+        lines = {ln["part_number"]["value"]: ln for ln in one["record"]["lines"]}
+        self.assertEqual(set(lines), {"CI-10442", "OPM-22817"})
+        for pn, material, finish in (("CI-10442", "6061-T6511", "ELECTROLESS NICKEL"), ("OPM-22817", "4140", "BLACK OXIDE")):
+            self.assertIn(material, lines[pn]["material"]["value"] or "", pn)
+            self.assertIn(finish, lines[pn]["finish"]["value"] or "", pn)
 
 
 if __name__ == "__main__":
