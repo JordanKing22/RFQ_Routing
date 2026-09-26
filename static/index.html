@@ -335,6 +335,7 @@ svg.i.lg { width: 20px; height: 20px; }
 .rd-table thead th.pn { background: var(--surface-2); z-index: 2; }
 .rd-table tbody th.pn { font-weight: 600; }
 .rd-scroll:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+#rfqSec .sec-title { flex-wrap: wrap; row-gap: 6px; }  /* on the narrowest phones the buttons drop below the title */
 #rfqSec .sec-title .aside { display: inline-flex; align-items: center; gap: 10px; }
 .rd-table .pn .ocr-chip { display: flex; width: max-content; margin: 3px 0 0; }
 .rd-table .rev { min-width: 48px; }
@@ -605,6 +606,11 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .mfoot .note { flex-basis: 100%; }
   .mfoot .note:empty { display: none; }
   .group-head span { display: none; }
+  /* At 360 px and below, a long answer ("Qty not stated · confidence 60%") and the draft's To line
+     would push the drawer sideways: let them wrap. */
+  .q-head { flex-wrap: wrap; }
+  .q-head .qa { white-space: normal; }
+  .draft-to { min-width: 0; overflow-wrap: anywhere; }
   .rd { padding: 10px 11px 11px; }
   .rd-kv { grid-template-columns: 90px minmax(0, 1fr); gap: 6px 10px; }
   .rd-table .w { min-width: 136px; }
@@ -1639,7 +1645,7 @@ function renderEmailDrawer(force) {
     after = `<div class="sec"><div class="sec-title">Suggested next step</div>
       <div class="action-title">${esc(act.title || "")}</div>
       ${act.draft ? `<textarea class="draft" id="draftText" readonly>${esc(act.draft)}</textarea>
-      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn small" id="copyDraft">${ic("copy", "sm")}Copy draft</button><span class="note" style="margin:0">To: ${esc(act.to || "")}. Written from a template by code; Jev makes decisions, it does not write text.</span></div>` : ""}
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn small" id="copyDraft">${ic("copy", "sm")}Copy draft</button><span class="note draft-to" style="margin:0">To: ${esc(act.to || "")}. Written from a template by code; Jev makes decisions, it does not write text.</span></div>` : ""}
     </div>`;
     after += `<div class="sec"><div class="sec-title">What Jev answered<span class="aside">${S.boot.questions.length} questions, one call</span></div>
       ${S.boot.questions.map((q) => answerHtml(q, it.jev && it.jev.answers[q.name], th)).join("")}</div>`;
@@ -1706,7 +1712,7 @@ function ensureRfq(id, force) {
   if (!rfqEnabled() || !id || !S.emails[id] || !S.state) return;
   const key = rfqKey(id);
   let ent = RD.map.get(id);
-  if (!ent) { ent = { key: null, status: "loading", record: null, error: "", pending: null, seq: 0 }; RD.map.set(id, ent); }
+  if (!ent) { ent = { key: null, status: "loading", record: null, error: "", noneWhy: "", pending: null, seq: 0 }; RD.map.set(id, ent); }
   if (!force && (ent.pending === key || (ent.pending == null && ent.key === key))) return;
   const seq = ++ent.seq;
   ent.pending = key;
@@ -1720,6 +1726,8 @@ function ensureRfq(id, force) {
     ent.record = data.ok && data.record ? data.record : null;
     ent.status = ent.record ? "ok" : "none";
     ent.error = "";
+    // A server that says why there is no record ({"ok": false, "error": "..."}) gets its reason shown.
+    ent.noneWhy = !ent.record && typeof data.error === "string" ? data.error : "";
   }).catch((err) => {
     if (seq !== ent.seq) return;
     ent.status = "error"; ent.error = err.message || "Request failed";
@@ -1881,6 +1889,12 @@ function rfqInner(id) {
   }
   if (ent.status === "none") {
     const it = S.state.items[id] || {}, d = it.status === "done" ? it.decision : null;
+    // The server answers "no record" both for a non-RFQ and when pulling the details out failed (it logs
+    // why); when Jev routed the email as an RFQ it can only be the second.
+    if ((d && d.is_rfq) || ent.noneWhy) {
+      const who = d && d.is_rfq ? "Jev says this is a request for quote, but the" : "The";
+      return title(dl) + `<div class="rd-none">${ic("alert", "sm")}<span>${who} server could not pull its details out (${ent.noneWhy ? esc(ent.noneWhy) : "its log says why"}), so it is not in the consolidated file. The routing is not affected.</span></div>`;
+    }
     const et = d && it.jev && it.jev.answers ? it.jev.answers.email_type : null;
     const kind = et && et.choice ? optionLabel("email_type", et.choice) : "";
     const why = d ? `Jev says this is not a request for quote${kind ? ` (${esc(kind)})` : ""}` : "This does not look like a request for quote, and Jev has not routed it yet";
@@ -2458,12 +2472,14 @@ function renderRegions(att, stage, token) {
     </div>`;
   const view = stage.querySelector(".vreg-view"), page = stage.querySelector(".vreg-page"), img = page.querySelector("img");
   const R = VW.reg = { view, page, w: 0, h: 0 };
+  const live = () => token === VW.stageToken && VW.reg === R;  // not replaced by another file or an error
   img.onload = () => {
     if (token !== VW.stageToken) return;
     R.w = img.naturalWidth; R.h = img.naturalHeight;
     const load = view.querySelector(".vreg-load"); if (load) load.remove();
     layoutRegions();
     page.classList.add("ready");
+    askRegions(att, stage, live);
   };
   img.onerror = () => {
     if (token !== VW.stageToken) return;
@@ -2472,8 +2488,16 @@ function renderRegions(att, stage, token) {
   };
   img.src = att.page_url;
   if (window.ResizeObserver) { VW.regRO = new ResizeObserver(layoutRegions); VW.regRO.observe(view); }
-  const live = () => token === VW.stageToken && VW.reg === R;  // not replaced by another file or an error
+}
+
+/* The regions are asked for once the page image is here. The server draws the page for both requests,
+   and on a small host (a tenth of a CPU) two page renders at once each take twice as long; after the
+   image, the server finds the page in its cache and only runs the detector. */
+function askRegions(att, stage, live) {
   getJson(att.regions_url, VW.regionsCache).then((res) => {
+    // "Not available" is not kept (the server does not keep it either): the model can be installed while
+    // the server runs, and turning regions off and on, or coming back to the file, should then find it.
+    if (res && res.available === false) VW.regionsCache.delete(att.regions_url);
     if (!live()) return;
     if (!res || typeof res.available !== "boolean") throw new Error("the server sent an unexpected answer");
     drawRegions(res, stage);
@@ -2487,32 +2511,42 @@ function renderRegions(att, stage, token) {
 
 function drawRegions(res, stage) {
   const legend = stage.querySelector(".vreg-legend"), boxes = stage.querySelector(".vreg-boxes");
+  const why = typeof res.error === "string" && res.error ? res.error : "";
+  if (!res.available && why) {
+    legend.innerHTML = `<span class="vreg-note warn">${ic("alert", "sm")}<span>The layout detector could not run on this server (${esc(why)}), so no regions are drawn. This is page 1 as the detector would see it.</span></span>`;
+    return;
+  }
   if (!res.available) {
     legend.innerHTML = `<span class="vreg-note">${ic("info", "sm")}<span>The layout detector is not available on this server (its model, <code>models/rfq_layout.onnx</code>, is not installed), so no regions are drawn. This is page 1 as the detector would see it.</span></span>`;
     return;
   }
   const W = Number(res.width) || (VW.reg && VW.reg.w) || 0, H = Number(res.height) || (VW.reg && VW.reg.h) || 0;
-  const regions = (Array.isArray(res.regions) ? res.regions : []).filter((r) => r && Array.isArray(r.box) && r.box.length === 4 && r.box.every((v) => isFinite(v)));
-  if (!W || !H || !regions.length) {
-    legend.innerHTML = `<span class="vreg-note">${ic("info", "sm")}<span>The layout model found no regions on page 1.</span></span>`;
-    return;
-  }
+  // isFinite(null) and isFinite("") are true, so a box of nulls would be drawn at the page corner.
+  const num = (v) => (typeof v === "number" || (typeof v === "string" && v.trim() !== "")) && isFinite(v);
   const f = (v, d) => clamp(Number(v) / d, 0, 1);
-  const found = new Map();
-  boxes.innerHTML = regions.map((r) => {
-    const [name, color] = regionClass(r.label);
+  const regions = (Array.isArray(res.regions) ? res.regions : []).filter((r) => r && Array.isArray(r.box) && r.box.length === 4 && r.box.every(num)).map((r) => {
     const x0 = f(Math.min(r.box[0], r.box[2]), W), y0 = f(Math.min(r.box[1], r.box[3]), H);
     const x1 = f(Math.max(r.box[0], r.box[2]), W), y1 = f(Math.max(r.box[1], r.box[3]), H);
-    const conf = r.conf != null && isFinite(r.conf) ? Math.round(r.conf * 100) : null;
-    found.set(r.label, { name, color, n: ((found.get(r.label) || {}).n || 0) + 1 });
+    return { label: r.label, x0, y0, x1, y1, conf: num(r.conf) ? Math.round(Number(r.conf) * 100) : null };
+  }).filter((r) => r.x1 > r.x0 && r.y1 > r.y0);  // a box off the page, or with no area, has nothing to show
+  if (!W || !H || !regions.length) {
+    legend.innerHTML = why
+      ? `<span class="vreg-note warn">${ic("alert", "sm")}<span>The layout model could not read page 1 (${esc(why)}). The page is shown without regions.</span></span>`
+      : `<span class="vreg-note">${ic("info", "sm")}<span>The layout model found no regions on page 1.</span></span>`;
+    return;
+  }
+  const found = new Map();
+  boxes.innerHTML = regions.map(({ label, x0, y0, x1, y1, conf }) => {
+    const [name, color] = regionClass(label);
+    found.set(label, { name, color, n: ((found.get(label) || {}).n || 0) + 1 });
     return `<div class="vreg-box" data-x="${x0}" data-y="${y0}" style="left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;height:${(y1 - y0) * 100}%;--c:${color};--bg:${rgba(color, 0.1)}"><span class="vreg-chip">${esc(name)}${conf != null ? `<b>${conf}%</b>` : ""}</span></div>`;
   }).join("");
   // The legend follows the model's class order, so the same class always sits in the same place.
   const order = Object.keys(REGION_CLASSES);
   const keys = [...found.entries()].sort((a, b) => ((order.indexOf(a[0]) + 99) % 99) - ((order.indexOf(b[0]) + 99) % 99));
-  const said = regions.map((r) => `${regionClass(r.label)[0]}${r.conf != null ? ` ${Math.round(r.conf * 100)}%` : ""}`).join(", ");
+  const said = regions.map((r) => `${regionClass(r.label)[0]}${r.conf != null ? ` ${r.conf}%` : ""}`).join(", ");
   legend.innerHTML = keys.map(([, k]) => `<span class="vreg-key"><span class="vreg-sw" style="--c:${k.color};--bg:${rgba(k.color, 0.18)}"></span>${esc(k.name)}${k.n > 1 ? ` <span class="n">${k.n}</span>` : ""}</span>`).join("")
-    + `<span class="vreg-meta">Layout model, page 1${res.seconds != null && isFinite(res.seconds) ? `, ${Number(res.seconds).toFixed(1)} s` : ""}</span>`
+    + `<span class="vreg-meta">Layout model, page 1${num(res.seconds) ? `, ${Number(res.seconds).toFixed(1)} s` : ""}</span>`
     + `<span class="sr-only">Detected regions: ${esc(said)}.</span>`;
   layoutRegions();
 }

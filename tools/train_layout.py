@@ -11,11 +11,12 @@ torch and ultralytics (a separate virtualenv; the demo does not). See docs/layou
     python tools/train_layout.py resume --data ../yolo_work/layout_data_v2/data.yaml   # after an interrupt
     python tools/train_layout.py eval   --data ../yolo_work/layout_data_v2/data.yaml   # per-class mAP, val and beta
     python tools/train_layout.py export --data ../yolo_work/layout_data_v2/data.yaml   # models/rfq_layout.onnx + parity
+    python tools/train_layout.py runtime --data ../yolo_work/layout_data_v2/data.yaml  # deployed path: recall, false detections
     python tools/train_layout.py bench  --data ../yolo_work/layout_data_v2/data.yaml   # runtime speed and memory
 
 Runs, downloaded weights, and metrics go to --work (default ../yolo_work next to the repository),
-never into the repository. Only the exported ONNX file lands in models/. "bench" needs only the
-runtime packages (numpy, onnxruntime, Pillow), so it can run in the demo's own virtualenv.
+never into the repository. Only the exported ONNX file lands in models/. "runtime" and "bench" need
+only the runtime packages (numpy, onnxruntime, Pillow), so they run in the demo's own virtualenv.
 
 Why these settings:
     imgsz 640     the runtime letterboxes every page to 640, and CPU time grows with the square
@@ -24,7 +25,9 @@ Why these settings:
                   renderer puts the title block; switched off for the last epochs (close_mosaic)
     threads 3     the machine has 4 cores shared with OCR jobs; Ultralytics loads data in the main
                   process on CPU (workers 0), so 3 torch threads is the whole footprint
-    cache ram     the dataset decodes to about 1.5 GB, and decoding JPEGs every epoch is slow
+    cache ram     the dataset decodes to about 1.5 GB, and decoding JPEGs every epoch is slow; the
+                  training process then peaks near 6.5 GB, so on a machine with less free memory
+                  (or shared with other jobs) use --cache disk, which is slower but small
     save_period 1 a checkpoint every epoch (weights/epochN.pt, plus last.pt), so an interrupt
                   costs at most one epoch: "resume" continues from last.pt
 """
@@ -63,13 +66,19 @@ def _yolo(threads: int):
     return YOLO
 
 
+def _cache(args: argparse.Namespace) -> Any:
+    """Ultralytics' cache setting: "ram", "disk", or False (decode the JPEGs every epoch)."""
+    value = getattr(args, "cache", "ram")
+    return False if value == "none" else value
+
+
 def train_args(args: argparse.Namespace, epochs: int, name: str) -> Dict[str, Any]:
     fine_tune = Path(args.base).name != "yolo11n.pt"
     return dict(
         data=str(Path(args.data).resolve()), imgsz=640, epochs=epochs, batch=args.batch, workers=args.workers,
         device="cpu", project=str(Path(args.work).resolve() / "runs"), name=name, exist_ok=True,
         fliplr=0.0, flipud=0.0, mosaic=1.0, close_mosaic=max(2, epochs // 6), degrees=0.0, translate=0.1,
-        scale=0.5, mixup=0.0, hsv_h=0.01, hsv_s=0.4, hsv_v=0.4, cache="ram", patience=1000, seed=0,
+        scale=0.5, mixup=0.0, hsv_h=0.01, hsv_s=0.4, hsv_v=0.4, cache=_cache(args), patience=1000, seed=0,
         deterministic=False, plots=False, amp=False, verbose=True, val=True, save_period=1,
         # a model that already knows these pages needs a short warmup, a COCO model the usual three
         warmup_epochs=1.0 if fine_tune else 3.0,
@@ -280,12 +289,26 @@ def print_table(out: Dict[str, Any]) -> None:
         print(f"{c:20s} " + " ".join(f"{x:>24s}" for x in cells))
 
 
+def _clean_metadata(path: Path, dataset: str) -> None:
+    """Ultralytics writes the absolute path of data.yaml into the model's description, which is a
+    path on the training machine; the shipped file names the dataset folder instead. The other
+    metadata (class names, imgsz, stride, the AGPL-3.0 license line) stays as Ultralytics wrote it."""
+    import onnx
+    model = onnx.load(str(path))
+    for prop in model.metadata_props:
+        if prop.key == "description":
+            prop.value = (f"Ultralytics YOLO11n page layout detector for the RFQ Routing demo, trained on "
+                          f"{dataset} (tools/make_layout_dataset.py)")
+    onnx.save(model, str(path))
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     YOLO = _yolo(args.threads)
     src = weights_path(args)
     model = YOLO(str(src))
     onnx_path = Path(model.export(format="onnx", imgsz=640, opset=args.opset, simplify=True, dynamic=False,
                                   half=False, nms=False, device="cpu"))
+    _clean_metadata(onnx_path, Path(args.data).resolve().parent.name)
     MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(onnx_path, MODEL_OUT)
     print(f"{MODEL_OUT} {MODEL_OUT.stat().st_size / 1e6:.2f} MB (opset {args.opset}, from {src})")
@@ -394,6 +417,128 @@ print(json.dumps({"ready": ok, "threads": int(sys.argv[2]), "pages": len(pages),
 """
 
 
+def _match_page(gts: List[Dict[str, Any]], dets: List[Dict[str, Any]], iou_match: float = 0.5):
+    """Greedy one-to-one matching by class and IoU: (found, missed ground truths, extra detections)."""
+    used, found, missed = set(), [], []
+    for g in gts:
+        best, bj = 0.0, None
+        for j, d in enumerate(dets):
+            if j not in used and d["label"] == g["label"]:
+                v = _iou(g["box"], d["box"])
+                if v > best:
+                    best, bj = v, j
+        if bj is not None and best >= iou_match:
+            used.add(bj)
+            found.append((g, dets[bj], best))
+        else:
+            missed.append(g)
+    return found, missed, [d for j, d in enumerate(dets) if j not in used]
+
+
+def _near_miss(g: Dict[str, Any], low: List[Dict[str, Any]]) -> str:
+    """For a missed region: the best same-class detection at a very low threshold, to tell "seen but
+    below the threshold" from "never seen" and from "seen with a wrong box"."""
+    cands = [(d["conf"], _iou(g["box"], d["box"])) for d in low if d["label"] == g["label"]]
+    cands = [c for c in cands if c[1] > 0.1]
+    if not cands:
+        others = [d for d in low if _iou(g["box"], d["box"]) > 0.5]
+        return "never seen" + (f" (boxed as {others[0]['label']} {others[0]['conf']:.2f})" if others else "")
+    conf, iou = max(cands)
+    return f"best same-class candidate conf {conf:.2f}, IoU {iou:.2f}"
+
+
+def cmd_runtime(args: argparse.Namespace) -> int:
+    """Recall and false detections of the deployed path at its default threshold: onnxruntime through
+    layout.detect, on the page pictures the server makes (attachments.page_image: pdftoppm at 150 dpi
+    fit to 1800 px, JPEG) for the beta files, and on the synthetic validation pages as saved. Needs only
+    the runtime packages. Ground truth for beta comes from make_layout_dataset.beta_samples()."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import attachments
+    import layout
+    import make_layout_dataset as mld
+    from PIL import Image
+    layout.RESIZE = args.resize or layout.RESIZE
+    conf = args.conf
+    root = Path(args.data).resolve().parent
+    manifest = json.loads((root / "manifest.json").read_text())
+    report: Dict[str, Any] = {"conf": conf, "iou_match": 0.5, "resize": layout.RESIZE, "threads": layout._threads()}
+
+    def tally(rows: List[Dict[str, Any]], key: str) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for r in rows:
+            g = out.setdefault(r[key], {"pages": 0, "regions": 0, "found": 0, "extra": 0, "detections": 0})
+            g["pages"] += 1
+            g["regions"] += r["regions"]
+            g["found"] += r["found"]
+            g["extra"] += len(r["extra"])
+            g["detections"] += r["found"] + len(r["extra"])
+        for g in out.values():
+            g["recall"] = round(g["found"] / g["regions"], 4) if g["regions"] else None
+            g["precision"] = round(g["found"] / g["detections"], 4) if g["detections"] else None
+        return out
+
+    def run(name: str, data: bytes, gts: List[Dict[str, Any]], info: Dict[str, Any], per_class: Dict[str, List[int]]):
+        t = time.perf_counter()
+        dets = layout.detect(data, conf=conf)
+        seconds = time.perf_counter() - t
+        found, missed, extra = _match_page(gts, dets)
+        low = layout.detect(data, conf=0.02) if missed else []
+        for g in gts:
+            per_class[g["label"]][1] += 1
+        for g, _, _ in found:
+            per_class[g["label"]][0] += 1
+        return dict(info, page=name, regions=len(gts), found=len(found), seconds=round(seconds, 3),
+                    ious=[round(v, 2) for _, _, v in found],
+                    misses=[f"{g['label']}: {_near_miss(g, low)}" for g in missed],
+                    extra=[f"{d['label']} {d['conf']:.2f}" for d in extra])
+
+    beta_rows: List[Dict[str, Any]] = []
+    beta_class = {c: [0, 0] for c in CLASSES}
+    for name, img, boxes, info in mld.beta_samples():
+        rel = info["file"]
+        data = (ROOT / "data" / rel).read_bytes()
+        media = rel.rsplit(".", 1)[-1].lower().replace("jpeg", "jpg")
+        jpg, w, h = attachments.page_image(data, media, "eval:" + rel, info["page"])
+        k = w / img.size[0]
+        gts = [{"label": CLASSES[c], "box": [v * k for v in b]} for c, b in boxes]
+        mode = info["mode"]
+        beta_rows.append(run(name, jpg, gts, {"mode": mode, "group": "digital" if mode == "digital" else "uncopyable",
+                                              "size": [w, h]}, beta_class))
+    report["beta"] = {"groups": tally(beta_rows, "group"), "modes": tally(beta_rows, "mode"),
+                      "per_class_recall": {c: f"{a}/{n}" for c, (a, n) in beta_class.items() if n},
+                      "detect_seconds_mean": round(sum(r["seconds"] for r in beta_rows) / len(beta_rows), 3),
+                      "pages": beta_rows}
+    if not args.beta_only:
+        val_rows: List[Dict[str, Any]] = []
+        val_class = {c: [0, 0] for c in CLASSES}
+        for entry in manifest["synthetic"]:
+            if not entry["name"].startswith("val_"):
+                continue
+            path = root / "images" / "val" / f"{entry['name']}.jpg"
+            w, h = Image.open(path).size
+            gts = _read_yolo(root / "labels" / "val" / f"{entry['name']}.txt", w, h)
+            val_rows.append(run(entry["name"], path.read_bytes(), gts,
+                                {"mode": entry["mode"], "kind": entry["kind"], "size": [w, h]}, val_class))
+        report["synthetic_val"] = {"modes": tally(val_rows, "mode"), "kinds": tally(val_rows, "kind"),
+                                   "per_class_recall": {c: f"{a}/{n}" for c, (a, n) in val_class.items() if n},
+                                   "pages": [r for r in val_rows if r["misses"] or r["extra"]]}
+    name = args.metrics_name or "runtime_metrics.json"
+    (Path(args.work) / name).write_text(json.dumps(report, indent=1))
+    for part in ("beta", "synthetic_val"):
+        if part not in report:
+            continue
+        print(f"== {part} (conf {conf}, resize {layout.RESIZE})")
+        for key in ("groups", "modes", "kinds"):
+            for k, g in report[part].get(key, {}).items():
+                print(f"  {k:12s} pages {g['pages']:4d}  regions {g['found']:4d}/{g['regions']:<4d} recall {g['recall']}  "
+                      f"extra {g['extra']:3d}  precision {g['precision']}")
+        print("  per class:", report[part]["per_class_recall"])
+        for r in report[part]["pages"]:
+            if r["misses"] or r["extra"]:
+                print(f"  {r['page']} ({r['mode']}): misses {r['misses']} extra {r['extra']}")
+    return 0
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     """Runtime speed and memory of layout.detect on the beta pages (JPEG bytes, as the server passes
     them), in a fresh process per thread count so the memory numbers are the detector's alone."""
@@ -413,7 +558,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["time", "train", "resume", "eval", "export", "bench"])
+    ap.add_argument("command", choices=["time", "train", "resume", "eval", "export", "runtime", "bench"])
     ap.add_argument("--data", required=True, help="data.yaml written by make_layout_dataset.py")
     ap.add_argument("--work", default=str(DEFAULT_WORK), help="runs, weights and metrics (outside the repo)")
     ap.add_argument("--base", default="yolo11n.pt", help="starting weights: yolo11n.pt (COCO) or an earlier best.pt")
@@ -425,9 +570,14 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--workers", type=int, default=2, help="dataloader workers (Ultralytics uses 0 on CPU)")
     ap.add_argument("--threads", type=int, default=3, help="torch threads")
+    ap.add_argument("--cache", choices=["ram", "disk", "none"], default="ram",
+                    help="decoded images: ram (fast, peaks near 6.5 GB), disk (.npy files next to the images), none")
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--metrics-name", help="file name for eval results in --work (default metrics.json)")
     ap.add_argument("--bench-threads", type=int, nargs="+", default=[1, 2])
+    ap.add_argument("--conf", type=float, default=0.35, help="runtime: detection threshold (layout.detect default)")
+    ap.add_argument("--resize", choices=["bilinear", "box"], help="runtime: letterbox filter (default: layout.RESIZE)")
+    ap.add_argument("--beta-only", action="store_true", help="runtime: skip the synthetic validation pages")
     args = ap.parse_args()
     work = Path(args.work).resolve()
     if ROOT in work.parents or work == ROOT:
@@ -441,7 +591,7 @@ def main() -> int:
     os.chdir(work)  # ultralytics downloads the base weights into the working directory
     args.work = str(work)
     commands = {"time": cmd_time, "train": cmd_train, "resume": cmd_resume, "eval": cmd_eval,
-                "export": cmd_export, "bench": cmd_bench}
+                "export": cmd_export, "runtime": cmd_runtime, "bench": cmd_bench}
     return commands[args.command](args)
 
 

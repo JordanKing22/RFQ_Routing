@@ -26,8 +26,9 @@ through the same scan, copier, fax, phone photo and screenshot effects that made
 perspective, screenshot offset). The 30 beta files are never rendered into training: they are the
 honest test set ("beta"), built from the real files on disk with boxes derived from their specs.
 
-    python tools/make_layout_dataset.py --out ../yolo_work/layout_data          (about 10 minutes, 4 cores)
-    python tools/make_layout_dataset.py --out ../yolo_work/layout_data --beta-only
+    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v2 --train 1200 --val 200 --workers 3
+                                                  (the shipped model's data: about 4.5 minutes on 3 cores)
+    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v2 --beta-only
     python tools/make_layout_dataset.py --preview ../yolo_work/preview --count 12
 
 Needs Pillow and the pdftoppm program (poppler) for the beta set. Writes YOLO format:
@@ -78,11 +79,24 @@ MAX_SIDE = 1280
 # --------------------------------------------------------------------------- #
 # Labels from the page operations
 # --------------------------------------------------------------------------- #
-def text_box(o: Dict[str, Any]) -> Box:
-    """The ink box of a text op in page points: measured width, Helvetica cap height and descender."""
-    w = docgen.text_width(o["text"], o["size"], o["bold"])
+def raster_size(size: float, k: Optional[float]) -> float:
+    """The font size, in points, that text of this size really has in a picture drawn at k pixels per
+    point. docgen.to_image asks Pillow for a whole number of pixels (round(size * k)), so a 7 pt line
+    drawn at 150 dpi is 15 px tall and 2.9% wider than 7 pt Helvetica; at 72 to 220 dpi the error runs
+    from -4% to +5%, which is 10 to 25 points at the end of a long note. k None means exact metrics
+    (vector PDFs rendered by pdftoppm place every glyph at its Helvetica width)."""
+    if not k:
+        return size
+    return max(1, int(round(size * k))) / k
+
+
+def text_box(o: Dict[str, Any], k: Optional[float] = None) -> Box:
+    """The ink box of a text op in page points: measured width, Helvetica cap height and descender,
+    at the size the text really has in a picture drawn at k pixels per point (see raster_size)."""
+    size = raster_size(o["size"], k)
+    w = docgen.text_width(o["text"], size, o["bold"])
     x = o["x"] - (w if o["anchor"] == "end" else w / 2 if o["anchor"] == "middle" else 0.0)
-    return (x, o["y"] - 0.76 * o["size"], x + w, o["y"] + 0.22 * o["size"])
+    return (x, o["y"] - 0.76 * size, x + w, o["y"] + 0.22 * size)
 
 
 def union(boxes: Iterable[Box]) -> Optional[Box]:
@@ -108,15 +122,16 @@ def inside(inner: Box, outer: Box, tol: float = 0.6) -> bool:
 class PageIndex:
     """The text and visible rectangles of one page, with the lookups the labelers need."""
 
-    def __init__(self, page: docgen.Page):
+    def __init__(self, page: docgen.Page, k: Optional[float] = None):
         self.page = page
+        self.k = k  # pixels per point of the picture the labels are for (text_box)
         self.ops = page.ops
         self.page_area = page.width * page.height
         self.texts: List[Tuple[int, Dict[str, Any], Box]] = []
         self.rects: List[Box] = []
         for i, (kind, o) in enumerate(page.ops):
             if kind == "text":
-                self.texts.append((i, o, text_box(o)))
+                self.texts.append((i, o, text_box(o, k)))
             elif kind == "rect":
                 stroked = bool(o.get("stroke")) and o.get("lw", 0.6) > 0
                 filled = bool(o.get("fill")) and tuple(o["fill"]) != (1.0, 1.0, 1.0) and tuple(o["fill"]) != (1, 1, 1)
@@ -167,7 +182,7 @@ class PageIndex:
             kind, o = self.ops[j]
             if kind != "text":
                 continue
-            b = text_box(o)
+            b = text_box(o, self.k)
             if not (x_left - 1.5 <= b[0] <= x_left + x_span) or not (prev - 0.5 <= o["y"] <= prev + gap):
                 break
             if any(o["text"].startswith(s) for s in stop):
@@ -184,7 +199,7 @@ class PageIndex:
     def paragraph(self, idx: int) -> List[Box]:
         """A wrapped paragraph: op idx and the lines after it at the same x, size and color."""
         o0 = self.ops[idx][1]
-        boxes = [text_box(o0)]
+        boxes = [text_box(o0, self.k)]
         prev = o0["y"]
         for j in range(idx + 1, len(self.ops)):
             kind, o = self.ops[j]
@@ -193,7 +208,7 @@ class PageIndex:
             if (abs(o["x"] - o0["x"]) > 1.0 or abs(o["size"] - o0["size"]) > 0.3
                     or tuple(o["color"]) != tuple(o0["color"]) or not (prev < o["y"] <= prev + 1.8 * o0["size"])):
                 break
-            boxes.append(text_box(o))
+            boxes.append(text_box(o, self.k))
             prev = o["y"]
         return boxes
 
@@ -324,9 +339,11 @@ def label_requirements(ix: PageIndex, prev: Optional[PageIndex] = None) -> List[
     return out
 
 
-def page_labels(page: docgen.Page, kind: str, prev: Optional[docgen.Page] = None) -> List[Label]:
-    """Class boxes (page points, origin top left) for one rendered page of a spec of this kind."""
-    ix = PageIndex(page)
+def page_labels(page: docgen.Page, kind: str, prev: Optional[docgen.Page] = None,
+                k: Optional[float] = None) -> List[Label]:
+    """Class boxes (page points, origin top left) for one page of a spec of this kind, as drawn at k
+    pixels per point (None: exact font metrics, for vector PDFs)."""
+    ix = PageIndex(page, k)
     out: List[Label] = []
 
     def add(name: str, boxes: Iterable[Optional[Box]], margin: float) -> None:
@@ -339,7 +356,7 @@ def page_labels(page: docgen.Page, kind: str, prev: Optional[docgen.Page] = None
         add("revision_block", label_revision_block(ix), 1.0)
         add("notes", label_notes(ix), 2.0)
     elif kind in ("rfq_form", "po"):
-        pix = PageIndex(prev) if prev is not None else None
+        pix = PageIndex(prev, k) if prev is not None else None
         add("form_header", label_form_header(ix), 2.0)
         add("line_table", label_line_tables(ix), 1.0)
         add("requirements", label_requirements(ix, pix), 2.0)
@@ -350,9 +367,9 @@ def page_labels(page: docgen.Page, kind: str, prev: Optional[docgen.Page] = None
     return out
 
 
-def spec_page_labels(spec: Dict[str, Any]) -> Tuple[List[docgen.Page], List[List[Label]]]:
+def spec_page_labels(spec: Dict[str, Any], k: Optional[float] = None) -> Tuple[List[docgen.Page], List[List[Label]]]:
     pages = attachments.pages_for(spec)
-    labels = [page_labels(p, spec["kind"], pages[i - 1] if i else None) for i, p in enumerate(pages)]
+    labels = [page_labels(p, spec["kind"], pages[i - 1] if i else None, k) for i, p in enumerate(pages)]
     return pages, labels
 
 
@@ -467,26 +484,29 @@ def photo_any(page_img: Image.Image, rnd: random.Random) -> Tuple[Image.Image, L
     return ImageChops.add(photo, noise, scale=1.0, offset=-128), dst
 
 
-def render(page: docgen.Page, mode: str, rnd: random.Random, name: str, title: str) -> Tuple[Image.Image, Point]:
-    """One page through one of the beta effects. Returns the picture and the point map."""
+def render(page: docgen.Page, mode: str, rnd: random.Random, name: str,
+           title: str) -> Tuple[Image.Image, Point, float]:
+    """One page through one of the beta effects. Returns the picture, the point map, and the pixels
+    per point docgen.to_image drew it at (dpi / 72 times the supersampling), which text_box needs."""
     if mode == "digital":
         dpi = rnd.choice([72, 96, 110, 120, 150, 200])
         img = docgen.to_image(page, dpi, supersample=2)
         if rnd.random() < 0.5:
             img = img.convert("L")
-        return img, scale_map(dpi / 72.0)
+        return img, scale_map(dpi / 72.0), dpi / 72.0 * 2
     if mode in ("scan", "copier"):
         dpi = rnd.choice([200, 240, 300]) if mode == "scan" else rnd.choice([150, 200])
         skew = rnd.uniform(-1.6, 1.6) if mode == "scan" else rnd.uniform(-2.2, 2.2)
-        base = docgen.to_image(page, dpi, supersample=1 if dpi >= 240 else 2)
+        ss = 1 if dpi >= 240 else 2
+        base = docgen.to_image(page, dpi, supersample=ss)
         img = beta.office_scan(base, {"mode": mode, "skew": skew}, name, dpi)
         img = Image.open(io.BytesIO(beta.jpeg_bytes(img, rnd.randint(50, 80), dpi)))
-        return img, then(scale_map(dpi / 72.0), rotate_map(skew, *img.size))
+        return img, then(scale_map(dpi / 72.0), rotate_map(skew, *img.size)), dpi / 72.0 * ss
     if mode == "fax":
         dpi = rnd.choice([150, 200, 200])
         skew = rnd.uniform(-1.2, 1.2)
         img = beta.fax(docgen.to_image(page, dpi, supersample=1), {"mode": "fax", "skew": skew}, name).convert("L")
-        return img, then(scale_map(dpi / 72.0), rotate_map(skew, *img.size))
+        return img, then(scale_map(dpi / 72.0), rotate_map(skew, *img.size)), dpi / 72.0
     if mode == "photo":
         dpi = rnd.choice([150, 180, 220])
         base = docgen.to_image(page, dpi, supersample=1)
@@ -496,11 +516,11 @@ def render(page: docgen.Page, mode: str, rnd: random.Random, name: str, title: s
         else:
             img, dst = photo_any(base, rnd)
         pw, ph = base.size
-        return img, then(scale_map(dpi / 72.0), perspective_map([(0, 0), (pw, 0), (pw, ph), (0, ph)], dst))
+        return img, then(scale_map(dpi / 72.0), perspective_map([(0, 0), (pw, 0), (pw, ph), (0, ph)], dst)), dpi / 72.0
     if mode == "screen":
         dpi = rnd.choice([96, 110, 120, 144])
         img = beta.screenshot(docgen.to_image(page, dpi, supersample=3), title)
-        return img, then(scale_map(dpi / 72.0), lambda x, y: (x + 60, y + 108))
+        return img, then(scale_map(dpi / 72.0), lambda x, y: (x + 60, y + 108)), dpi / 72.0 * 3
     raise ValueError(mode)
 
 
@@ -795,13 +815,14 @@ def make_sample(args: Tuple[str, int, int, str]) -> Dict[str, Any]:
         spec = getattr(maker, kind)()
         if (spec.get("company"), spec.get("title"), spec.get("rfq_number"), spec["kind"]) not in _PAIRS:
             break
-    pages, labels = spec_page_labels(spec)
+    pages = attachments.pages_for(spec)
     pi = 0 if len(pages) == 1 or rnd.random() < 0.6 else rnd.randrange(len(pages))
     mode = rnd.choices([m for m, _ in MODES], [w for _, w in MODES])[0]
     name = f"{split}_{index:05d}"
     title = docgen.clean(spec.get("part_number") or spec.get("rfq_number") or spec.get("po_number") or name)
-    img, fn = render(pages[pi], mode, rnd, name, title)
-    boxes = map_labels(fn, labels[pi], img.size)
+    img, fn, k = render(pages[pi], mode, rnd, name, title)
+    labels = page_labels(pages[pi], spec["kind"], pages[pi - 1] if pi else None, k)
+    boxes = map_labels(fn, labels, img.size)
     img, boxes = shrink(img, boxes)
     img_path = Path(out_dir) / "images" / split / f"{name}.jpg"
     img.convert("RGB" if img.mode not in ("L", "RGB") else img.mode).save(img_path, "JPEG", quality=90)
@@ -814,6 +835,15 @@ def make_sample(args: Tuple[str, int, int, str]) -> Dict[str, Any]:
 # The honest test set: the real beta files
 # --------------------------------------------------------------------------- #
 BETA_DPI = 150  # how the runtime rasterizes PDF pages (layout.detect_pdf_page default)
+# tools/make_rfq_beta.py draws scans, faxes and the photo with docgen.to_image's default supersampling
+# (2) and the screenshot at 3; text PDFs are vector files whose glyphs sit at exact Helvetica widths.
+BETA_SUPERSAMPLE = {"scan": 2, "copier": 2, "fax": 2, "photo": 2, "screen": 3}
+
+
+def beta_raster_scale(entry: Dict[str, Any]) -> Optional[float]:
+    """Pixels per point the beta file's text was drawn at, or None for a vector PDF."""
+    ss = BETA_SUPERSAMPLE.get(entry["render"])
+    return entry["dpi"] / 72.0 * ss if ss and entry.get("dpi") else None
 
 
 def pdf_pages(path: Path, dpi: int) -> List[Image.Image]:
@@ -831,7 +861,7 @@ def beta_samples() -> List[Tuple[str, Image.Image, List[Label], Dict[str, Any]]]
         if spec["kind"] == "model":
             continue
         path = ROOT / "data" / rel
-        pages, labels = spec_page_labels(spec)
+        pages, labels = spec_page_labels(spec, beta_raster_scale(entry))
         mode = entry["render"]
         email = rel.split("/")[-2]
         cfg = beta.RENDER.get((email, spec["name"]), {})

@@ -18,7 +18,7 @@ onnxruntime and Pillow only, plus the pdftoppm program for PDF pages.
 Nothing here raises on bad input: a broken file, a missing model or a missing package gives []
 (available() says why), and nothing is printed. The onnxruntime session is created on first use
 and runs on RFQ_LAYOUT_THREADS threads (default 1), so it behaves on a host with 0.1 CPU;
-RFQ_LAYOUT_WORKERS (default 1) limits how many detections run at the same time.
+RFQ_LAYOUT_WORKERS (default 1) limits how many detections, decoding included, run at the same time.
 
     python layout.py FILE [--page N] [--dpi 150] [--conf 0.35] [--save out.png] [--json]
 """
@@ -28,6 +28,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -46,9 +47,12 @@ CLASSES = ["title_block", "revision_block", "notes", "export_legend", "proprieta
 IMGSZ = 640                 # the model's fixed input size (exported at 640 x 640)
 PAD_VALUE = 114             # letterbox grey, the value the model was trained with
 MAX_DET = 100
+RESIZE = "bilinear"         # how a page is shrunk to 640: "bilinear" or "box" (area averaging)
 MAX_PIXELS = 60_000_000     # refuse absurd pictures instead of decoding them (about 7750 x 7750)
+IMAGE_FORMATS = ("PNG", "JPEG", "TIFF", "BMP", "GIF", "WEBP", "PPM")  # what detect() opens from bytes (JPEG covers MPO)
 PDF_TIMEOUT = float(os.environ.get("RFQ_LAYOUT_PDF_TIMEOUT", "60"))
 MAX_PDF_DPI = 400
+MAX_PDF_PIXELS = 25_000_000  # a PDF page renders at a lower dpi rather than past this (5000 x 5000)
 
 
 def _threads() -> int:
@@ -146,58 +150,86 @@ def available() -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Pictures in, boxes out
 # --------------------------------------------------------------------------- #
+def _plain_mode(img: Any) -> Any:
+    """The picture in L, LA, RGB or RGBA, the modes Image.reduce and the RGB flattening handle.
+    16-bit and 32-bit greyscale (some scanners write 16-bit PNG or TIFF) is stretched to 8 bits over
+    its own range: a plain convert() clips everything above 255, which turns such a scan white."""
+    mode = img.mode
+    if mode in ("L", "LA", "RGB", "RGBA"):
+        return img
+    if mode == "1":
+        return img.convert("L")
+    if mode.startswith("I;16") or mode in ("I", "F"):
+        if mode.startswith("I;16"):
+            img = img.convert("I")
+        lo, hi = img.getextrema()
+        if hi > 255 or lo < 0 or (mode == "F" and hi <= 1.0):
+            k = 255.0 / max(float(hi) - float(lo), 1e-6)
+            img = img.point(lambda v: v * k + (-float(lo) * k))
+        return img.convert("L")
+    if mode in ("P", "PA"):
+        return img.convert("RGBA" if mode == "PA" or "transparency" in img.info else "RGB")
+    return img.convert("RGB")  # CMYK, YCbCr, LAB, HSV
+
+
 def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
     """A PIL RGB image and the factors that take its pixels back to the caller's pixels.
-    Big JPEGs are decoded at a reduced scale (JPEG draft mode): the detector only needs 640.
+    With draft (the detector's path) a big picture is made small early, since the detector only
+    needs 640: JPEGs decode at 1/2, 1/4 or 1/8 scale (JPEG draft mode), and anything else over
+    twice 640 is box-averaged down by a whole factor before the color conversions, which would
+    otherwise copy the full-size picture two or three times.
     Bytes from a phone can carry an EXIF orientation (the pixels are stored sideways and viewers
     turn them); those are turned upright first, because the model only knows upright pages, so
     boxes for such a file are in the upright picture's pixels, the way a viewer shows it."""
     from PIL import Image, ImageOps
     if isinstance(image, Image.Image):
         img = image
-        fx = fy = 1.0
-    elif isinstance(image, (bytes, bytearray, memoryview)):
-        img = Image.open(io.BytesIO(bytes(image)))
         w0, h0 = img.size
-        if w0 * h0 > MAX_PIXELS:
-            raise ValueError(f"picture too large: {w0} x {h0}")
+    elif isinstance(image, (bytes, bytearray, memoryview)):
+        # Only plain raster formats: Pillow's EPS plugin, for one, would hand the bytes to Ghostscript.
+        img = Image.open(io.BytesIO(bytes(image)), formats=IMAGE_FORMATS)
+        w0, h0 = img.size
+        if w0 < 8 or h0 < 8 or w0 * h0 > MAX_PIXELS:  # from the header, before anything is decoded
+            raise ValueError(f"unusable picture size {w0} x {h0}")
         try:
             orientation = int(img.getexif().get(0x0112, 1))
         except Exception:  # a damaged EXIF block is not a reason to give up on the picture
             orientation = 1
-        if draft and img.format == "JPEG":
-            img.draft("RGB", (IMGSZ * 2, IMGSZ * 2))  # decodes at 1/2, 1/4 or 1/8 scale, never below 1280
+        if draft and img.format in ("JPEG", "MPO"):
+            img.draft("RGB", (IMGSZ * 2, IMGSZ * 2))  # never below 1280 on either side
         img.load()
         if orientation in (2, 3, 4, 5, 6, 7, 8):
             img = ImageOps.exif_transpose(img)
             if orientation >= 5:  # a quarter turn swaps width and height
                 w0, h0 = h0, w0
-        fx, fy = w0 / img.size[0], h0 / img.size[1]
     else:
         raise TypeError(f"expected a PIL image or PNG/JPEG bytes, got {type(image).__name__}")
     if img.size[0] < 8 or img.size[1] < 8 or img.size[0] * img.size[1] > MAX_PIXELS:
         raise ValueError(f"unusable picture size {img.size}")
-    if img.mode != "RGB":
-        if img.mode in ("RGBA", "LA", "P", "PA"):
-            rgba = img.convert("RGBA")
-            bg = Image.new("RGB", img.size, (255, 255, 255))  # transparent areas read as paper
-            bg.paste(rgba, mask=rgba.split()[-1])
-            img = bg
-        else:
-            img = img.convert("RGB")
-    return img, fx, fy
+    img = _plain_mode(img)
+    factor = max(img.size) // (IMGSZ * 2) if draft else 1
+    if factor >= 2:
+        img = img.reduce(factor)
+    if img.mode in ("LA", "RGBA"):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))  # transparent areas read as paper
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    return img, w0 / img.size[0], h0 / img.size[1]
 
 
 def _letterbox(img: Any) -> Tuple[Any, float, int, int]:
-    """Scale to fit 640 x 640 keeping the aspect ratio, pad with grey, same arithmetic as Ultralytics.
-    Pillow's bilinear resize filters when it shrinks, like the anti-aliased pages the model trained on."""
+    """Scale to fit 640 x 640 keeping the aspect ratio, pad with grey, same arithmetic as Ultralytics
+    (sizes, padding and rounding are identical; the resize filter is RESIZE, see there)."""
     import numpy as np
     from PIL import Image
     w, h = img.size
     r = min(IMGSZ / w, IMGSZ / h)
     nw, nh = int(round(w * r)), int(round(h * r))
     if (nw, nh) != (w, h):
-        img = img.resize((nw, nh), Image.BILINEAR)
+        img = img.resize((nw, nh), Image.Resampling.BOX if RESIZE == "box" else Image.Resampling.BILINEAR)
     left = int(round((IMGSZ - nw) / 2 - 0.1))
     top = int(round((IMGSZ - nh) / 2 - 0.1))
     canvas = Image.new("RGB", (IMGSZ, IMGSZ), (PAD_VALUE,) * 3)
@@ -235,7 +267,7 @@ def _decode(out: Any, conf: float, iou: float) -> List[Dict[str, Any]]:
     scores = pred[:, 4:]
     cls = scores.argmax(1)
     best = scores[np.arange(scores.shape[0]), cls]
-    mask = best >= conf
+    mask = best > conf  # strictly above, as Ultralytics filters
     if not mask.any():
         return []
     pred, cls, best = pred[mask], cls[mask], best[mask]
@@ -258,9 +290,11 @@ def detect(image: Any, conf: float = 0.35, iou: float = 0.5) -> List[Dict[str, A
         sess = _session()
         if sess is None:
             return []
-        img, fx, fy = _open(image)
-        x, r, left, top = _letterbox(img)
+        # The gate covers decoding too: a big picture briefly holds its full decoded size (a 60 MP
+        # PNG is about 240 MB), so RFQ_LAYOUT_WORKERS bounds memory as well as CPU.
         with _run_gate:
+            img, fx, fy = _open(image)
+            x, r, left, top = _letterbox(img)
             out = sess.run(None, {sess.get_inputs()[0].name: x})[0]
         W, H = img.size[0] * fx, img.size[1] * fy
         dets = []
@@ -276,24 +310,43 @@ def detect(image: Any, conf: float = 0.35, iou: float = 0.5) -> List[Dict[str, A
         return []
 
 
+def _pdf_page_points(path: str, page: int) -> Optional[Tuple[float, float]]:
+    """Width and height of one page in points, from pdfinfo (poppler, next to pdftoppm), or None."""
+    if shutil.which("pdfinfo") is None:
+        return None
+    proc = subprocess.run(["pdfinfo", "-f", str(page), "-l", str(page), path], capture_output=True,
+                          timeout=PDF_TIMEOUT)
+    m = re.search(rb"Page\s+\d+\s+size:\s+([0-9.]+)\s+x\s+([0-9.]+)", proc.stdout)
+    return (float(m.group(1)), float(m.group(2))) if m else None
+
+
 def render_pdf_page(data: bytes, page: int = 1, dpi: int = 150) -> Any:
-    """One PDF page as a PIL image via pdftoppm, or None."""
+    """One PDF page as a PIL image via pdftoppm, or None. A page so large that it would pass
+    MAX_PDF_PIXELS at this dpi (a wall-sized sheet, or a hostile MediaBox) renders at a lower dpi,
+    so neither pdftoppm nor Pillow holds more than about 100 MB for it."""
     try:
         from PIL import Image
-        if not data or not bytes(data[:1024]).lstrip().startswith(b"%PDF") or shutil.which("pdftoppm") is None:
+        if not data or b"%PDF" not in bytes(data[:1024]) or shutil.which("pdftoppm") is None:
             return None
         page = max(1, int(page))
-        dpi = max(36, min(MAX_PDF_DPI, int(dpi)))
+        dpi = float(max(36, min(MAX_PDF_DPI, int(dpi))))
         with tempfile.TemporaryDirectory(prefix="rfq_layout_") as tmp:
             src = os.path.join(tmp, "in.pdf")
             with open(src, "wb") as fh:
                 fh.write(bytes(data))
+            size = _pdf_page_points(src, page)
+            if size:
+                px = size[0] * size[1] * (dpi / 72.0) ** 2
+                if px > MAX_PDF_PIXELS:
+                    dpi = max(1.0, dpi * (MAX_PDF_PIXELS / px) ** 0.5)
             out = os.path.join(tmp, "page")
-            subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", str(dpi), "-png", "-singlefile",
+            subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", f"{dpi:.2f}", "-png", "-singlefile",
                             src, out], check=True, capture_output=True, timeout=PDF_TIMEOUT)
-            with Image.open(out + ".png") as im:
+            with Image.open(out + ".png", formats=("PNG",)) as im:
+                if im.size[0] * im.size[1] > MAX_PIXELS:  # no page size from pdfinfo and still huge
+                    return None
                 im.load()
-                return im.convert("RGB")
+                return im if im.mode == "RGB" else im.convert("RGB")
     except Exception as exc:
         log.debug("pdf page render failed: %s: %s", type(exc).__name__, exc)
         return None
@@ -301,7 +354,8 @@ def render_pdf_page(data: bytes, page: int = 1, dpi: int = 150) -> Any:
 
 def detect_pdf_page(data: bytes, page: int = 1, dpi: int = 150, conf: float = 0.35,
                     iou: float = 0.5) -> List[Dict[str, Any]]:
-    """Regions on one PDF page, in pixels of that page rendered at dpi (what render_pdf_page returns)."""
+    """Regions on one PDF page, in pixels of that page rendered at dpi (the picture render_pdf_page
+    returns, which is smaller for a page too large to render at that dpi)."""
     img = render_pdf_page(data, page, dpi)
     return detect(img, conf, iou) if img is not None else []
 
@@ -366,15 +420,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"cannot read {args.file}: {exc}")
         return 1
     t0 = time.perf_counter()
-    if data.lstrip()[:4] == b"%PDF":
+    if b"%PDF" in data[:1024]:
         img = render_pdf_page(data, args.page, args.dpi)
     else:
         img = None
         try:
-            from PIL import Image, ImageOps
-            img = Image.open(io.BytesIO(data))
-            img.load()
-            img = ImageOps.exif_transpose(img)  # upright, as detect() does with bytes
+            img = _open(data, draft=False)[0]  # upright and RGB, full size, as detect() reads bytes
         except Exception as exc:
             print(f"cannot read {args.file}: {exc}")
             return 1

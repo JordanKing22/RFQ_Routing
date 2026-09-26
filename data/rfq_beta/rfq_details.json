@@ -11,6 +11,8 @@
    "customer_tier": "A",
    "contact": "Rachel Kim",
    "contact_email": "rkim@quillonaero.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "26-0412",
     "source": "subject"
@@ -20,6 +22,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-03",
     "source": "email body",
@@ -48,23 +51,23 @@
      "line": 1,
      "part_number": {
       "value": "QA-41127",
-      "source": "QA-41127_RevB.pdf (OCR 82%)"
+      "source": "QA-41127_RevB.pdf (OCR 90%)"
      },
      "rev": {
       "value": "B",
-      "source": "QA-41127_RevB.pdf (OCR 82%)"
+      "source": "QA-41127_RevB.pdf (OCR 90%)"
      },
      "description": {
       "value": "BRACKET, SENSOR MOUNTING",
-      "source": "QA-41127_RevB.pdf (OCR 82%)"
+      "source": "QA-41127_RevB.pdf (OCR 90%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "QA-41127_RevB.pdf (OCR 82%)"
+      "source": "QA-41127_RevB.pdf (OCR 90%)"
      },
      "finish": {
       "value": "BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2",
-      "source": "QA-41127_RevB.pdf (OCR 82%)"
+      "source": "QA-41127_RevB.pdf (OCR 90%)"
      },
      "quantities": {
       "value": [
@@ -89,8 +92,8 @@
      "name": "QA-41127_RevB.pdf",
      "type": "drawing",
      "capture": "scan",
-     "text_from": "OCR 82%",
-     "chars": 1541
+     "text_from": "OCR 90%",
+     "chars": 1483
     },
     {
      "name": "QA-41127_RevB.step",
@@ -114,6 +117,8 @@
    "customer_tier": "B",
    "contact": "Greg Lindqvist",
    "contact_email": "glindqvist@halvorsenpv.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -123,6 +128,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-09",
     "source": "email body",
@@ -208,6 +214,8 @@
    "customer_tier": "A",
    "contact": "Dana Whitcomb",
    "contact_email": "dwhitcomb@sablecreekdefense.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "SCD-7781",
     "source": "subject"
@@ -217,6 +225,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-09",
     "source": "email body",
@@ -296,6 +305,8 @@
    "customer_tier": "B",
    "contact": "Owen Marsh",
    "contact_email": "omarsh@tessaractoptics.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -305,6 +316,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-02",
     "source": "email body",
@@ -394,6 +406,8 @@
    "customer_tier": null,
    "contact": "Sam Patel",
    "contact_email": "spatel@cindervalehydraulics.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -403,6 +417,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -479,6 +494,8 @@
    "customer_tier": "B",
    "contact": "Lena Fischer",
    "contact_email": "lfischer@ferroviarobotics.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -488,6 +505,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -516,23 +534,23 @@
      "line": 1,
      "part_number": {
       "value": "FR-2290",
-      "source": "FR-2290_heatsink.pdf (OCR 88%)"
+      "source": "FR-2290_heatsink.pdf (OCR 84%)"
      },
      "rev": {
       "value": "A",
-      "source": "FR-2290_heatsink.pdf (OCR 88%)"
+      "source": "FR-2290_heatsink.pdf (OCR 84%)"
      },
      "description": {
       "value": "HEAT SINK PLATE, SERVO DRIVE",
-      "source": "FR-2290_heatsink.pdf (OCR 88%)"
+      "source": "FR-2290_heatsink.pdf (OCR 84%)"
      },
      "material": {
       "value": "ALUMINUM 6063-T6 PER ASTM B221",
-      "source": "FR-2290_heatsink.pdf (OCR 88%)"
+      "source": "FR-2290_heatsink.pdf (OCR 84%)"
      },
      "finish": {
       "value": "CLEAR ANODIZE PER MIL-A-8625 TYPE II CLASS 1",
-      "source": "FR-2290_heatsink.pdf (OCR 88%)"
+      "source": "FR-2290_heatsink.pdf (OCR 84%)"
      },
      "quantities": {
       "value": null,
@@ -553,8 +571,8 @@
      "name": "FR-2290_heatsink.pdf",
      "type": "drawing",
      "capture": "fax",
-     "text_from": "OCR 88%",
-     "chars": 1086
+     "text_from": "OCR 84%",
+     "chars": 1176
     },
     {
      "name": "FR-2290_heatsink.step",
@@ -580,6 +598,8 @@
    "customer_tier": "B",
    "contact": "Beth Okafor",
    "contact_email": "bokafor@halvorsenpv.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -589,6 +609,7 @@
     "source": "subject"
    },
    "request": "quote revision",
+   "request_source": "email body",
    "respond_by": {
     "value": null,
     "source": null,
@@ -612,23 +633,23 @@
      "line": 1,
      "part_number": {
       "value": "HPV-2045",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 82%)"
+      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
      },
      "rev": {
       "value": "D",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 82%)"
+      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
      },
      "description": {
       "value": "MANIFOLD BLOCK, VALVE, 4-PORT",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 82%)"
+      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 82%)"
+      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
      },
      "finish": {
       "value": "HARD ANODIZE PER MIL-A-8625 TYPE III CLASS 1",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 82%)"
+      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
      },
      "quantities": {
       "value": [
@@ -650,9 +671,9 @@
     {
      "name": "HPV-2045_manifold_RevD.pdf",
      "type": "drawing",
-     "capture": "scan",
-     "text_from": "OCR 82%",
-     "chars": 1745
+     "capture": "copier",
+     "text_from": "OCR 70%",
+     "chars": 2005
     },
     {
      "name": "HPV-2045_manifold_RevD.step",
@@ -676,6 +697,8 @@
    "customer_tier": null,
    "contact": "Ivy Chen",
    "contact_email": "ichen@arcwrightag.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -685,6 +708,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -708,23 +732,23 @@
      "line": 1,
      "part_number": {
       "value": "AW-310",
-      "source": "AW-310_frame_assy.pdf (OCR 89%)"
+      "source": "AW-310_frame_assy.pdf (OCR 92%)"
      },
      "rev": {
       "value": "B",
-      "source": "AW-310_frame_assy.pdf (OCR 89%)"
+      "source": "AW-310_frame_assy.pdf (OCR 92%)"
      },
      "description": {
       "value": "FRAME ASSY, SEED METER MOUNT, WELDED",
-      "source": "AW-310_frame_assy.pdf (OCR 89%)"
+      "source": "AW-310_frame_assy.pdf (OCR 92%)"
      },
      "material": {
       "value": "STEEL, ASTM A36: 2 X 2 X .188 SQ TUBE, .50 PLATE",
-      "source": "AW-310_frame_assy.pdf (OCR 89%)"
+      "source": "AW-310_frame_assy.pdf (OCR 92%)"
      },
      "finish": {
       "value": "POWDER COAT RAL 6018, 2-4 MILS, AFTER MACHINING",
-      "source": "AW-310_frame_assy.pdf (OCR 89%)"
+      "source": "AW-310_frame_assy.pdf (OCR 92%)"
      },
      "quantities": {
       "value": [
@@ -747,13 +771,13 @@
      "name": "AW-310_frame_assy.pdf",
      "type": "drawing",
      "capture": "scan",
-     "text_from": "OCR 89%",
-     "chars": 1386
+     "text_from": "OCR 92%",
+     "chars": 1354
     }
    ],
    "missing": [],
    "check": [
-    "Line 1 part number read by OCR at 42% confidence from AW-310_frame_assy.pdf (OCR 89%): verify"
+    "Line 1 part number AW-310: OCR read it at 42% confidence on AW-310_frame_assy.pdf and no other source confirms it; verify"
    ],
    "routing": null
   },
@@ -767,6 +791,8 @@
    "customer_tier": null,
    "contact": "Hannah Ortiz",
    "contact_email": "hortiz@northpeakenergy.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -776,6 +802,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "email body",
    "respond_by": {
     "value": null,
     "source": null,
@@ -861,6 +888,8 @@
    "customer_tier": "B",
    "contact": "Alicia Moreno",
    "contact_email": "amoreno@ferroviarobotics.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -870,6 +899,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -933,23 +963,23 @@
      "line": 2,
      "part_number": {
       "value": "FR-3102",
-      "source": "FR-3102.pdf (OCR 73%)"
+      "source": "FR-3102.pdf (OCR 89%)"
      },
      "rev": {
       "value": "B",
-      "source": "FR-3102.pdf (OCR 73%)"
+      "source": "FR-3102.pdf (OCR 89%)"
      },
      "description": {
       "value": "COVER, DRIVE ENCLOSURE",
-      "source": "FR-3102.pdf (OCR 73%)"
+      "source": "FR-3102.pdf (OCR 89%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "FR-3102.pdf (OCR 73%)"
+      "source": "FR-3102.pdf (OCR 89%)"
      },
      "finish": {
       "value": "CHEM FILM PER MIL-DTL-5541 TYPE II CLASS 3, CLEAR",
-      "source": "FR-3102.pdf (OCR 73%)"
+      "source": "FR-3102.pdf (OCR 89%)"
      },
      "quantities": {
       "value": null,
@@ -1012,8 +1042,8 @@
      "name": "FR-3102.pdf",
      "type": "drawing",
      "capture": "scan",
-     "text_from": "OCR 73%",
-     "chars": 1209
+     "text_from": "OCR 89%",
+     "chars": 1025
     },
     {
      "name": "FR-3103.pdf",
@@ -1037,6 +1067,8 @@
    "customer_tier": null,
    "contact": "Declan Foyle",
    "contact_email": "dfoyle@oxbowpackaging.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -1046,6 +1078,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "email body",
    "respond_by": {
     "value": "2026-09-25",
     "source": "email body",
@@ -1079,23 +1112,23 @@
      "line": 1,
      "part_number": {
       "value": "OPM-22817",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 68%)"
+      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
      },
      "rev": {
       "value": "B",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 68%)"
+      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
      },
      "description": {
       "value": "BLOCK, KNIFE HOLDER",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 68%)"
+      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
      },
      "material": {
       "value": "STEEL, AISI 4140 PRE-HARDENED, 28-32 HRC",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 68%)"
+      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
      },
      "finish": {
       "value": "BLACK OXIDE PER MIL-DTL-13924 CLASS 1, OIL DIP",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 68%)"
+      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
      },
      "quantities": {
       "value": [
@@ -1118,8 +1151,8 @@
      "name": "OPM-22817_RevB_photo.jpg",
      "type": "drawing",
      "capture": "photo",
-     "text_from": "OCR 68%",
-     "chars": 1526
+     "text_from": "OCR 83%",
+     "chars": 1333
     }
    ],
    "missing": [],
@@ -1136,6 +1169,8 @@
    "customer_tier": null,
    "contact": "Caleb Mercer",
    "contact_email": "cmercer@pinecrestvac.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -1145,6 +1180,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -1181,7 +1217,7 @@
      },
      "rev": {
       "value": "B",
-      "source": "subject"
+      "source": "email body"
      },
      "description": {
       "value": "316L gauge manifold block",
@@ -1229,6 +1265,8 @@
    "customer_tier": null,
    "contact": "Nora Castellanos",
    "contact_email": "ncastellanos@kestrelfluid.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "RFQ-26-0931",
     "source": "subject"
@@ -1238,9 +1276,10 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-09",
-    "source": "RFQ-26-0931.pdf (OCR 88%)",
+    "source": "RFQ-26-0931.pdf (OCR 93%)",
     "text": "RESPOND BY 2026-10-09"
    },
    "delivery": {
@@ -1249,24 +1288,24 @@
    },
    "terms": {
     "value": "NET 45, FOB ORIGIN",
-    "source": "RFQ-26-0931.pdf (OCR 88%)"
+    "source": "RFQ-26-0931.pdf (OCR 93%)"
    },
    "requirements": [
     {
      "value": "MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT",
-     "source": "RFQ-26-0931.pdf (OCR 88%)"
+     "source": "RFQ-26-0931.pdf (OCR 93%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT ON FIRST LOT (AS9102 FORMAT ACCEPTABLE)",
-     "source": "RFQ-26-0931.pdf (OCR 88%)"
+     "source": "RFQ-26-0931.pdf (OCR 93%)"
     },
     {
      "value": "PLUG AND CAP ALL PORTS FOR SHIPMENT. PRESSURE TEST PERFORMED BY KESTREL",
-     "source": "RFQ-26-0931.pdf (OCR 88%)"
+     "source": "RFQ-26-0931.pdf (OCR 93%)"
     },
     {
      "value": "QUOTE LEAD TIME IN WEEKS ARO FOR EACH QUANTITY BREAK",
-     "source": "RFQ-26-0931.pdf (OCR 88%)"
+     "source": "RFQ-26-0931.pdf (OCR 93%)"
     },
     {
      "value": "Please quote each break on the form and show any NRE or first article charges as their own line",
@@ -1310,7 +1349,7 @@
        75,
        150
       ],
-      "source": "RFQ-26-0931.pdf (OCR 88%)"
+      "source": "RFQ-26-0931.pdf (OCR 93%)"
      },
      "annual_usage": {
       "value": null,
@@ -1349,7 +1388,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0931.pdf (OCR 88%)"
+      "source": "RFQ-26-0931.pdf (OCR 93%)"
      },
      "annual_usage": {
       "value": null,
@@ -1366,8 +1405,8 @@
      "name": "RFQ-26-0931.pdf",
      "type": "RFQ form",
      "capture": "scan",
-     "text_from": "OCR 88%",
-     "chars": 1082
+     "text_from": "OCR 93%",
+     "chars": 1083
     },
     {
      "name": "KF-3408_RevB.pdf",
@@ -1405,6 +1444,8 @@
    "customer_tier": null,
    "contact": "Ada Lindgren",
    "contact_email": "alindgren@ashgroveinst.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -1414,6 +1455,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": null,
     "source": null,
@@ -1431,30 +1473,30 @@
    "requirements": [],
    "export_control": {
     "value": "CUI",
-    "source": "AGI-3052_RevA.pdf (OCR 83%)"
+    "source": "AGI-3052_RevA.pdf (OCR 81%)"
    },
    "lines": [
     {
      "line": 1,
      "part_number": {
       "value": "AGI-3052",
-      "source": "AGI-3052_RevA.pdf (OCR 83%)"
+      "source": "AGI-3052_RevA.pdf (OCR 81%)"
      },
      "rev": {
       "value": "A",
-      "source": "AGI-3052_RevA.pdf (OCR 83%)"
+      "source": "AGI-3052_RevA.pdf (OCR 81%)"
      },
      "description": {
       "value": "COVER PLATE, SENSOR ENCLOSURE",
-      "source": "AGI-3052_RevA.pdf (OCR 83%)"
+      "source": "AGI-3052_RevA.pdf (OCR 81%)"
      },
      "material": {
       "value": "STAINLESS STEEL 316L PER ASTM A240, ANNEALED",
-      "source": "AGI-3052_RevA.pdf (OCR 83%)"
+      "source": "AGI-3052_RevA.pdf (OCR 81%)"
      },
      "finish": {
       "value": "PASSIVATE PER ASTM A967 NITRIC 2",
-      "source": "AGI-3052_RevA.pdf (OCR 83%)"
+      "source": "AGI-3052_RevA.pdf (OCR 81%)"
      },
      "quantities": {
       "value": [
@@ -1477,13 +1519,13 @@
      "name": "AGI-3052_RevA.pdf",
      "type": "drawing",
      "capture": "fax",
-     "text_from": "OCR 83%",
-     "chars": 1398
+     "text_from": "OCR 81%",
+     "chars": 1507
     }
    ],
    "missing": [],
    "check": [
-    "CUI marking found only in AGI-3052_RevA.pdf (OCR 83%); the email does not mention it"
+    "CUI marking found only in AGI-3052_RevA.pdf (OCR 81%); the email does not mention it"
    ],
    "routing": null
   },
@@ -1497,6 +1539,8 @@
    "customer_tier": "A",
    "contact": "Amara Nwosu",
    "contact_email": "anwosu@brightwatermed.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "RFQ-26-0317",
     "source": "subject"
@@ -1506,9 +1550,10 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-15",
-    "source": "RFQ-26-0317.pdf (OCR 93%)",
+    "source": "RFQ-26-0317.pdf (OCR 91%)",
     "text": "RESPOND BY 2026-10-15"
    },
    "delivery": {
@@ -1517,28 +1562,28 @@
    },
    "terms": {
     "value": "NET 45, FOB DESTINATION",
-    "source": "RFQ-26-0317.pdf (OCR 93%)"
+    "source": "RFQ-26-0317.pdf (OCR 91%)"
    },
    "requirements": [
     {
      "value": "ISO 13485:2016 CERTIFIED SUPPLIER REQUIRED",
-     "source": "RFQ-26-0317.pdf (OCR 93%)"
+     "source": "RFQ-26-0317.pdf (OCR 91%)"
     },
     {
      "value": "MATERIAL CERTS WITH TRACEABILITY TO RESIN LOT AND BAR LOT",
-     "source": "RFQ-26-0317.pdf (OCR 93%)"
+     "source": "RFQ-26-0317.pdf (OCR 91%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT, 3 PCS PER DASH NUMBER",
-     "source": "RFQ-26-0317.pdf (OCR 93%)"
+     "source": "RFQ-26-0317.pdf (OCR 91%)"
     },
     {
      "value": "CLEAN, DOUBLE BAG, AND LABEL PER BWM-QS-0412. NO STERILIZATION BY SUPPLIER",
-     "source": "RFQ-26-0317.pdf (OCR 93%)"
+     "source": "RFQ-26-0317.pdf (OCR 91%)"
     },
     {
      "value": "OPTION B: QUOTE WITH BRIGHTWATER-FURNISHED PEEK BAR, SHOW MATERIAL SAVINGS AS A SEPARATE LINE",
-     "source": "RFQ-26-0317.pdf (OCR 93%)"
+     "source": "RFQ-26-0317.pdf (OCR 91%)"
     }
    ],
    "export_control": {
@@ -1550,7 +1595,7 @@
      "line": 1,
      "part_number": {
       "value": "BWM-3140-08",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1558,7 +1603,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 8 MM",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1574,7 +1619,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1589,7 +1634,7 @@
      "line": 2,
      "part_number": {
       "value": "BWM-3140-10",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1597,7 +1642,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 10 MM",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1613,7 +1658,7 @@
        200,
        400
       ],
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1628,7 +1673,7 @@
      "line": 3,
      "part_number": {
       "value": "BWM-3140-12",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1636,7 +1681,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 12 MM",
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1652,7 +1697,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0317.pdf (OCR 93%)"
+      "source": "RFQ-26-0317.pdf (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1669,8 +1714,8 @@
      "name": "RFQ-26-0317.pdf",
      "type": "RFQ form",
      "capture": "scan",
-     "text_from": "OCR 93%",
-     "chars": 1233
+     "text_from": "OCR 91%",
+     "chars": 1243
     },
     {
      "name": "BWM-3140_RevA.pdf",
@@ -1701,6 +1746,8 @@
    "customer_tier": null,
    "contact": "Martin Achebe",
    "contact_email": "machebe@corvane-ind.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "26-0914",
     "source": "subject"
@@ -1710,6 +1757,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-13",
     "source": "email body",
@@ -1736,30 +1784,30 @@
    ],
    "export_control": {
     "value": "ITAR",
-    "source": "CI-10442_RevC.pdf (OCR 75%)"
+    "source": "CI-10442_RevC.pdf (OCR 88%)"
    },
    "lines": [
     {
      "line": 1,
      "part_number": {
       "value": "CI-10442",
-      "source": "CI-10442_RevC.pdf (OCR 75%)"
+      "source": "CI-10442_RevC.pdf (OCR 88%)"
      },
      "rev": {
       "value": "C",
-      "source": "CI-10442_RevC.pdf (OCR 75%)"
+      "source": "CI-10442_RevC.pdf (OCR 88%)"
      },
      "description": {
       "value": "HOUSING, DRIVE ELECTRONICS",
-      "source": "CI-10442_RevC.pdf (OCR 75%)"
+      "source": "CI-10442_RevC.pdf (OCR 88%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "CI-10442_RevC.pdf (OCR 75%)"
+      "source": "CI-10442_RevC.pdf (OCR 88%)"
      },
      "finish": {
       "value": "ELECTROLESS NICKEL PER AMS 2404 CLASS 1, .0003-.0005 THK",
-      "source": "CI-10442_RevC.pdf (OCR 75%)"
+      "source": "CI-10442_RevC.pdf (OCR 88%)"
      },
      "quantities": {
       "value": [
@@ -1784,8 +1832,8 @@
      "name": "CI-10442_RevC.pdf",
      "type": "drawing",
      "capture": "scan",
-     "text_from": "OCR 75%",
-     "chars": 1871
+     "text_from": "OCR 88%",
+     "chars": 1682
     },
     {
      "name": "CI-10442_RevC.step",
@@ -1797,7 +1845,7 @@
    ],
    "missing": [],
    "check": [
-    "ITAR marking found only in CI-10442_RevC.pdf (OCR 75%); the email does not mention it"
+    "ITAR marking found only in CI-10442_RevC.pdf (OCR 88%); the email does not mention it"
    ],
    "routing": null
   },
@@ -1811,6 +1859,8 @@
    "customer_tier": "A",
    "contact": "Duncan Mireles",
    "contact_email": "dmireles@brightwatermed.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "RFQ-26-0318",
     "source": "subject"
@@ -1820,40 +1870,41 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-15",
-    "source": "RFQ-26-0318.pdf (OCR 81%)",
+    "source": "RFQ-26-0318.pdf (OCR 85%)",
     "text": "RESPOND BY 2026-10-15"
    },
    "delivery": {
     "value": "REQUIRED DELIVERY: 8 WEEKS ARO",
-    "source": "RFQ-26-0318.pdf (OCR 81%)",
+    "source": "RFQ-26-0318.pdf (OCR 85%)",
     "date": null
    },
    "terms": {
     "value": "NET 45, FOB DESTINATION",
-    "source": "RFQ-26-0318.pdf (OCR 81%)"
+    "source": "RFQ-26-0318.pdf (OCR 85%)"
    },
    "requirements": [
     {
      "value": "ISO 13485 CERTIFIED SUPPLIER",
-     "source": "RFQ-26-0318.pdf (OCR 81%)"
+     "source": "RFQ-26-0318.pdf (OCR 85%)"
     },
     {
      "value": "MATERIAL CERTS TRACEABLE TO HEAT OR LOT",
-     "source": "RFQ-26-0318.pdf (OCR 81%)"
+     "source": "RFQ-26-0318.pdf (OCR 85%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT, 5 PCS PER LINE, ON FIRST LOT",
-     "source": "RFQ-26-0318.pdf (OCR 81%)"
+     "source": "RFQ-26-0318.pdf (OCR 85%)"
     },
     {
      "value": "PARTS CLEANED AND DOUBLE BAGGED. NO SILICONE-BASED LUBRICANTS",
-     "source": "RFQ-26-0318.pdf (OCR 81%)"
+     "source": "RFQ-26-0318.pdf (OCR 85%)"
     },
     {
      "value": "REQUIRED DELIVERY: 8 WEEKS ARO",
-     "source": "RFQ-26-0318.pdf (OCR 81%)"
+     "source": "RFQ-26-0318.pdf (OCR 85%)"
     }
    ],
    "export_control": {
@@ -1889,7 +1940,7 @@
        500,
        1000
       ],
-      "source": "RFQ-26-0318.pdf (OCR 81%)"
+      "source": "RFQ-26-0318.pdf (OCR 85%)"
      },
      "annual_usage": {
       "value": null,
@@ -1928,7 +1979,7 @@
        500,
        1000
       ],
-      "source": "RFQ-26-0318.pdf (OCR 81%)"
+      "source": "RFQ-26-0318.pdf (OCR 85%)"
      },
      "annual_usage": {
       "value": null,
@@ -1944,9 +1995,9 @@
     {
      "name": "RFQ-26-0318.pdf",
      "type": "RFQ form",
-     "capture": "scan",
-     "text_from": "OCR 81%",
-     "chars": 1015
+     "capture": "copier",
+     "text_from": "OCR 85%",
+     "chars": 1148
     },
     {
      "name": "BWM-3105_RevA.pdf",
@@ -1977,6 +2028,8 @@
    "customer_tier": null,
    "contact": "Felix Durand",
    "contact_email": "fdurand@lucerneopto.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": null,
     "source": null
@@ -1986,6 +2039,7 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-12",
     "source": "email body",
@@ -2054,7 +2108,7 @@
      "type": "drawing",
      "capture": "screenshot",
      "text_from": "OCR 91%",
-     "chars": 1675
+     "chars": 1698
     }
    ],
    "missing": [],
@@ -2071,6 +2125,8 @@
    "customer_tier": null,
    "contact": "Trent Haverford",
    "contact_email": "thaverford@wexcombesys.com",
+   "contact_source": "email header",
+   "contact_email_source": "email header",
    "rfq_number": {
     "value": "WS-26-0388",
     "source": "subject"
@@ -2080,9 +2136,10 @@
     "source": null
    },
    "request": "new RFQ",
+   "request_source": "subject",
    "respond_by": {
     "value": "2026-10-12",
-    "source": "WS-RFQ-26-0388.pdf (OCR 93%)",
+    "source": "WS-RFQ-26-0388.pdf (OCR 95%)",
     "text": "RESPOND BY 2026-10-12"
    },
    "delivery": {
@@ -2091,29 +2148,29 @@
    },
    "terms": {
     "value": "NET 45, FOB ORIGIN",
-    "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+    "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
    },
    "requirements": [
     {
      "value": "MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT (AS9102) ON FIRST LOT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
     },
     {
      "value": "QUOTE LEAD TIME IN WEEKS ARO FOR EACH QUANTITY BREAK",
-     "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
     },
     {
      "value": "INDIVIDUALLY BAG PARTS. PROTECT JOURNALS FROM CONTACT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
     }
    ],
    "export_control": {
     "value": "ITAR",
-    "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+    "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
    },
    "lines": [
     {
@@ -2144,7 +2201,7 @@
        100,
        250
       ],
-      "source": "WS-RFQ-26-0388.pdf (OCR 93%)"
+      "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
      },
      "annual_usage": {
       "value": null,
@@ -2161,7 +2218,7 @@
      "name": "WS-RFQ-26-0388.pdf",
      "type": "RFQ form",
      "capture": "scan",
-     "text_from": "OCR 93%",
+     "text_from": "OCR 95%",
      "chars": 1302
     },
     {
@@ -2174,7 +2231,7 @@
    ],
    "missing": [],
    "check": [
-    "ITAR marking found only in WS-RFQ-26-0388.pdf (OCR 93%); the email does not mention it"
+    "ITAR marking found only in WS-RFQ-26-0388.pdf (OCR 95%); the email does not mention it"
    ],
    "routing": null
   }

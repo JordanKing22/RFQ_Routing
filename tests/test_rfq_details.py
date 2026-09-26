@@ -227,6 +227,261 @@ class HeuristicTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# Odd input, and emails written in other words than the beta inbox's
+# --------------------------------------------------------------------------- #
+def _ocr_line(text, x, y, h=12, conf=95.0, x1=None):
+    """One OCR line as ocr.file_text reports it; about 9 px a character unless x1 says."""
+    return {"text": text, "conf": conf, "page": 1, "bbox": [x, y, x1 or x + 9 * len(text), y + h]}
+
+
+def _ocr(lines, conf=90.0):
+    return {"method": "ocr", "confidence": conf, "lines": lines, "text": "\n".join(ln["text"] for ln in lines)}
+
+
+class RobustnessTests(unittest.TestCase):
+    """The server calls extract on whatever arrives; it must not crash, hang, or invent."""
+
+    def test_odd_input_shapes_never_crash(self):
+        base = EMAILS["E01"]
+        bad_lines = {"method": "ocr", "confidence": "high", "text": "x",
+                     "lines": ["junk", None, 5, {"text": None}, {"text": "X", "bbox": [1, 2, 3]},
+                               {"text": "Y", "bbox": "abc", "conf": "high", "page": "two"}]}
+        cases = [
+            (dict(base, attachments=None), None, SHOP),
+            (dict(base, attachments=["QA-41127_RevB.pdf", 7, None, {"kind": "file"}]), {}, SHOP),
+            (dict(base, attachments=[{"name": 5, "media": 7}]), {5: {"text": "x"}}, SHOP),
+            (base, {a["name"]: bad_lines for a in base["attachments"]}, SHOP),
+            ({}, {}, SHOP),
+            ({"id": 3, "subject": 12, "body": 5, "from_email": None, "from_name": 8}, "nope", None),
+            (base, {}, {"customers": [{"domain": None}, "x", {"name": "N"}]}),
+        ]
+        for email, texts, shop in cases:
+            with self.subTest(email=str(email)[:60]):
+                rec = rfq_details.extract(email, texts, shop, today=TODAY)
+                self.assertTrue(rec["lines"])
+                rfq_details.to_csv([rec])
+                json.loads(rfq_details.to_json([rec]))
+
+    def test_unreadable_attachments_are_noted_not_guessed(self):
+        base = EMAILS["E01"]
+        rec = rfq_details.extract(base, {}, SHOP, today=TODAY)
+        self.assertIn("No text could be read from QA-41127_RevB.pdf", rec["check"])
+        self.assertEqual(value(rec["lines"][0]["part_number"]), "QA-41127")
+        self.assertEqual(rec["lines"][0]["part_number"]["source"], "email body")
+        garbage = {"QA-41127_RevB.pdf": _ocr([_ocr_line("~~ ||| ;;;", 0, 0, conf=5.0)], conf=12.0)}
+        rec = rfq_details.extract(base, garbage, SHOP, today=TODAY)
+        self.assertTrue(any("not recognizably a drawing" in c for c in rec["check"]), rec["check"])
+        for field in ("description", "material", "finish"):  # nothing taken from the garbage
+            self.assertNotIn("QA-41127_RevB.pdf", rec["lines"][0][field]["source"] or "")
+
+    def test_pathological_text_stays_fast(self):
+        import time
+        base = EMAILS["E01"]
+        bodies = ["Please quote " + "1" * 50_000 + " pcs", "Quantities: " + ",".join(["1"] * 20_000),
+                  base["body"] + "\nFiller about the program, 6061-T6, 25 pcs, QA-41127. " * 5_000,
+                  "size 1 x " + "1 x " * 20_000, "Finish: " + "anodize per " * 10_000]
+        for body in bodies:
+            with self.subTest(body=body[:40]):
+                t = time.time()
+                rec = rfq_details.extract(dict(base, body=body), {}, SHOP, today=TODAY)
+                self.assertLess(time.time() - t, 5.0)
+                for ln in rec["lines"]:
+                    self.assertLessEqual(len(value(ln["quantities"]) or []), rfq_details.MAX_BREAKS)
+
+    def test_odd_unicode_is_read_as_plain_text(self):
+        body = ("Please quote \uff31\uff21\u2013\uff14\uff11\uff11\u200b\uff12\uff17 Rev\u00a0B, "
+                "qty \uff12\uff15\u2009pcs.\u202e Quote due by October 3.\ufeff")
+        rec = rfq_details.extract(dict(EMAILS["E01"], subject="RFQ", body=body, attachments=[]), {}, SHOP,
+                                  today=TODAY)
+        self.assertEqual(value(rec["lines"][0]["part_number"]), "QA-41127")
+        self.assertEqual(value(rec["lines"][0]["rev"]), "B")
+        self.assertEqual(value(rec["lines"][0]["quantities"]), [25])
+        self.assertEqual(value(rec["respond_by"]), "2026-10-03")
+
+    def test_with_and_without_a_jev_decision(self):
+        base = EMAILS["E01"]
+        decision = {"is_rfq": True, "lane": "milling_3axis", "lane_name": "3-Axis Milling", "owner": "Priya Nair",
+                    "priority": "high", "due": {"date": "2026-10-01"}}
+        rec = rfq_details.extract(base, {}, SHOP, decision, today=TODAY)
+        self.assertEqual(rec["routing"], {"lane": "3-Axis Milling", "lane_id": "milling_3axis",
+                                          "estimator": "Priya Nair", "priority": "high", "quote_by": "2026-10-01"})
+        self.assertIsNone(rfq_details.extract(base, {}, SHOP, today=TODAY)["routing"])
+        self.assertFalse(rfq_details.extract(base, {}, SHOP, {"is_rfq": False}, today=TODAY)["is_rfq"])
+        # a decision without a usable is_rfq answer leaves the call to the heuristic
+        for dec in ({}, {"is_rfq": None}, {"lane": "review"}):
+            with self.subTest(decision=dec):
+                self.assertTrue(rfq_details.is_rfq(base, dec))
+                self.assertFalse(rfq_details.is_rfq(EMAILS["E13"], dec))
+        records = rfq_details.extract_all(INBOX[:8], {}, SHOP, {"E01": {"is_rfq": False}, "E10": {"is_rfq": True}},
+                                          today=TODAY)
+        self.assertEqual([r["email_id"] for r in records][:2], ["E03", "E04"])
+        self.assertIn("E10", [r["email_id"] for r in records])
+
+    def test_every_value_has_a_source_even_header_fields(self):
+        rec = rfq_details.extract(EMAILS["E09"], {}, SHOP, today=TODAY)
+        self.assertEqual(rec["contact_source"], "email header")
+        self.assertEqual(rec["contact_email_source"], "email header")
+        self.assertEqual((rec["request"], rec["request_source"]), ("quote revision", "email body"))
+        rec = rfq_details.extract(EMAILS["E26"], {}, SHOP, today=TODAY)
+        self.assertEqual(rec["lines"][0]["rev"], {"value": "B", "source": "email body"})
+        self.assertEqual(rec["lines"][0]["part_number"]["source"], "subject")
+
+
+class FreshEmailTests(unittest.TestCase):
+    """Emails written for these tests in phrasings the beta inbox does not use, so the rules are
+    checked for being general rather than fitted to 22 emails."""
+
+    def rec(self, subject, body, **kw):
+        email = dict({"id": "T1", "from_name": "Pat Buyer", "from_email": "pat@examplemotion.com",
+                      "subject": subject, "body": body, "attachments": []}, **kw)
+        return rfq_details.extract(email, {}, SHOP, today=TODAY)
+
+    def test_numeric_part_number_after_a_label(self):
+        r = self.rec("Price request", "Can I get a price on 150 pieces of part number 7731-004? Material is 304 SS, "
+                     "no finish. Need it quoted by Wednesday.\n\nThanks\nPat")
+        ln = r["lines"][0]
+        self.assertEqual(value(ln["part_number"]), "7731-004")
+        self.assertEqual(value(ln["quantities"]), [150])
+        self.assertEqual(value(ln["finish"]), "no finish")
+        self.assertIsNone(value(ln["description"]), "'pieces' is a unit, not a description")
+        self.assertEqual(value(r["respond_by"]), "2026-09-30")
+
+    def test_one_line_per_part_with_its_own_quantity(self):
+        r = self.rec("Request for Quotation RFQ# 55821",
+                     "Please quote the items below.\n\nP/N 400-1187-02 Rev B, handle, Ti-6Al-4V ELI, qty 25/50\n"
+                     "PL-1003 knob, Delrin, 80 pcs\n\nQuotes are due 10/7/2026. Certs of conformance are required.")
+        self.assertEqual(value(r["rfq_number"]), "55821")
+        self.assertEqual(value(r["respond_by"]), "2026-10-07")
+        got = [(value(ln["part_number"]), value(ln["rev"]), value(ln["description"]), value(ln["material"]),
+                value(ln["quantities"])) for ln in r["lines"]]
+        self.assertEqual(got, [("400-1187-02", "B", "handle", "Ti-6Al-4V ELI", [25, 50]),
+                               ("PL-1003", None, "knob", "Delrin", [80])])
+
+    def test_quantity_and_date_phrasings(self):
+        cases = [
+            ("Please provide pricing for the AH-220 housing in quantities of 50, 100 and 250.", [50, 100, 250]),
+            ("Can you quote qty 10 and 25 of QB-88 spacer in brass?", [10, 25]),
+            ("Need a quote on 1ea of the attached bracket, A2 tool steel.", [1]),
+            ("Please quote the manifold in 2 pcs for prototype and 50 pcs for production.", [2, 50]),
+            ("Please quote 200 fittings per the attached drawing.", [200]),
+        ]
+        for body, want in cases:
+            with self.subTest(body=body):
+                self.assertEqual(value(self.rec("RFQ", body)["lines"][0]["quantities"]), want)
+        for phrase, want in (("Quote by end of next week please.", "2026-10-02"),
+                             ("We need your quote by the end of the month.", "2026-09-30"),
+                             ("Due Oct 16.", "2026-10-16"), ("Please quote by COB Thursday.", "2026-10-01")):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(value(self.rec("RFQ", "Please quote AB-100. " + phrase)["respond_by"]), want)
+        r = self.rec("Budgetary pricing", "Budgetary pricing on gripper fingers, 6061 aluminum, qty 4 sets "
+                     "initially, 500 sets a year in production.")
+        self.assertEqual(value(r["lines"][0]["annual_usage"]), 500)
+        self.assertEqual(value(r["lines"][0]["material"]), "6061 aluminum")
+
+    def test_rfq_or_not_on_new_wordings(self):
+        cases = [
+            (True, "New part", "What would you charge for 50 of these? Drawing AB-1234 attached."),
+            (True, "Looking for a quote", "Looking for a quote on 25 of the attached housing HS-100."),
+            (True, "Re: Quote Q-26-0550", "Could you requote SF-3301 at 500 pcs instead of 250?"),
+            (False, "Can you make these?", "Can you do this kind of work? What would something like this cost?"),
+            (False, "Quote accepted", "We accept your quote Q-26-0550. PO 88200 to follow tomorrow."),
+            (False, "Re: Quote Q-26-0550", "Thanks for the quote, we'll review internally and get back to you."),
+            (False, "PO 88200 attached", "Please find attached PO 88200 for 100 pcs of HD-201 per your quote Q-26-0550."),
+            (False, "Shipment notification", "Your order PO 88123 shipped today via UPS, tracking 1Z999."),
+            (False, "Supplier survey", "Please complete the attached supplier quality survey by Oct 15."),
+        ]
+        for want, subject, body in cases:
+            with self.subTest(subject=subject, body=body[:40]):
+                email = {"subject": subject, "body": body, "from_name": "Pat Buyer", "from_email": "pat@example.com"}
+                self.assertEqual(rfq_details.is_rfq(email, None), want)
+
+    def test_a_number_after_rfq_that_the_body_calls_the_drawing(self):
+        r = self.rec("RFQ NA-7710: fitting", "Please quote 200 fittings per the attached drawing NA-7710 rev D.")
+        self.assertIsNone(value(r["rfq_number"]))
+        self.assertEqual((value(r["lines"][0]["part_number"]), value(r["lines"][0]["rev"])), ("NA-7710", "D"))
+        r = self.rec("RFQ SCD-7781: gimbal yoke", "Please quote 12 yokes. The package is on our portal.")
+        self.assertEqual(value(r["rfq_number"]), "SCD-7781")
+
+
+class OcrTextTests(unittest.TestCase):
+    """Rules for OCR text, on small made-up readings."""
+
+    def test_quantity_lists(self):
+        cases = {"25 / 75 / 150": ([25, 75, 150], True), "250 / 500 / 1,000": ([250, 500, 1000], True),
+                 "25, 50, 100": ([25, 50, 100], True), "1,000, 2,500": ([1000, 2500], True),
+                 "1,O00": ([1000], True), "SO / 150 / 300": ([50, 150, 300], True),
+                 "250 / 500 /": ([250, 500], False), "10k": ([10000], True)}
+        for text, want in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(rfq_details.parse_quantities(text), want)
+
+    def test_look_alike_repair_keeps_real_callouts(self):
+        fix = rfq_details.ocr_fix_spec
+        self.assertEqual(fix("ALUM1NUM 6O61-T6 PER AMS-QQ-A-25O/11"), "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11")
+        self.assertEqual(fix("STAINLESS STEEL 3I6L, TYPE Ill CLASS l"), "STAINLESS STEEL 316L, TYPE III CLASS 1")
+        for keep in ("316L", "H1025", "1ST ARTICLE", "FR4", "C36000", "AS9102", "A2 TOOL STEEL", "4X"):
+            with self.subTest(keep=keep):
+                self.assertEqual(fix(keep), keep)
+        self.assertEqual(rfq_details.ocr_fix_words("MATER1AL CERTS TRACEABLE TO HEAT OR L0T"),
+                         "MATERIAL CERTS TRACEABLE TO HEAT OR LOT")
+
+    def test_requirement_numbers_and_crumbs_are_dropped(self):
+        for raw, want in (("1.\u00b0 ISO 13485:2016 CERTIFIED SUPPLIER REQUIRED", "ISO 13485:2016 CERTIFIED SUPPLIER REQUIRED"),
+                          ("I. MATERIAL CERTS AND C OFC REQUIRED", "MATERIAL CERTS AND C OF C REQUIRED"),
+                          ("l) FIRST ARTICLE ON FIRST LOT \u00b0", "FIRST ARTICLE ON FIRST LOT")):
+            with self.subTest(raw=raw):
+                self.assertEqual(rfq_details._req_text(raw), want)
+
+    def test_standards_and_cited_specs_never_become_part_lines(self):
+        self.assertEqual(rfq_details._pn_candidates("INTERPRET DRAWING PER ASME Y14.S-2018.", True), [])
+        piece = rfq_details._row_piece("CLEAN, DOUBLE BAG, AND LABEL PER BWM-QS-0412. NO STERILIZATION", True)
+        self.assertIsNone(piece["pn"])
+
+    def test_a_form_whose_header_and_dates_ocr_ran_together(self):
+        lines = [_ocr_line("REQUEST FOR QUOTATION", 1600, 100), _ocr_line("RFQ NO.", 1360, 280),
+                 _ocr_line("DATE", 1710, 285), _ocr_line("RESPOND BY", 2060, 290),
+                 _ocr_line("WS-26-0388", 1360, 325), _ocr_line("2026-09-23 2026-10-12", 1715, 330, x1=2245),
+                 _ocr_line("ITEM PART NUMBER", 220, 1000), _ocr_line("REV", 690, 1005),
+                 _ocr_line("DESCRIPTION", 800, 1010), _ocr_line("MATERIAL / FINISH QUANTITIES UNIT PRICE LEAD TIME", 1280, 1015, x1=2346),
+                 _ocr_line("1", 245, 1066), _ocr_line("WS-4471 B", 335, 1066), _ocr_line("SHAFT, OUTPUT", 800, 1070),
+                 _ocr_line("17-4 PH COND H1150 /", 1282, 1072), _ocr_line("25 / 100 / 250", 1715, 1080, conf=0.0),
+                 _ocr_line("PASSIVATE PER AMS 2700", 1282, 1100), _ocr_line("QUOTE REQUIREMENTS", 180, 1300),
+                 _ocr_line("1. MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT.", 180, 1340),
+                 _ocr_line("TERMS: NET 45, FOB ORIGIN", 180, 1400)]
+        doc = rfq_details.Doc("RFQ.pdf", "pdf", _ocr(lines))
+        self.assertEqual(rfq_details.classify(doc)[0], "RFQ form")
+        form = rfq_details.parse_form(doc)
+        self.assertEqual(form["respond_by"], "2026-10-12", "the date under RESPOND BY, not the one beside it")
+        self.assertEqual(len(form["rows"]), 1)
+        row = form["rows"][0]
+        self.assertEqual((row["part_number"], row["rev"], row["description"], row["quantities"]),
+                         ("WS-4471", "B", "SHAFT, OUTPUT", [25, 100, 250]))
+        self.assertEqual(form["requirements"], ["MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT"])
+
+    def test_a_value_that_stops_at_a_label_is_trimmed_and_noted(self):
+        """'... F2026. MARKERS:' whose second line is missing: the dangling label is dropped and the
+        record says the callout may be incomplete (the UI once showed '... F2026. MARKERS')."""
+        text = ("UNLESS OTHERWISE SPECIFIED\nTOLERANCES\nTHIRD ANGLE PROJECTION\nTITLE\nCAGE, INTERBODY\nMATERIAL\n"
+                "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS:\nFINISH\nNONE\nSIZE\nA\nDWG NO.\nAB-3140\nREV\nA\n")
+        email = {"id": "T2", "subject": "RFQ AB-3140", "body": "Please quote 10 pcs of AB-3140.", "from_name": "Pat",
+                 "from_email": "pat@example.com", "attachments": [{"name": "AB-3140.pdf", "media": "pdf"}]}
+        rec = rfq_details.extract(email, {"AB-3140.pdf": {"method": "text-layer", "text": text}}, SHOP, today=TODAY)
+        self.assertEqual(value(rec["lines"][0]["material"]), "PEEK, IMPLANT GRADE, PER ASTM F2026")
+        self.assertTrue(any("stops at 'MARKERS:'" in c for c in rec["check"]), rec["check"])
+
+    def test_border_text_run_into_a_title_block_value(self):
+        lines = [_ocr_line("TITLE", 1590, 1290), _ocr_line("MANIFOLD BLOCK, VALVE", 1590, 1320),
+                 _ocr_line("MATERIAL", 1590, 1365), _ocr_line("DO NOT SCALE DRAWING STAINLESS STEEL 316L PER ASTM A240", 1290, 1390),
+                 _ocr_line("FINISH", 1590, 1430), _ocr_line("PASSIVATE PER ASTM A967", 1590, 1455),
+                 _ocr_line("SIZE", 1590, 1500), _ocr_line("DWG NO.", 1660, 1500), _ocr_line("REV", 2010, 1505),
+                 _ocr_line("A", 1600, 1530), _ocr_line("AB-2045", 1660, 1530), _ocr_line("D", 2045, 1532),
+                 _ocr_line("DRAWN", 1590, 1600), _ocr_line("THIRD ANGLE PROJECTION", 1330, 1610)]
+        got = rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", _ocr(lines)))
+        self.assertEqual((got["part_number"], got["rev"], got["material"]),
+                         ("AB-2045", "D", "STAINLESS STEEL 316L PER ASTM A240"))
+
+
+# --------------------------------------------------------------------------- #
 # The beta inbox, end to end
 # --------------------------------------------------------------------------- #
 class BetaInboxTests(unittest.TestCase):
@@ -419,7 +674,7 @@ class BetaInboxTests(unittest.TestCase):
     def test_csv_round_trip(self):
         records = beta()["records"]
         text = rfq_details.to_csv(records)
-        self.assertFalse(text.startswith("﻿"), "the file itself is plain UTF-8; the server adds the BOM")
+        self.assertFalse(text.startswith("\ufeff"), "the file itself is plain UTF-8; the server adds the BOM")
         self.assertTrue(text.endswith("\r\n"))
         self.assertNotIn("\x00", text)
         rows = list(csv.reader(io.StringIO(text, newline="")))

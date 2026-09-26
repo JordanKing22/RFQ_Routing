@@ -61,9 +61,18 @@ OCR_TESSDATA = os.environ.get("RFQ_OCR_TESSDATA", "").strip() or None
 MAX_OCR_PIXELS = 36_000_000
 # Refuse to decode pictures bigger than this at all (a small PNG can claim a huge size).
 MAX_INPUT_PIXELS = 80_000_000
+# A scan finer than this is rendered down to it: on 600 dpi office scans of the held-out
+# drawings, 300 dpi found 19 of 20 key fields against 17 at 600 or 400 dpi, for less than half
+# the time (docs/ocr_settings.md, "Review").
+MAX_RASTER_DPI = 300.0
 # A PDF whose text layer has fewer letters and digits than this per page is treated as a scan.
 # Scanner software sometimes adds a line like "Scanned by ScanDesk"; that is not the document.
 TEXT_LAYER_MIN_CHARS = 40
+# A longer stamp still marks a scan when one picture covers most of the page: a page with
+# fewer letters and digits than this and a picture over this share of it is OCR'd. The typed
+# drawings and forms of the beta set have 714 to 1189 letters and digits a page.
+SCAN_STAMP_MAX_CHARS = 200
+SCAN_PICTURE_COVER = 0.6
 # Long side of the page, in inches, used to estimate the resolution of a photo or screenshot
 # (letter and A4 landscape drawings and forms are 11 to 11.7 in).
 PAGE_LONG_SIDE_IN = 11.0
@@ -121,7 +130,7 @@ def _version_tuple(version: Optional[str]) -> Tuple[int, ...]:
 # the version Debian bookworm (the Render image) ships; the check keeps an older or stripped
 # build from failing the whole page over one unknown variable.
 _PARAM_SINCE = {"thresholding_method": (5, 0), "preserve_interword_spaces": (3, 4),
-                "load_system_dawg": (3, 0), "load_freq_dawg": (3, 0)}
+                "load_system_dawg": (3, 0), "load_freq_dawg": (3, 0), "tessedit_create_tsv": (3, 5)}
 
 
 def _supports(param: str) -> bool:
@@ -152,7 +161,8 @@ def _run(cmd: List[str], deadline: float, what: str, data: Optional[bytes] = Non
     try:
         proc = subprocess.run(cmd, input=data, capture_output=True, timeout=left, env=_env())
     except subprocess.TimeoutExpired:
-        raise OcrError(f"{what} took too long (the limit is {OCR_TIMEOUT:g} s per file)")
+        # The limit is per file (RFQ_OCR_TIMEOUT, or the caller's timeout), shared by every step.
+        raise OcrError(f"{what} took too long: the time limit for reading this file ran out")
     except OSError as exc:
         raise OcrError(f"could not start {what} ({exc})")
     if proc.returncode != 0:
@@ -190,18 +200,46 @@ def _run(cmd: List[str], deadline: float, what: str, data: Optional[bytes] = Non
 #                 orientation detection and read the turned page (on unless set to False)
 #   min_conf      drop words tesseract is less sure of than this (drawing line work read
 #                 as letters), except words with a digit and lone capitals (_keep_word)
-# The per-source recipes below are the measured winners (docs/ocr_settings.md). Change a value
-# there and here together, and rerun python ocr.py --evaluate.
+# The per-source recipes below are the measured winners: docs/ocr_settings.md has every setting
+# tried, the scores, and the time per page. Change a value there and here together, and rerun
+# python ocr.py --evaluate. BASELINE is plain tesseract on a 300 dpi rendering, for comparison.
 BASELINE: Dict[str, Any] = {"raster_dpi": 300, "psm": [3], "raw": True}
 
 RECIPES: Dict[str, Dict[str, Any]] = {
-    "scan": {"raster_dpi": "native", "psm": [3], "tess_dpi": True},
-    "lowres": {"raster_dpi": "native", "scale": 0, "target_dpi": 300, "psm": [3], "tess_dpi": True},
-    "bilevel": {"raster_dpi": "native", "scale": 0, "target_dpi": 300, "psm": [3], "tess_dpi": True},
-    "photo": {"page": True, "scale": 0, "target_dpi": 300, "psm": [3], "tess_dpi": True},
-    "screen": {"page": True, "scale": 0, "target_dpi": 300, "psm": [3], "tess_dpi": True},
+    # Office scans (300 dpi gray): read at the scan's own resolution. invert turns the dark
+    # header bands of the RFQ form tables light; repair (Helvetica's I read as l, a lone capital
+    # read as "Cc") found three more fields; min_conf drops the junk words read from line work.
+    # The page layout pass (psm 3) comes first, and a sparse text pass (psm 11) adds the title
+    # block and callout words it missed: the same fields, but word recall up on every page, for
+    # 1.8 times the time.
+    "scan": {"raster_dpi": "native", "invert": True, "psm": [3, 11], "merge": "conf", "repair": True,
+             "min_conf": 60, "tess_dpi": True},
+    # Copier scans (200 dpi gray, darker at one edge): even out the light, then upsample to
+    # 400 dpi; psm 4 (one column of lines) keeps the form's table rows together. invert (run
+    # before flatten, which would otherwise erase the band) reads the first row of the E62
+    # form, the last field the search left on the real files; it finds no band on drawings.
+    "lowres": {"raster_dpi": "native", "flatten": True, "invert": True, "target_dpi": 400, "psm": [4],
+               "repair": True, "tess_dpi": True},
+    # Faxes (200 dpi, 1 bit): no resize (upsampling a 1-bit page lost fields), and two passes:
+    # sparse text (psm 11) finds the title block cells, the page layout pass (psm 3) fills in,
+    # and a word read with clearly higher confidence at the same place replaces the first.
+    "bilevel": {"raster_dpi": "native", "psm": [11, 3], "merge": "conf", "repair": True, "tess_dpi": True},
+    # Phone photo: find the sheet and warp it flat at 300 dpi, then the same two passes.
+    "photo": {"page": True, "target_dpi": 300, "psm": [11, 3], "merge": "conf", "repair": True,
+              "min_conf": 60, "tess_dpi": True},
+    # Viewer screenshot (about 120 dpi, anti-aliased): upsample to 300 dpi, sparse text. Cropping
+    # to the page (page) read cleaner but lost fields on the held-out screenshots.
+    "screen": {"target_dpi": 300, "psm": [11], "repair": True, "min_conf": 60, "tess_dpi": True},
 }
-FAST_RECIPES: Dict[str, Dict[str, Any]] = {k: dict(v, psm=[3]) for k, v in RECIPES.items()}
+# Live uploads on a slow host: one tesseract pass per page, the best single pass measured for
+# each type. Where the best recipe is already one pass it is used as it is.
+FAST_RECIPES: Dict[str, Dict[str, Any]] = {
+    "scan": {"raster_dpi": "native", "invert": True, "psm": [3], "repair": True, "min_conf": 60, "tess_dpi": True},
+    "lowres": dict(RECIPES["lowres"]),
+    "bilevel": {"raster_dpi": "native", "psm": [3], "repair": True, "tess_dpi": True},
+    "photo": {"page": True, "target_dpi": 300, "psm": [3], "repair": True, "min_conf": 60, "tess_dpi": True},
+    "screen": dict(RECIPES["screen"]),
+}
 SOURCE_TYPES = tuple(RECIPES)
 
 
@@ -228,13 +266,49 @@ def _open_image(data: bytes) -> "Image.Image":
     return img
 
 
+# Picture modes that carry color. Everything else is gray: 8-bit, 1-bit, or 16-bit and float.
+_COLOR_MODES = ("RGB", "RGBA", "RGBX", "CMYK", "YCbCr", "LAB", "HSV", "P", "PA")
+
+
+def _picture_size(data: bytes) -> Optional[Tuple[int, int]]:
+    """(width, height) from a PNG, JPEG, or PGM/PBM header, without Pillow."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR" and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 <= len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker == 0xFF or marker == 0x01 or 0xD0 <= marker <= 0xD8:
+                i += 1 if marker == 0xFF else 2
+                continue
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+            i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+        return None
+    m = re.match(rb"P[45]\s+(?:#[^\n]*\s+)*(\d+)\s+(\d+)", data[:200])
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def _gray(img: "Image.Image") -> "Image.Image":
     if img.mode == "L":
         return img
-    if img.mode in ("RGBA", "LA", "P"):
+    if img.mode in ("RGBA", "LA", "P", "PA"):
         img = img.convert("RGBA")
         bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
         img = Image.alpha_composite(bg, img)  # transparent screenshots read as white paper
+    elif img.mode in ("I", "F") or img.mode.startswith("I;16"):
+        # 16-bit gray (some scanners save PNGs that way) and float pictures: Pillow's
+        # convert("L") clips them at 255 instead of scaling, which turns the whole page white.
+        # Stretch the values actually used onto 0 to 255 first.
+        f = img.convert("F")
+        lo, hi = f.getextrema()
+        if hi > 255 or lo < 0:
+            k = 255.0 / max(hi - lo, 1e-6)
+            f = f.point(lambda v: (v - lo) * k)
+        img = f
     return img.convert("L")
 
 
@@ -518,7 +592,7 @@ def classify(img: "Image.Image", ppi: Optional[float] = None, bits: Optional[int
     resolution (from the PDF, or estimated from the page size), and whether it shows a sheet of
     paper on a background. Never looks at file names."""
     info: Dict[str, Any] = {"size": list(img.size), "mode": img.mode}
-    color = img.mode not in ("1", "L", "LA", "I", "I;16")
+    color = img.mode in _COLOR_MODES
     if color:
         sat = ImageStat.Stat(img.convert("RGB").convert("HSV").split()[1]).mean[0]
         color = sat > 12
@@ -562,7 +636,7 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
         scale = 1.0
     if img.size[0] * img.size[1] * scale * scale > MAX_OCR_PIXELS:
         scale = max(0.25, (MAX_OCR_PIXELS / float(img.size[0] * img.size[1])) ** 0.5)
-    if recipe.get("color") and img.mode not in ("1", "L", "LA", "I", "I;16"):
+    if recipe.get("color") and img.mode in _COLOR_MODES:
         # Tesseract makes its own gray picture from the colors (it weighs the channels its
         # own way); the filters below then work on each channel.
         g = img.convert("RGB")
@@ -583,11 +657,13 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
         g = g.resize((max(1, int(round(g.size[0] * scale))), max(1, int(round(g.size[1] * scale)))), resample)
     if abs(scale - 1.0) > 0.01:
         steps["scale"] = round(scale, 3)
+    if recipe.get("invert"):
+        # Before flatten: flatten takes a dark band for shadowed paper and lifts it to light
+        # gray, and then there is no band left to find.
+        g, steps["invert"] = _invert_bands(g, dpi * scale)
     if recipe.get("flatten"):
         g = _flatten(g)
         steps["flatten"] = True
-    if recipe.get("invert"):
-        g, steps["invert"] = _invert_bands(g, dpi * scale)
     if recipe.get("autocontrast"):
         g = ImageOps.autocontrast(g, cutoff=1)
         steps["autocontrast"] = True
@@ -605,6 +681,9 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
 # --------------------------------------------------------------------------- #
 # Tesseract
 # --------------------------------------------------------------------------- #
+_DASHES = {cp: "-" for cp in (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212)}
+
+
 def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str, Any],
                      deadline: float, stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     tess = _tools()["tesseract"]
@@ -624,14 +703,21 @@ def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str
         # Part numbers and specs are not dictionary words; without the word lists the model
         # reads the characters it sees instead of the nearest English word.
         cmd += ["-c", "load_system_dawg=0", "-c", "load_freq_dawg=0"]
-    cmd.append("tsv")
+    # TSV output (one row per word, with its box and confidence). Set as a variable rather than
+    # with the "tsv" config name: that config file lives in the system tessdata folder, and with
+    # --tessdata-dir pointing elsewhere tesseract cannot find it and prints plain text instead.
+    cmd += ["-c", "tessedit_create_tsv=1"]
     out = _run(cmd, deadline, "tesseract").decode("utf-8", "replace")
+    if not out.startswith("level\t"):
+        raise OcrError("tesseract did not write its word table (TSV)")
     words = []
     for line in out.splitlines()[1:]:
         f = line.split("\t")
         if len(f) < 12 or f[0] != "5":
             continue
-        text = f[11].strip()
+        # Drawings and forms print plain hyphens ("CI-10442", "2026-10-09"); tesseract reads
+        # some of them, and bits of line work, as the long dash characters.
+        text = f[11].strip().translate(_DASHES)
         try:
             conf = float(f[10])
         except ValueError:
@@ -670,12 +756,21 @@ def _keep_word(w: Dict[str, Any], floor: float) -> bool:
     return len(text) <= 2 and text.isalpha() and text.isupper()
 
 
+# Letters whose lowercase is a smaller copy of the capital. A big lone capital, like the rev
+# letter in a title block's REV cell, can come back as both: "Cc", "Oo".
+_TWIN_CASE = {c + c.lower(): c for c in "CKOPSUVWXZ"}
+
+
 def _repair_case(words: List[Dict[str, Any]]) -> None:
     """In Helvetica an uppercase I and a lowercase l are the same glyph, so tesseract writes
     "Cl-10442" and "TYPE Ill". On a line that is otherwise uppercase, a word whose only
-    lowercase letters are l is really uppercase: make it so."""
+    lowercase letters are l is really uppercase: make it so. And a word that is one capital
+    read twice ("Cc", never a real word) is that capital, on any line: the rev letter sits
+    alone in its cell, so its line has no other letters to judge by."""
     lines: Dict[Tuple, List[Dict[str, Any]]] = {}
     for w in words:
+        if w["text"] in _TWIN_CASE:
+            w["text"] = _TWIN_CASE[w["text"]]
         lines.setdefault(w["line"], []).append(w)
     for group in lines.values():
         letters = "".join(w["text"] for w in group)
@@ -891,8 +986,11 @@ def _pdf_images(pdf_path: str, deadline: float) -> Dict[int, Dict[str, Any]]:
         if len(f) < 14 or not f[0].isdigit() or f[2] != "image":
             continue
         try:
+            xppi, yppi = float(f[12]), float(f[13])
             im = {"width": int(f[3]), "height": int(f[4]), "color": f[5], "bits": int(f[7]),
-                  "ppi": min(float(f[12]), float(f[13]))}
+                  "ppi": min(xppi, yppi),
+                  # the area the picture covers on the page, in square inches
+                  "sq_in": (int(f[3]) / xppi) * (int(f[4]) / yppi) if xppi > 0 and yppi > 0 else 0.0}
         except ValueError:
             continue
         page = int(f[0])
@@ -913,6 +1011,37 @@ def _pdf_page_count(pdf_path: str, deadline: float) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def _pdf_page_sizes(pdf_path: str, pages: List[int], deadline: float) -> Dict[int, Tuple[float, float]]:
+    """Page number -> (width, height) in inches, from pdfinfo (poppler-utils, like pdftoppm)."""
+    tool = shutil.which("pdfinfo")
+    if not tool or not pages:
+        return {}
+    try:
+        out = _run([tool, "-f", str(min(pages)), "-l", str(max(pages)), pdf_path], deadline,
+                   "pdfinfo").decode("utf-8", "replace")
+    except OcrError:
+        return {}
+    sizes = {}
+    for m in re.finditer(r"^Page\s+(\d+)\s+size:\s+([\d.]+)\s+x\s+([\d.]+)\s+pts", out, re.MULTILINE):
+        w, h = float(m.group(2)) / 72.0, float(m.group(3)) / 72.0
+        if w > 0 and h > 0:
+            sizes[int(m.group(1))] = (w, h)
+    return sizes
+
+
+def _raster_dpi(dpi: float, size: Optional[Tuple[float, float]]) -> float:
+    """The resolution to render a page at: what the recipe asks for, but never more pixels than
+    MAX_OCR_PIXELS. A PDF page can be up to 200 inches square; at 300 dpi that is 3.6 billion
+    pixels, and a 1200 dpi letter scan is 135 million, which pdftoppm would render in full
+    (gigabytes of memory on a 512 MB host) before the picture is scaled down."""
+    if size:
+        cap = (MAX_OCR_PIXELS / (size[0] * size[1])) ** 0.5
+        if cap < dpi:
+            # A whole number: pdftoppm takes an integer, and rounding up would pass the cap.
+            dpi = float(int(cap))
+    return max(10.0, dpi)
+
+
 def _rasterize(pdf_path: str, page: int, dpi: float, deadline: float) -> bytes:
     tool = _tools()["pdftoppm"]
     if not tool:
@@ -927,12 +1056,15 @@ def _rasterize(pdf_path: str, page: int, dpi: float, deadline: float) -> bytes:
     return out
 
 
-def _pdf_pages_fallback(data: bytes, deadline: float) -> List[bytes]:
-    """Without pdftoppm: the page pictures themselves, pulled out with pypdf in a child process
-    (the same care attachments.py takes with hostile PDFs)."""
+def _pdf_pages_fallback(data: bytes, pages: List[int], deadline: float) -> List[Dict[str, Any]]:
+    """Without pdftoppm: the biggest picture on each page, pulled out with pypdf in a child
+    process (the same care attachments.py takes with hostile PDFs). Each entry is {page,
+    image (bytes), page_in (width, height in inches), bits}, so the page can still be
+    classified by its resolution and bit depth like a rendered one."""
     try:
-        proc = subprocess.run([sys.executable, str(HERE / "ocr.py"), "--pdf-images"], input=data,
-                              capture_output=True, timeout=max(1.0, deadline - time.monotonic()), cwd=str(HERE))
+        proc = subprocess.run([sys.executable, str(HERE / "ocr.py"), "--pdf-images", ",".join(map(str, pages))],
+                              input=data, capture_output=True, timeout=max(1.0, deadline - time.monotonic()),
+                              cwd=str(HERE))
     except subprocess.TimeoutExpired:
         raise OcrError("pulling the pictures out of the PDF took too long")
     except OSError as exc:
@@ -944,11 +1076,12 @@ def _pdf_pages_fallback(data: bytes, deadline: float) -> List[bytes]:
     if result.get("error"):
         raise OcrError(result["error"])
     import base64
-    return [base64.b64decode(s) for s in result.get("images") or []]
+    return [dict(p, image=base64.b64decode(p["image"])) for p in result.get("pages") or []]
 
 
-def _pdf_images_main() -> int:
-    """Child process: PDF bytes on stdin, JSON {images: [base64 PNG or JPEG], error} on stdout."""
+def _pdf_images_main(pages_arg: str = "") -> int:
+    """Child process: PDF bytes on stdin, JSON {pages: [{page, image (base64 JPEG or PNG),
+    page_in, bits}], error} on stdout."""
     try:
         import resource  # Unix only: cap memory so a PDF bomb cannot take the host down
         limit = 1024 * 1024 * 1024
@@ -956,16 +1089,57 @@ def _pdf_images_main() -> int:
     except Exception:  # noqa: BLE001
         pass
     import base64
-    out: Dict[str, Any] = {"images": [], "error": None}
+    out: Dict[str, Any] = {"pages": [], "error": None}
     try:
         import logging
         logging.disable(logging.CRITICAL)
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(sys.stdin.buffer.read()))
-        for page in list(reader.pages)[:OCR_MAX_PAGES]:
-            pics = sorted(page.images, key=lambda im: len(im.data), reverse=True)
-            if pics:
-                out["images"].append(base64.b64encode(pics[0].data).decode("ascii"))
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise OcrError("the PDF is protected by a password, so it cannot be opened")
+        wanted = [int(p) for p in pages_arg.split(",") if p.strip().isdigit()]
+        wanted = wanted or list(range(1, min(len(reader.pages), OCR_MAX_PAGES) + 1))
+
+        def biggest(res: Any, depth: int, best: List[Any]) -> None:
+            # Walk the page's pictures (and those inside forms) by their declared size, without
+            # decoding any of them.
+            xobjects = res.get_object().get("/XObject") if res is not None else None
+            if xobjects is None:
+                return
+            xobjects = xobjects.get_object()
+            for name in xobjects:
+                obj = xobjects[name].get_object()
+                if obj.get("/Subtype") == "/Image":
+                    area = int(obj.get("/Width", 0) or 0) * int(obj.get("/Height", 0) or 0)
+                    if not best or area > best[0]:
+                        best[:] = [area, name, obj]
+                elif obj.get("/Subtype") == "/Form" and depth < 3:
+                    biggest(obj.get("/Resources"), depth + 1, best)
+
+        for pno in wanted[:OCR_MAX_PAGES]:
+            if not 1 <= pno <= len(reader.pages):
+                continue
+            page = reader.pages[pno - 1]
+            best: List[Any] = []
+            biggest(page.get("/Resources"), 0, best)
+            if not best:
+                continue
+            _, name, obj = best
+            filters = obj.get("/Filter")
+            filters = [filters] if isinstance(filters, str) else list(filters or [])
+            if filters == ["/DCTDecode"]:
+                raw = obj.get_data()  # the JPEG itself, not decoded and saved again
+            else:
+                pics = [im for im in page.images if im.name.rsplit("/", 1)[-1].split(".")[0] == name.lstrip("/")]
+                if not pics:
+                    continue
+                raw = pics[0].data
+            box = page.mediabox
+            out["pages"].append({"page": pno, "image": base64.b64encode(raw).decode("ascii"),
+                                 "page_in": [float(box.width) / 72.0, float(box.height) / 72.0],
+                                 "bits": int(obj.get("/BitsPerComponent", 8) or 8)})
+    except OcrError as exc:
+        out["error"] = str(exc)
     except Exception as exc:  # noqa: BLE001
         out["error"] = f"the PDF pictures could not be read ({type(exc).__name__})"
     sys.stdout.write(json.dumps(out))
@@ -1007,6 +1181,28 @@ def _has_text_layer(layer: Dict[str, Any]) -> bool:
     return chars >= TEXT_LAYER_MIN_CHARS * pages
 
 
+def _scanned_pages(data: bytes, layer: Dict[str, Any], deadline: float) -> List[int]:
+    """Pages of a PDF with a text layer that still need OCR: pages with no real text, and pages
+    that are one big picture whose only text is a line the scanning software typed over it
+    ("Scanned by ... on ... page 1 of 1", a fax header, a Bates number). Such a line can pass
+    TEXT_LAYER_MIN_CHARS, and then the whole scan would be taken for a typed page."""
+    per_page = layer.get("per_page") or []
+    pages = [i + 1 for i, n in enumerate(per_page) if n < TEXT_LAYER_MIN_CHARS]
+    thin = [i + 1 for i, n in enumerate(per_page) if TEXT_LAYER_MIN_CHARS <= n < SCAN_STAMP_MAX_CHARS]
+    if thin and _tools()["pdfimages"]:
+        with tempfile.TemporaryDirectory(prefix="rfq-ocr-") as tmp:
+            pdf_path = os.path.join(tmp, "in.pdf")
+            with open(pdf_path, "wb") as fh:
+                fh.write(data)
+            images = _pdf_images(pdf_path, deadline)
+            sizes = _pdf_page_sizes(pdf_path, thin, deadline) if images else {}
+        for p in thin:
+            im, size = images.get(p), sizes.get(p)
+            if im and size and im["sq_in"] >= SCAN_PICTURE_COVER * size[0] * size[1]:
+                pages.append(p)
+    return sorted(pages)
+
+
 def _page_items(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], tmp: str, deadline: float,
                 only_pages: Optional[List[int]] = None) -> List[Tuple[Any, Dict[str, Any], Dict[str, Any]]]:
     """(picture, info, recipe) for every page to OCR. The picture is a Pillow image, or raw
@@ -1020,9 +1216,26 @@ def _page_items(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], tmp
         count = _pdf_page_count(pdf_path, deadline) or (max(images) if images else 1)
         pages = [p for p in range(1, count + 1) if only_pages is None or p in only_pages][:OCR_MAX_PAGES]
         if not _tools()["pdftoppm"]:
-            pics = _pdf_pages_fallback(data, deadline)
-            return [(_open_image(b) if Image is not None else b, {"dpi": 300, "type": "scan"},
-                     recipes["scan"]) for b in pics]
+            # Without poppler the page count may be unknown; the child then reads the first pages.
+            for pic in _pdf_pages_fallback(data, (only_pages or [])[:OCR_MAX_PAGES], deadline):
+                w_in, h_in = pic["page_in"]
+                if Image is None:
+                    size = _picture_size(pic["image"])
+                    if size and size[0] * size[1] > MAX_INPUT_PIXELS:
+                        raise OcrError(f"the picture is too large to read ({size[0]} x {size[1]} pixels)")
+                    dpi = max(size) / max(w_in, h_in, 0.1) if size else 300.0
+                    items.append((pic["image"], {"dpi": dpi, "type": "scan"}, recipes["scan"]))
+                    continue
+                img = _open_image(pic["image"])
+                # The picture's resolution on the page (a scan fills the page it was put on).
+                ppi = max(img.size) / max(w_in, h_in, 0.1)
+                info = classify(img, ppi=ppi if ppi >= 50 else 300.0, bits=pic["bits"])
+                items.append((img, info, recipes[info["type"]]))
+            if not items:
+                raise OcrError("the PDF has no scanned pictures to read, and pdftoppm (poppler-utils), "
+                               "which could render its pages, is not installed")
+            return items
+        sizes = _pdf_page_sizes(pdf_path, pages, deadline)
         for p in pages:
             im = images.get(p)
             if im and im["ppi"] >= 50:
@@ -1031,7 +1244,11 @@ def _page_items(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], tmp
             else:
                 pre, native = "scan", 300.0
             recipe = recipes[pre]
-            dpi = native if recipe.get("raster_dpi", "native") == "native" else float(recipe["raster_dpi"])
+            if recipe.get("raster_dpi", "native") == "native":
+                dpi = min(native, MAX_RASTER_DPI)
+            else:
+                dpi = float(recipe["raster_dpi"])
+            dpi = _raster_dpi(dpi, sizes.get(p))
             raw = _rasterize(pdf_path, p, dpi, deadline)
             if Image is None or recipe.get("raw"):
                 items.append((raw, {"dpi": dpi, "type": pre, "source_dpi": round(native)}, recipe))
@@ -1045,6 +1262,11 @@ def _page_items(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], tmp
         return items
     any_recipe = next(iter(recipes.values()))
     if Image is None or any_recipe.get("raw"):
+        # Without Pillow the picture goes to tesseract as it is, so check its claimed size here:
+        # a small PNG can claim billions of pixels.
+        size = _picture_size(data)
+        if size and size[0] * size[1] > MAX_INPUT_PIXELS:
+            raise OcrError(f"the picture is too large to read ({size[0]} x {size[1]} pixels)")
         return [(data, {"type": "image"}, any_recipe)]
     img = _open_image(data)
     info = classify(img)
@@ -1155,13 +1377,18 @@ def _file_text(data: bytes, media: str, name: str, *, cache: "Optional[OcrCache]
         layer = _pdf_text_layer(data)
         if _has_text_layer(layer):
             per_page = layer.get("per_page") or []
-            blank = [i + 1 for i, n in enumerate(per_page) if n < TEXT_LAYER_MIN_CHARS]
+            scanned = _scanned_pages(data, layer, started + timeout) if allow_ocr and available()["ocr"] else []
             text = (layer.get("text") or "").strip()
-            if not blank or not allow_ocr or not available()["ocr"]:
+            if not scanned:
                 return _result("text-layer", text=text, pages=layer.get("pages"), sha256=sha,
                                settings={"reader": layer.get("reader") or "pypdf"},
                                seconds=round(time.monotonic() - started, 2))
-            ocr_pages = blank  # a mixed PDF: typed pages plus scanned ones
+            if len(scanned) < len(per_page):
+                ocr_pages = scanned  # a mixed PDF: typed pages plus scanned ones
+            else:
+                # Every page is a scan and the text layer only a stamp typed over it, which
+                # OCR reads off the page anyway.
+                layer = {"pages": layer.get("pages")}
     if not allow_ocr:
         return _result("none", pages=layer.get("pages"), sha256=sha,
                        error="the file has no text layer and OCR is turned off")
@@ -1176,7 +1403,10 @@ def _file_text(data: bytes, media: str, name: str, *, cache: "Optional[OcrCache]
     try:
         out = _ocr(data, media, recipes_for(effort), deadline, ocr_pages)
     except OcrError as exc:
-        return _result("none", pages=layer.get("pages"), sha256=sha, error=str(exc),
+        error = str(exc)
+        if media == "pdf" and "password" in error.lower():
+            error = "the PDF is protected by a password, so it cannot be opened"
+        return _result("none", pages=layer.get("pages"), sha256=sha, error=error,
                        seconds=round(time.monotonic() - started, 2))
     finally:
         _ocr_slots.release()
@@ -1321,6 +1551,9 @@ class OcrCache:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
+            # mkstemp makes the file private (0600); the cache is a normal data file that the
+            # server may read as another user, so give it the usual permissions.
+            os.chmod(tmp, 0o644)
             os.replace(tmp, self.path)
         except BaseException:
             try:
@@ -1955,5 +2188,6 @@ def main(argv: List[str]) -> int:
 
 if __name__ == "__main__":
     if "--pdf-images" in sys.argv:
-        sys.exit(_pdf_images_main())
+        i = sys.argv.index("--pdf-images")
+        sys.exit(_pdf_images_main(sys.argv[i + 1] if len(sys.argv) > i + 1 else ""))
     sys.exit(main(sys.argv[1:]))

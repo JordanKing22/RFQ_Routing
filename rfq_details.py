@@ -33,6 +33,7 @@ import io
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -60,16 +61,54 @@ _TRANS = str.maketrans({
     "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2015": "-",
     "−": "-", "‘": "'", "’": "'", "‚": "'", "‛": "'", "“": '"',
     "”": '"', " ": " ", "´": "'", "′": "'", "″": '"', "­": "",
+    # invisible characters that split a word without showing: zero-width spaces and joiners, the
+    # byte order mark, and the bidirectional controls a mail client or a PDF can leave in text
+    "\u200b": "", "\u200c": "", "\u200d": "", "\u2060": "", "\ufeff": "", "\u200e": "", "\u200f": "",
+    "\u202a": "", "\u202b": "", "\u202c": "", "\u202d": "", "\u202e": "", "\u2066": "", "\u2067": "",
+    "\u2068": "", "\u2069": "", "\x00": "",
 })
+
+# Emails and OCR text can hold things no RFQ needs: a pasted table of serial numbers, a base64 blob,
+# a hatch pattern OCR read as one endless word. Several patterns below scan a run of digits from
+# every starting point, which costs the square of the run's length (a 50,000 digit run took minutes),
+# so a run of non-space characters is cut to a length no real value reaches, and very long texts are
+# cut too: what a buyer writes comes first, quoted threads and disclaimers follow.
+MAX_TOKEN = 200
+MAX_BODY_CHARS = 40_000
+MAX_SENTENCE_CHARS = 600
+# More part numbers than any RFQ lists: past this an email is a pasted parts list or a stock
+# report, and matching every number against every other one would take minutes.
+MAX_EMAIL_PNS = 60
+MAX_DOC_CHARS = 250_000
+MAX_DOC_LINES = 4_000
+_LONG_TOKEN = re.compile(r"\S{%d,}" % (MAX_TOKEN + 1))
+# Half of a UTF-16 pair with no other half: a JSON inbox can carry one ("\ud83d" cut off from its
+# emoji) and Python keeps it, but no UTF-8 writer accepts it, so the CSV or JSON download would fail.
+_SURROGATES = re.compile("[\ud800-\udfff]")
+
+
+def plain(text: Any) -> str:
+    """Text as the patterns expect it: a str, dashes and quotes made plain (OCR loves em dashes),
+    invisible characters dropped, and compatibility forms folded (NFKC: fullwidth digits, the 'fi'
+    ligature, a roman numeral character) so they read as the ASCII a buyer meant."""
+    s = text if isinstance(text, str) else ("" if text is None else str(text))
+    if not s.isascii():
+        s = unicodedata.normalize("NFKC", _SURROGATES.sub("", s).translate(_TRANS)).translate(_TRANS)
+    return s
+
+
+def guard(text: Any, limit: int = MAX_DOC_CHARS) -> str:
+    s = plain(text)[:limit]
+    return _LONG_TOKEN.sub(lambda m: m.group(0)[:MAX_TOKEN], s) if len(s) > MAX_TOKEN else s
 
 
 def clean(text: Any) -> str:
-    """One line of text: dashes and quotes made plain (OCR loves em dashes), spaces collapsed."""
-    return re.sub(r"[ \t\f\v]+", " ", str(text or "").translate(_TRANS)).strip()
+    """One line of text: plain characters, spaces collapsed."""
+    return re.sub(r"[ \t\f\v]+", " ", plain(text)).strip()
 
 
 def clean_block(text: Any) -> str:
-    return "\n".join(clean(line) for line in str(text or "").translate(_TRANS).splitlines())
+    return "\n".join(clean(line) for line in plain(text).splitlines())
 
 
 def norm(text: Any) -> str:
@@ -117,17 +156,55 @@ def fix_part_number(token: str) -> str:
     return "-".join(out)
 
 
+def _fix_number(m: "re.Match[str]") -> str:
+    """A number OCR spelled with a letter: an O or I between digits ('6O61', '3I6L'), or an O
+    closing one ('25O'). A letter a callout really has ('316L', 'H1025', '4X') stays."""
+    t = re.sub(r"(?<=\d)[Oo](?=\d)", "0", m.group(0))
+    t = re.sub(r"(?<=\d)[Il|](?=\d)", "1", t)
+    return re.sub(r"(?<=\d\d)[Oo]$", "0", t)
+
+
 def ocr_fix_spec(text: str) -> str:
     """Fix the OCR slips that change a material or finish callout: an aluminum temper read as
-    6061-16511 or 6061-7651, TYPE Ill for TYPE III, CLASS l for CLASS 1."""
+    6061-16511 or 6061-7651, TYPE Ill for TYPE III, CLASS l for CLASS 1, and words and numbers
+    spelled with look-alikes ('ALUM1NUM 6O61-T6')."""
+    text = re.sub(r"\b\d[0-9A-Za-z|]*", _fix_number, ocr_fix_words(text) or "")
     text = re.sub(r"\b([1-7]\d{3})-[1I7l|]([0-9OIl]{1,4})\b",
                   lambda m: f"{m.group(1)}-T{m.group(2).replace('O', '0').replace('I', '1').replace('l', '1')}", text)
     text = re.sub(r"\bTYPE\s+([IlL1|]{1,3})\b", lambda m: "TYPE " + "I" * len(m.group(1)), text)
     text = re.sub(r"\bCLASS\s+[lI|]\b", "CLASS 1", text)
     text = re.sub(r"(?<=[A-Z])!(?=[\s,.]|$)", "I", text)  # AIS! 4140 -> AISI 4140
     text = re.sub(r"\bDATUM([A-Z])\b", r"DATUM \1", text)  # the space before a datum letter is thin
-    text = re.sub(r"\b(ASTM|AMS|MIL)\s*[-]?\s*", lambda m: m.group(0), text)
     return text
+
+
+_WORD_DIGIT = {"0": "O", "1": "I", "5": "S", "8": "B"}
+
+
+def _fix_word(m: "re.Match[str]") -> str:
+    """One word OCR spelled with a digit for a letter: 'MATER1AL', 'L0T', 'LU8RICANTS', 'WEEK5',
+    '1MPLANT', 'I5O'. Only a word of letters with a single look-alike digit changes, and at its
+    ends only where a real callout never has a digit ('316L', 'H1025', 'FR4', '1ST' stay)."""
+    t = m.group(0)
+    digits = [(i, c) for i, c in enumerate(t) if c.isdigit()]
+    letters = sum(c.isalpha() for c in t)
+    if len(digits) != 1 or letters < 2 or not t.isupper() and not t.islower():
+        return t
+    i, c = digits[0]
+    if c not in _WORD_DIGIT:
+        return t
+    inside = 0 < i < len(t) - 1
+    start_ok = i == 0 and c in "018" and letters >= 4
+    end_ok = i == len(t) - 1 and c in "05" and letters >= 4
+    if not (inside or start_ok or end_ok):
+        return t
+    ch = _WORD_DIGIT[c]
+    return t[:i] + (ch if t.isupper() else ch.lower()) + t[i + 1:]
+
+
+def ocr_fix_words(text: Optional[str]) -> Optional[str]:
+    """Words OCR spelled with look-alike digits, put back into letters (see _fix_word)."""
+    return re.sub(r"[A-Za-z0-9]+", _fix_word, text) if text else text
 
 
 def _num(token: str) -> Optional[int]:
@@ -172,17 +249,24 @@ def overlap(a: str, b: str) -> float:
 # Patterns
 # --------------------------------------------------------------------------- #
 # Part numbers look like QA-41127, HPV-2045, BWM-3140-08, TO-5520. The lookbehind keeps spec
-# numbers out (MIL-A-8625 must not give "A-8625", BWM-QS-0412 must not give "QS-0412").
+# numbers out (MIL-A-8625 must not give "A-8625", BWM-QS-0412 must not give "QS-0412", and the
+# decimal point keeps "Y14.5-2018" from giving "5-2018").
 # A letter group may sit between prefix and number (BWM-T-0415, BFW-SS-5812).
 PN_BODY = r"[A-Z][A-Z0-9]{0,4}(?:-[A-Z]{1,3})?-\d{2,6}(?:-[A-Z0-9]{1,4})?"
-PN_RE = re.compile(r"(?<![A-Za-z0-9-])(" + PN_BODY + r")(?![A-Za-z0-9-])")
+PN_RE = re.compile(r"(?<![A-Za-z0-9.-])(" + PN_BODY + r")(?![A-Za-z0-9-])")
 # The same with OCR slack: digits allowed in the prefix, look-alike letters in the digits.
-PN_OCR_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9|]{1,5}(?:-[A-Za-z]{1,3})?-[0-9OIlSBZ|]{2,6}(?:-[A-Za-z0-9]{1,4})?)"
+PN_OCR_RE = re.compile(r"(?<![A-Za-z0-9.-])([A-Za-z0-9|]{1,5}(?:-[A-Za-z]{1,3})?-[0-9OIlSBZ|]{2,6}(?:-[A-Za-z0-9]{1,4})?)"
                        r"(?![A-Za-z0-9-])")
 # Standards that are written like part numbers. "SP", "MS", and "AN" stay out of this list: they are
 # real part number prefixes too, and the standards that use them are written with a space.
 SPEC_PREFIXES = {"MIL", "AMS", "ASTM", "SAE", "NAS", "ISO", "DFARS", "NIST", "UNC", "UNF", "UNS", "ANSI", "ASME",
                  "QQ", "DTL", "STD", "AWS", "RAL", "NASM", "PRF"}
+# A part number made of digits only ('7731-004', '400-1187-02', '100234') looks like a quantity, a
+# phone number, or a date, so it counts only right after a label that says it is a part number.
+LABELED_PN_RE = re.compile(r"\b(?:P/N|PN|PART\s*(?:NUMBER|NO\.?|#)|ITEM\s*(?:NUMBER|NO\.?|#))\s*[:#.]?\s*"
+                           r"([A-Z0-9](?:[A-Z0-9]|-(?=[A-Z0-9])){2,24})(?![A-Za-z0-9-])", re.IGNORECASE)
+# 'RFQ# 55821', 'RFQ No. 118204': a plain number is an RFQ number only with the number sign or word
+RFQ_PLAIN_NO_RE = re.compile(r"\bRFQ\s*(?:#|NO\.?|NUMBER)\s*[:#]?\s*(\d{3,8})\b", re.IGNORECASE)
 RFQ_NO_RE = re.compile(r"\bRFQ(?:[-\s#:]*(?:NO\.?|NUMBER|#))?[\s#:]*((?:[A-Z]{1,5}-)?\d{2}-\d{3,5}|[A-Z]{2,5}-\d{3,6})\b",
                        re.IGNORECASE)
 RFQ_ID_RE = re.compile(r"\b((?:RFQ|RF[O0Q]|[A-Z]{1,4})-?[0-9OISB]{2}-[0-9OISB]{3,5})\b")
@@ -195,7 +279,10 @@ MATERIAL_STRONG = re.compile(
     r"|(?:17-4|15-5|13-8)\s?PH|30[34]L?\s+(?:STAINLESS|SS|SST|CRES)|31[06]L\b|31[06]\s+(?:STAINLESS|SS|SST)"
     r"|STAINLESS(?:\s+STEEL)?\s+\d{3}L?|(?:AISI\s+)?(?:4140|4340|8620|12L14)\b|(?:1018|1020|1045|1215)\s+STEEL"
     r"|A36\b|C3[46]\d{1,3}\b|(?:IMPLANT[- ]GRADE\s+)?PEEK\b|(?:UNFILLED\s+)?PEEK\b|DELRIN|ACETAL|ULTEM|PTFE|TITANIUM"
-    r"|TI-?6AL-?4V|6AL-?4V|INCONEL\s*\d*|BRASS|BRONZE|COPPER)",
+    r"|TI-?6AL-?4V|6AL-?4V|INCONEL\s*\d*|BRASS|BRONZE|COPPER"
+    r"|(?:A2|D2|O1|S7|H13|M2|A6)\s+(?:TOOL\s+)?STEEL|TOOL\s+STEEL|UHMW(?:-?PE)?|HDPE|POLYCARBONATE|ACRYLIC|\bPVC"
+    r"|NYLON(?:\s*6(?:/6)?)?|G-?10\b|FR-?4\b|POLYPROPYLENE|VESPEL|TORLON|MAGNESIUM|INVAR|KOVAR|MONEL|HASTELLOY"
+    r"|TUNGSTEN|NITRONIC\s*\d+)",
     re.IGNORECASE)
 MATERIAL_WORD = re.compile(r"\b(?:ALUMINUM|ALUMINIUM|STAINLESS|STEEL|SST|CRES|BRASS|BRONZE|COPPER|TITANIUM|PEEK|"
                            r"PLASTIC|NYLON|DELRIN|ACETAL|INCONEL|AL)\b", re.IGNORECASE)
@@ -204,7 +291,9 @@ FINISH_RE = re.compile(
     r"|\b(?:CLEAR\s+)?CHEM(?:ICAL)?\s+FILM\b|\bCONVERSION\s+COAT(?:ING)?\b|\bALODINE\b|\bIRIDITE\b"
     r"|\bELECTROLESS\s+NICKEL\b|\bNICKEL\s+PLAT\w*\b|\bZINC(?:\s+PLAT\w*)?\b|\bBLACK\s+OXIDE\b"
     r"|\bPOWDER\s*COAT\w*\b|\bPAINT(?:ED)?\b|\bGOLD\s+(?:FLASH|PLAT\w*)\b|\bSILVER\s+PLAT\w*\b"
-    r"|\bTIN\s+PLAT\w*\b|\bCHROME\s+PLAT\w*\b|\bCADMIUM\b|\bELECTROPOLISH\w*\b|\bNITRID\w*\b",
+    r"|\bTIN\s+PLAT\w*\b|\bCHROME\s+PLAT\w*\b|\bCADMIUM\b|\bELECTROPOLISH\w*\b|\bNITRID\w*\b"
+    r"|\bHARD\s*COAT(?:ED|ING)?\b|\bBEAD\s*BLAST(?:ED)?\b|\bCHROMATE\b|\bE-?COAT(?:ED)?\b|\bNO\s+FINISH\b"
+    r"|\bAS[- ]MACHINED\b",
     re.IGNORECASE)
 SPEC_WORDS = re.compile(r"\b(?:PER|CLASS|TYPE|METHOD|COND|CONDITION|ASTM|AMS|MIL|GRADE|NITRIC|CITRIC|THK)\b")
 PART_NOUNS = {"BLOCK", "PLATE", "FRAME", "SHAFT", "BRACKET", "HOUSING", "COVER", "PIN", "SPACER", "BOX", "BODY",
@@ -240,7 +329,8 @@ REQUIREMENT_RE = re.compile(
 
 # Words around a date that make it the date the quote is due, and words that make it something else.
 RESPOND_CUES = re.compile(
-    r"QUOTE (?:IS )?DUE|DUE (?:BY|IN|ON)|QUOTE BY|RESPOND(?:S|ED)? BY|RESPONSES? (?:ARE |IS )?DUE|REPLY BY|"
+    r"QUOTES? (?:IS |ARE )?DUE|BIDS? (?:IS |ARE )?DUE|DUE (?:BY|IN|ON)|^\W*DUE\b|QUOTE BY|QUOTED BY|PRICED BY|"
+    r"RESPOND(?:S|ED)? BY|RESPONSES? (?:ARE |IS )?DUE|REPLY BY|"
     r"GET BACK TO (?:ME|US)|QUOTE BACK|QUOTE DATE|QUOTE (?:IT )?TODAY|QUOTES? (?:NEEDED|REQUIRED) BY|BID DUE|"
     r"PRICING BY|NEED (?:THE |A |YOUR )?(?:QUOTE|PRICING|PRICE)", re.IGNORECASE)
 NOT_RESPOND = re.compile(r"\bLINK\b|GOOD THROUGH|EXPIRES|PARTS BY|NEED THEM|FIRST PARTS|DELIVER|SHIP|PROMISE|ON DOCK",
@@ -361,13 +451,19 @@ def parse_date(text: str, today: dt.date) -> Optional[Tuple[dt.date, str]]:
         else:
             d = today + dt.timedelta(days=(wd - today.weekday()) % 7)
         return d, t[m.start():m.end()].strip()
-    m = re.search(r"\b(TODAY|TOMORROW|END OF (?:THE )?WEEK|EOW|END OF (?:THE )?DAY|EOD)\b", up)
+    m = re.search(r"\b(TODAY|TOMORROW|END OF (?:THE )?NEXT WEEK|END OF (?:THE )?WEEK|EOW|END OF (?:THE )?DAY|EOD|COB|"
+                  r"CLOSE OF BUSINESS|END OF (?:THE )?MONTH)\b", up)
     if m:
         word = m.group(1)
         if word == "TOMORROW":
             d = today + dt.timedelta(days=1)
-        elif word in ("TODAY", "END OF DAY", "END OF THE DAY", "EOD"):
+        elif word in ("TODAY", "END OF DAY", "END OF THE DAY", "EOD", "COB", "CLOSE OF BUSINESS"):
             d = today
+        elif "MONTH" in word:
+            nxt = (today.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+            d = nxt - dt.timedelta(days=1)
+        elif "NEXT" in word:  # the Friday of the following calendar week
+            d = today + dt.timedelta(days=7 - today.weekday() + 4)
         else:
             d = today + dt.timedelta(days=(4 - today.weekday()) % 7)
         return d, t[m.start():m.end()]
@@ -389,12 +485,27 @@ def _iso_dates(text: str) -> List[Tuple[dt.date, str]]:
 # --------------------------------------------------------------------------- #
 # Attachment documents
 # --------------------------------------------------------------------------- #
+def _number(value: Any) -> Optional[float]:
+    """A float from a number or a numeric string, else None (a confidence of "high" is no number)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value == value and abs(value) != float("inf") else None
+    try:
+        f = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) != float("inf") else None
+
+
 class Line:
     __slots__ = ("text", "conf", "page", "box", "i")
 
     def __init__(self, text: str, conf: Optional[float], page: int, box: Optional[Sequence[float]], i: int):
         self.text, self.conf, self.page, self.i = text, conf, page, i
-        self.box = tuple(float(v) for v in box) if box and len(box) == 4 else None
+        nums = [_number(v) for v in box] if isinstance(box, (list, tuple)) and len(box) == 4 else []
+        self.box = tuple(nums) if nums and all(v is not None for v in nums) and nums[2] >= nums[0] \
+            and nums[3] >= nums[1] else None
 
     @property
     def h(self) -> float:
@@ -408,29 +519,32 @@ class Doc:
     """One attachment's text as the extractor sees it."""
 
     def __init__(self, name: str, media: str, result: Optional[Dict[str, Any]]):
-        r = result or {}
-        self.name = name
-        self.media = (media or "").lower()
-        self.method = r.get("method") or "none"
-        self.text = clean_block(r.get("text") or "")
-        self.conf = r.get("confidence")
-        self.error = r.get("error")
-        self.settings = r.get("settings") or {}
+        r = result if isinstance(result, dict) else {}
+        self.name = clean(name) or "attachment"
+        self.media = clean(media).lower()
+        self.method = clean(r.get("method")) or "none"
+        raw = guard(r.get("text"))
+        self.text = clean_block(raw)
+        self.conf = _number(r.get("confidence"))
+        self.error = clean(r.get("error")) or None
+        self.settings = r.get("settings") if isinstance(r.get("settings"), dict) else {}
         self.ocr = self.method == "ocr"
         self.lines: List[Line] = []
-        for i, ln in enumerate(r.get("lines") or []):
-            if isinstance(ln, dict) and clean(ln.get("text")):
-                self.lines.append(Line(clean(ln.get("text")), ln.get("conf"), int(ln.get("page") or 1),
-                                       ln.get("bbox"), i))
+        raw_lines = r.get("lines") if isinstance(r.get("lines"), (list, tuple)) else []
+        for i, ln in enumerate(raw_lines[:MAX_DOC_LINES]):
+            if isinstance(ln, dict) and clean(guard(ln.get("text"), 2_000)):
+                page = _number(ln.get("page"))
+                self.lines.append(Line(clean(guard(ln.get("text"), 2_000)), _number(ln.get("conf")),
+                                       int(page) if page and page >= 1 else 1, ln.get("bbox"), i))
         self.boxed = sum(1 for ln in self.lines if ln.box) >= 5
         # Reading-order lines for text parsing. OCR text joins the cells of one row with wide gaps;
         # those gaps are kept as " | " so a cell boundary is still visible.
-        self.rows: List[str] = [re.sub(r"\s{3,}", " | ", ln).strip() for ln in
-                                (r.get("text") or "").translate(_TRANS).splitlines()]
+        self.rows: List[str] = [re.sub(r"\s{3,}", " | ", ln).strip() for ln in raw.splitlines()[:MAX_DOC_LINES]]
         self.rows = [clean(x) for x in self.rows if clean(x)]
         self.kind = "other"
         self.capture = "digital"
         self.parsed: Dict[str, Any] = {}
+        self.cut: Dict[str, str] = {}  # title block values that stop at a label with nothing after it
 
     @property
     def label(self) -> str:
@@ -465,7 +579,7 @@ DRAWING_CELLS = ["TITLE", "MATERIAL", "FINISH", "SIZE", "SCALE", "SHEET", "DRAWN
 
 
 def _capture(doc: Doc) -> str:
-    """How an OCR'd file was made (scan, fax, photo, screenshot), from what ocr.py measured."""
+    """How an OCR'd file was made (scan, copier, fax, photo, screenshot), from what ocr.py measured."""
     if not doc.ocr:
         return "digital"
     sources = " ".join(str(p.get("source", "")) for p in doc.settings.get("pages") or [] if isinstance(p, dict))
@@ -476,6 +590,8 @@ def _capture(doc: Doc) -> str:
         return "screenshot"
     if "fax" in sources or "bilevel" in sources or "1-bit" in sources:
         return "fax"
+    if "lowres" in sources or "copier" in sources:
+        return "copier"  # a gray page at copier resolution (about 200 dpi), as ocr.py measured it
     if doc.media == "jpg":
         return "photo"
     if doc.media == "png":
@@ -568,7 +684,7 @@ def _after(rows: List[str], i: int, accept: Callable[[str], Optional[str]], ahea
 
 def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[str]], ahead: int = 3,
               stop: Optional[Callable[[str], bool]] = None, tail_ok: bool = True,
-              where: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, Optional[Line]]]:
+              where: Optional[Dict[str, Any]] = None, reading_order: bool = True) -> Optional[Tuple[str, Optional[Line]]]:
     """Find a value by its label: on the same line ('MATERIAL: X'), under it (boxes), or after
     it in reading order. Whole-line labels are tried before merged-line tails. `where`, when
     given, is filled with how the value was found ("line" under a label, or reading-order "row"),
@@ -598,6 +714,8 @@ def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[
             if got:
                 where["line"] = got[1]
                 return got
+    if not reading_order:
+        return None
     scored_rows = []
     for i, row in enumerate(doc.rows):
         cells = [c.strip() for c in row.split("|")]
@@ -626,6 +744,22 @@ def _tail_segment(text: str, pattern: "re.Pattern[str]") -> Optional[str]:
         if pattern.search(first):
             return _strip_junk(seg)
     return _strip_junk(text)
+
+
+# Phrases printed on nearly every drawing border and tolerance block. OCR that reads a row across
+# the sheet can run one into a title block value beside it ('DO NOT SCALE DRAWING STAINLESS STEEL
+# 316L ...'); they are never part of a material, finish, or title.
+BOILERPLATE = re.compile(
+    r"\bDO\s+NOT\s+SCALE(?:\s+DRAWING)?\b|\bBREAK\s+(?:ALL\s+)?SHARP\s+EDGES\b(?!\s*[.\d])|\bTHIRD\s+ANGLE(?:\s+PROJECTION)?\b"
+    r"|\bUNLESS\s+OTHERWISE\s+SPECIFIED:?|\bDIMENSIONS\s+ARE\s+IN\s+(?:INCHES|MM|MILLIMETERS)\b"
+    r"|\bINTERPRET\s+(?:DRAWING\s+)?PER\s+ASME\s+Y14\.5(?:M)?(?:-\d{4})?\.?|\bTOLERANCES:?(?=\s|$)"
+    r"|\bANGLES\s*[+±]\S+", re.IGNORECASE)
+
+
+def _drop_boilerplate(text: Optional[str]) -> Optional[str]:
+    if not text or not BOILERPLATE.search(text):
+        return text
+    return " ".join(BOILERPLATE.sub(" ", text).split()).strip(" ,;:") or None
 
 
 def _strip_junk(text: str) -> str:
@@ -799,8 +933,9 @@ def _column_value(doc: Doc, column: Dict[str, Any], field: str, accept: Callable
     """A title block value whose label OCR lost: the first line in the TITLE / MATERIAL / FINISH
     column that reads like the field and does not sit under a label for some other field."""
     x, h = column["x"], column["h"]
-    col = sorted((ln for ln in doc.lines if ln.box and ln.page == column["page"] and abs(ln.box[0] - x) <= 2.5 * h
-                  and ln.box[1] >= column["top"] - h), key=lambda ln: ln.box[1])
+    col = sorted((ln for ln in doc.lines if ln.box and ln.page == column["page"] and ln.box[1] >= column["top"] - h
+                  and (abs(ln.box[0] - x) <= 2.5 * h or ln.box[0] < x - 2.5 * h < x + 4 * h < ln.box[2])),
+                 key=lambda ln: ln.box[1])
     for k, ln in enumerate(col):
         val = accept(ln.text)
         if not val or val in used or _is_drawing_label(ln.text):
@@ -809,6 +944,28 @@ def _column_value(doc: Doc, column: Dict[str, Any], field: str, accept: Callable
         if above is not None and _is_drawing_label(above.text) and \
                 _label_score(above.text, field.upper(), tail_ok=False) < 0.9:
             continue  # the value of the label above it, which is not this field
+        return val, ln
+    return None
+
+
+def _title_above_column(doc: Doc, column: Dict[str, Any], used: set) -> Optional[Tuple[str, Line]]:
+    """The drawing title when OCR lost its TITLE label: the nearest line above the topmost
+    MATERIAL / FINISH label that starts in the same column and reads like a title. The misread
+    label itself ('THLE', 'TITLF') is not a title."""
+    x, h = column["x"], column["h"]
+    tops = [ln for lb, ln in column["labels"] if lb in ("MATERIAL", "FINISH")]
+    if not tops:
+        return None
+    top = min(tops, key=lambda ln: ln.box[1])
+    above = sorted((ln for ln in doc.lines if ln.box and ln.page == column["page"] and abs(ln.box[0] - x) <= 2.5 * h
+                    and ln.box[3] <= top.box[1] + 0.3 * h and top.box[1] - ln.box[3] <= 3.5 * h),
+                   key=lambda ln: -ln.box[3])
+    for ln in above[:2]:
+        val = _title_value(ln.text)
+        if not val or val in used or len(val) < 6 or _is_drawing_label(ln.text):
+            continue
+        if difflib.SequenceMatcher(None, _lab(val), "TITLE").ratio() >= 0.6:
+            continue
         return val, ln
     return None
 
@@ -864,16 +1021,77 @@ def _continue_value(doc: Doc, value: str, first: Optional[Line], row_index: Opti
             extra.append(_strip_junk(clean(nxt.text.replace("|", " "))))
             cur = nxt
     elif row_index is not None:
-        for j in range(row_index + 1, min(len(doc.rows), row_index + 3)):
-            if not more(doc.rows[j]):
+        # OCR text without boxes interleaves the notes with the title block cells, so there only
+        # a short next row that reads like the end of a cell ('PADS, BORES, AND DATUM A') counts,
+        # never a numbered note or a sentence that ends in a full stop
+        loose = doc.ocr and not doc.boxed
+        for j in range(row_index + 1, min(len(doc.rows), row_index + (2 if loose else 3))):
+            nxt = clean(doc.rows[j].replace("|", " "))
+            if not more(doc.rows[j]) or (loose and (len(nxt.split()) > 6 or nxt.rstrip().endswith(".")
+                                                    or re.match(r"\d{1,2}[.,)]\s", nxt))):
                 break
-            extra.append(_strip_junk(clean(doc.rows[j].replace("|", " "))))
+            extra.append(_strip_junk(nxt))
     extra = [ocr_fix_spec(e) if field in ("material", "finish") else e for e in extra if e]
     if not extra:
+        m = re.search(r"^(.*?[.;,])\s*([A-Z][A-Z0-9 /&'-]{0,40})$", value)
+        if m and clean(src.replace("|", " ")).rstrip().endswith(":"):
+            # 'PEEK ... PER ASTM F2026. MARKERS:' with its second line unreadable: a dangling label
+            # is not part of the value, and the value may be incomplete, so say so
+            doc.cut[field] = m.group(2).strip() + ":"
+            return m.group(1).rstrip(" ,;.")
         return value
     if clean(src).rstrip().endswith(":") and not value.endswith(":"):
         value += ":"  # "MARKERS:" lost its colon when the single-line value was trimmed
     return " ".join([value] + extra)
+
+
+# Words printed in every tolerance block and title block. OCR text without line boxes (an upload
+# read in one pass, its spacing squeezed) runs them into the value beside them:
+# 'DO NOT SCALE DRAWING ALUMINUM 6061-T6511 PER ASTM B221 NOTES: FINISH'.
+_BOILERPLATE = re.compile(
+    r"[\"'|]*\s*(?:D[O0]\s+N[O0]T\s+SCALE(?:\s+DRAWING)?|INTERPRET(?:\s+DRAWING)?\s+PER\s+ASME\s+Y\s?14\.?5M?(?:-\d{4})?\.?|"
+    r"BREAK\s+(?:ALL\s+)?SHARP\s+EDGES\.?|ANGLES?\s*[\u00b1+]\s*\d*\.?\d+\s*\u00b0?|THIRD\s+ANGLE\s+PROJECTION|"
+    r"UNLESS\s+OTHERWISE\s+SPECIFIED:?|DIMENSIONS\s+ARE\s+IN\s+(?:INCHES|MM|MILLIMETERS)|TOLERANCES:?|NOTES:)",
+    re.IGNORECASE)
+# a title block label after the value is where the next cell starts: '... CLASS 1 SIZE DWG NO. REV A'
+_NEXT_CELL = re.compile(r"\s(?:SIZE\s+[DO0]WG|[DO0]WG\.?\s+N[O0]\b|(?:MATERIAL|FINISH|TITLE),?\s*$|DRAWN\b|SCALE\s+\d|"
+                        r"SHEET\s+\d)", re.IGNORECASE)
+
+
+def _unboxed_value(value: str, field: str = "") -> str:
+    """A title block value from OCR text without boxes, cut free of the tolerance block phrases
+    and title block labels it ran into, and of the lowercase junk OCR reads from line work
+    ('ouehaneee BRACKET, SENSOR MOUNTING'): title block text is printed in capitals. A material
+    or finish that shares its row with a drawing note starts at the sentence that names it
+    ('4. CROSS-DRILLED PASSAGES ... INTERSECTIONS. . A HARD ANODIZE PER MIL-A-8625 ...')."""
+    t = clean(value)
+    pattern = {"material": re.compile(MATERIAL_STRONG.pattern + "|" + MATERIAL_WORD.pattern, re.IGNORECASE),
+               "finish": FINISH_RE}.get(field)
+    if pattern is not None:
+        parts = re.split(r"(?<=[A-Za-z0-9)])\.\s+(?:[^\w\s]+\s+)*", t)
+        first = next((k for k, x in enumerate(parts) if pattern.search(x)), 0)
+        if first:
+            t = ". ".join(parts[first:])
+            t = re.sub(r"^[A-Z]\s+(?=[A-Z]{3,})", "", t)  # a zone letter read before it
+    for _ in range(4):
+        m = _BOILERPLATE.match(t)
+        if not m:
+            break
+        t = t[m.end():].strip(" ,;:.")
+    m = _BOILERPLATE.search(t)
+    if m and m.start() > 0:
+        t = t[:m.start()]
+    m = _NEXT_CELL.search(t)
+    if m:
+        t = t[:m.start()]
+    words = t.split()
+    while len(words) > 1 and sum(c.islower() for c in words[0]) >= 2:
+        words.pop(0)
+    for k in range(2, len(words)):
+        if sum(c.islower() for c in words[k]) >= 2 and not re.fullmatch(r"R[a-z]|[a-z]{1,2}\.?", words[k]):
+            words = words[:k]
+            break
+    return _strip_junk(" ".join(words)) or clean(value)
 
 
 def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
@@ -882,6 +1100,8 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                            "company": None, "revisions": [], "conf": {}}
 
     def keep(field: str, got: Optional[Tuple[str, Optional[Line]]]) -> None:
+        if got and got[0] and doc.ocr and not doc.boxed and field in ("title", "material", "finish"):
+            got = (_unboxed_value(got[0], field), got[1])
         if got and got[0]:
             out[field] = got[0]
             ln = got[1]
@@ -917,6 +1137,10 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                     got = (_continue_value(doc, got[0], got[1], None, field), got[1])
                     keep(field, got)
                     used.add(got[0])
+        if not out["title"]:
+            # an unreadable TITLE label ('THLE' on the E52 fax): the title is the line right above
+            # the first MATERIAL / FINISH label of the column
+            keep("title", _title_above_column(doc, column, used))
 
     # Part number: only from a place where a part number is printed. That is the DWG NO. cell (the
     # value under or after the label), a P/N label, the size / number / rev row a title block reads
@@ -954,8 +1178,11 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
         for pn in _pn_candidates(row, doc.ocr):
             where = "title block row" if m and n_words <= 3 and _pn_candidates(m.group(1), doc.ocr) else None
             cand(pn, (0.0 if doc.lines else 1.0) + (0.5 if n_words <= 3 else 0.0), None, where)
+    # With boxes the number is found under its label or not at all: in OCR reading order the lines
+    # after DWG NO. can be a note from another column ('INTERPRET DRAWING PER ASME Y14.5-2018').
     got = _labelled(doc, ["DWG NO", "DWG NO.", "DRAWING NO", "DWG", "PART NO", "PART NUMBER", "P/N"],
-                    lambda t: (_pn_candidates(t, doc.ocr) or [None])[0], ahead=3, tail_ok=True)
+                    lambda t: (_pn_candidates(t, doc.ocr) or [None])[0], ahead=3, tail_ok=True,
+                    reading_order=not doc.boxed)
     if got:
         cand(got[0], 4.0, got[1].conf if got[1] is not None else None, "DWG NO")
     # the label and its number inside a longer line: "TITLE BLOCK: ... DWG NO: TIB-0725 REV B."
@@ -1042,6 +1269,16 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
         m = re.match(r"^\|?\s*([A-Z]{1,2})\s+(?:\|\s*)?[A-Z].*\b20\d\d-\d\d-\d\d\b", row)
         if m and not re.match(r"^(?:REV|SIZE|DWG|DRAWN)\b", row):
             revs.append(m.group(1))
+    # a long description wraps and pushes its date onto a later line ("B JOURNAL TOL WAS .0005,
+    # ADDED RUNOUT" / "CALLOUT" / "2026-05-06 D"): right under the table header, a row that opens
+    # with a rev letter and words is a revision too
+    head = next((i for i, row in enumerate(doc.rows) if re.match(r"^\|?\s*REV\.?\s*\|?\s*DESCRIPTION\b", row.upper())),
+                None)
+    if head is not None:
+        for row in doc.rows[head + 1:head + 13]:
+            m = re.match(r"^\|?\s*([A-Z])\s+(?:\|\s*)?[A-Z]{3,}\b", row)
+            if m and not re.match(r"^(?:REV|SIZE|DWG|DRAWN|NOTES)\b", row) and m.group(1) not in revs:
+                revs.append(m.group(1))
     out["revisions"] = revs
     if rev:
         out["rev"] = rev[0]
@@ -1061,6 +1298,10 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                 out["company"] = prev.title()
             break
     out["export"] = _find_export(doc.text, doc.ocr)
+    out["cut"] = dict(doc.cut)
+    if doc.ocr:
+        for field in ("title", "material", "finish"):
+            out[field] = _drop_boilerplate(ocr_fix_words(out[field]))
     return out
 
 
@@ -1111,12 +1352,33 @@ FORM_COLUMNS = [
 ]
 
 
+# The same column labels folded (O/0, I/1, S/5 ...), for a header OCR bent: 'MATERIAL / FINI5H'
+FOLDED_COLUMNS = {fold(label): key for label, key in (
+    ("PART NUMBER", "pn"), ("PART NO", "pn"), ("DESCRIPTION", "desc"), ("MATERIAL / FINISH", "matfin"),
+    ("MATERIAL", "material"), ("FINISH", "finish"), ("QUANTITIES", "qty"), ("QUANTITY", "qty"),
+    ("UNIT PRICE", "price"), ("LEAD TIME", "lead"))}
+
+
 def _col_of(text: str) -> Optional[str]:
     t = clean(text).upper().strip(" .:")
     for key, pat in FORM_COLUMNS:
         if re.search(pat, t):
             return key
+    if len(t) <= 16:
+        # a short label with an OCR crumb stuck to it; only short, so a sentence that starts with
+        # 'MATERIAL CERTS ...' never reads as the MATERIAL column
+        m = re.search(r"(?<![A-Z])(REV|MATERIAL|FINISH|QTY)(?![A-Z])", t)
+        if m:
+            return {"REV": "rev", "MATERIAL": "material", "FINISH": "finish", "QTY": "qty"}[m.group(1)]
+    f = fold(t)
+    if len(f) >= 6:
+        for label, key in FOLDED_COLUMNS.items():
+            if f == label or (abs(len(f) - len(label)) <= 1 and difflib.SequenceMatcher(None, f, label).ratio() >= 0.88):
+                return key
     return None
+
+
+MAX_BREAKS = 20
 
 
 def parse_quantities(text: str) -> Tuple[Optional[List[int]], bool]:
@@ -1124,12 +1386,16 @@ def parse_quantities(text: str) -> Tuple[Optional[List[int]], bool]:
     complete is False when OCR left a dangling separator or an unreadable piece."""
     t = clean(text).replace("|", " ")
     t = re.sub(r"\bPCS?\b|\bPIECES\b|\bEA\b", " ", t, flags=re.IGNORECASE)
+    # a thousands group OCR read with a letter ('1,O00') is still a thousands group
+    t = re.sub(r"(?<=\d),([0-9OQDIlSB]{3})(?![0-9A-Za-z])",
+               lambda m: "," + "".join(_TO_DIGIT.get(c, c) for c in m.group(1).upper()), t)
+    # commas group thousands only in a number whose every group after the first has three digits
+    # ('1,000, 2,500'); any other comma separates breaks ('25, 50, 100', '25,50,100')
+    t = re.sub(r"(?<![\d,])\d{1,3}(?:,\d{3})+(?!\d|,\d)", lambda m: m.group(0).replace(",", ""), t)
     if "/" in t:
         parts = [p.strip() for p in t.split("/")]
-    elif re.search(r"\d{1,3}(?:,\d{3})+", t) and not re.search(r"\d,\s", t):
-        parts = t.split()
     else:
-        parts = re.split(r"[,;]|\s+AND\s+|\s+", t, flags=re.IGNORECASE)
+        parts = re.split(r"\s*[,;]\s*|\s+(?:AND|OR|&)\s+|\s+", t.strip(), flags=re.IGNORECASE)
     nums, complete = [], True
     for p in parts:
         p = p.strip(" .*'\"`~-_")
@@ -1138,12 +1404,16 @@ def parse_quantities(text: str) -> Tuple[Optional[List[int]], bool]:
                 complete = False
             continue
         n = _num(p)
+        if n is None and len(parts) > 1 and re.fullmatch(r"[0-9OQDIlSBZ|]{1,7}", p):
+            n = _num("".join(_TO_DIGIT.get(c, c) for c in p.upper()))  # 'SO / 150 / 300': 50 read as letters
         if n is None or n == 0:
             complete = False
             continue
         nums.append(n)
     if t.rstrip(" *'\"`~_-").endswith("/"):
         complete = False
+    if len(nums) > MAX_BREAKS:
+        return None, False  # a column of numbers, not a set of price breaks
     return (nums or None), complete
 
 
@@ -1185,6 +1455,42 @@ class _FormTable:
         self.rows: List[Dict[str, Any]] = []
 
 
+# Column labels anywhere in a line, for header rows OCR read as one line.
+HEADER_PATTERNS = [
+    ("item", r"\bITEM\b"), ("pn", r"PART\s*(?:NUMBER|NO\b\.?|#)|\bP/N\b"), ("rev", r"(?<![A-Z])REV(?![A-Z])\.?"),
+    ("desc", r"DESCRIPTI[O0]N|\bDESC\b\.?"), ("matfin", r"MATERIAL\s*[/|Il1]\s*FINISH"),
+    ("material", r"\bMATERIAL\b|\bMAT'?L\b"), ("finish", r"\bFINISH\b"), ("qty", r"QUANTIT\w*|\bQTY\b"),
+    ("price", r"UNIT\s*PRICE"), ("lead", r"LEAD\s*TIME"),
+]
+
+
+def _header_cells(ln: Line) -> List[Tuple[str, Line]]:
+    """The column labels in one OCR line, each with the part of the line's box it covers. A line
+    holds one label, or several OCR read as one line ('MATERIAL / FINISH QUANTITIES UNIT PRICE',
+    split by character position); a line with other words in it (a requirement that mentions lead
+    time and quantity breaks) holds none."""
+    t = clean(ln.text).upper()
+    if not ln.box or len(t) > 90:
+        return []
+    spans: List[Tuple[int, int, str]] = []
+    for key, pat in HEADER_PATTERNS:
+        for m in re.finditer(pat, t):
+            if not any(m.start() < e and st < m.end() for st, e, _ in spans):
+                spans.append((m.start(), m.end(), key))  # 'MATERIAL / FINISH' keeps its parts together
+    rest = t
+    for st, e, _ in sorted(spans, reverse=True):
+        rest = rest[:st] + " " + rest[e:]
+    if not spans or len(re.findall(r"[A-Z0-9]", rest)) > 3:
+        key = _col_of(t) if len(t) < 40 else None  # a label OCR bent: 'MATERIAL / FINI5H'
+        return [(key, ln)] if key else []
+    if len(spans) == 1:
+        return [(spans[0][2], ln)]
+    x0, _, x1, _ = ln.box
+    n = max(1, len(t))
+    return [(key, Line(t[st:e], ln.conf, ln.page, (x0 + (x1 - x0) * st / n, ln.box[1], x0 + (x1 - x0) * e / n,
+                                                   ln.box[3]), -1)) for st, e, key in sorted(spans)]
+
+
 def _deskew_slope(lines: List[Line]) -> float:
     """dy/dx from label boxes that were printed on one baseline (the table header)."""
     pts = [((ln.box[0] + ln.box[2]) / 2, (ln.box[1] + ln.box[3]) / 2) for ln in lines if ln.box]
@@ -1199,7 +1505,20 @@ def _deskew_slope(lines: List[Line]) -> float:
     return slope if abs(slope) < 0.06 else 0.0
 
 
-QTY_LIST_RE = re.compile(r"(?:\d[\d,OIl]*\s*/\s*)+\d[\d,OIl]*\s*/?\*?|\d[\d,]*\s*/\s*\*?$")
+QTY_LIST_RE = re.compile(r"(?:\d[\d,OIlSB]*\s*/\s*)+\d[\d,OIlSB]*\s*/?\*?|\d[\d,]*\s*/\s*\*?$")
+# A number right after one of these is a spec or grade, not a quantity: "PER AMS 5643 / PASSIVATE"
+# puts a slash after the spec number where the material and finish cells meet.
+_SPEC_BEFORE = re.compile(r"(?:\b(?:ASTM|AMS|MIL|SAE|AS|NAS|ISO|QQ|TYPE|CLASS|METHOD|GRADE|COND|CONDITION|NO)"
+                          r"|[A-Z]-|\bH|\bF)\s*[-.]?\s*$", re.IGNORECASE)
+
+
+def _qty_search(pattern: "re.Pattern[str]", text: str) -> Optional["re.Match[str]"]:
+    """The first match of a quantity pattern that is not a spec number. A list of two or more
+    numbers ('COND 250 / 500 /' where the cells run together) is quantities whatever precedes it."""
+    for m in pattern.finditer(text):
+        if len(re.findall(r"\d[\d,]*", m.group(0))) > 1 or not _SPEC_BEFORE.search(text[:m.start()]):
+            return m
+    return None
 
 
 def _row_piece(text: str, ocr: bool) -> Dict[str, Any]:
@@ -1208,6 +1527,8 @@ def _row_piece(text: str, ocr: bool) -> Dict[str, Any]:
     out: Dict[str, Any] = {"pn": None, "rev": None, "qty": None, "desc": "", "matfin": "", "tail_number": None}
     t = clean(text.replace("|", " "))
     m = (PN_OCR_RE if ocr else PN_RE).search(t)
+    if m and re.search(r"\bPER\s*$", t[:m.start()], re.IGNORECASE):
+        m = None  # 'LABEL PER BWM-QS-0412': a process spec, not a part
     if m and _pn_candidates(m.group(1), ocr):
         out["pn"] = _pn_candidates(m.group(1), ocr)[0]
         after = t[m.end():].strip(" .,")
@@ -1216,7 +1537,7 @@ def _row_piece(text: str, ocr: bool) -> Dict[str, Any]:
             out["rev"] = _clean_rev(toks[0])
             after = after[len(toks[0]):]
         t = after
-    q = QTY_LIST_RE.search(t)
+    q = _qty_search(QTY_LIST_RE, t)
     if q:
         out["qty"] = q.group(0)
         t = (t[:q.start()] + " " + t[q.end():]).strip()
@@ -1230,39 +1551,60 @@ def _row_piece(text: str, ocr: bool) -> Dict[str, Any]:
     return out
 
 
+def _numbered_sentence(text: str, ocr: bool) -> bool:
+    """A numbered requirement under the parts table ('1. MATERIAL CERTS ...'), not a table row OCR
+    read with its item number ('3. BWM-3140-12 A CAGE, LUMBAR ...')."""
+    m = ITEM_NO.match(text)
+    if not m or len(text) < 25:
+        return False
+    return not any(_pn_candidates(tok, ocr) for tok in text[m.end():].split()[:2])
+
+
 def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
     """Table rows from OCR lines with boxes: find the header labels, give every line below them a
     column by where it sits and a row by the part number cell it lines up with (after taking out
     the page skew measured on the header). A line that runs across several columns is split by
     what its words are, not by guessing where each word sits."""
     lines = [ln for ln in doc.lines if ln.box]
+    cells = [(key, cell, ln) for ln in lines for key, cell in _header_cells(ln)]
+    if not cells:
+        return None
+    # The header row: the band of labels around the PART NUMBER label (or the line with the most
+    # labels). The slack grows with the distance across the page, for a scan's skew.
+    anchor = next((c for c in cells if c[0] == "pn"), None) or max(
+        cells, key=lambda c: sum(1 for d in cells if d[2] is c[2]))
+    ay = (anchor[1].box[1] + anchor[1].box[3]) / 2
+    ax = (anchor[1].box[0] + anchor[1].box[2]) / 2
     header: Dict[str, Line] = {}
-    for ln in lines:
-        key = _col_of(ln.text)
-        if key and key not in header and len(ln.text) < 40:
-            header[key] = ln
-    merged_header = None
-    if "pn" not in header or "qty" not in header:
-        for ln in lines:
-            t = ln.text.upper()
-            if re.search(r"PART\s*(?:NUMBER|NO)", t) and re.search(r"QUANTIT|QTY", t):
-                merged_header = ln
-                break
-        if not merged_header:
-            return None
-        header = {}
-        x0, _, x1, _ = merged_header.box
-        text = merged_header.text
-        for key, pat in FORM_COLUMNS:
-            m = re.search(pat.replace("^", r"\b").replace("$", r"\b"), text.upper())
-            if m:
-                cx0 = x0 + (x1 - x0) * m.start() / max(1, len(text))
-                cx1 = x0 + (x1 - x0) * m.end() / max(1, len(text))
-                header[key] = Line(m.group(0), merged_header.conf, merged_header.page,
-                                   (cx0, merged_header.box[1], cx1, merged_header.box[3]), -1)
-        if "pn" not in header:
-            return None
-    slope = _deskew_slope(list(header.values())) if not merged_header else 0.0
+    split_lines = set()
+    for key, cell, ln in cells:
+        cy, cx = (cell.box[1] + cell.box[3]) / 2, (cell.box[0] + cell.box[2]) / 2
+        if cell.page != anchor[1].page or abs(cy - ay) > 2.5 * max(anchor[1].h, cell.h, 8.0) + 0.03 * abs(cx - ax):
+            continue
+        if key not in header or abs(cy - ay) < abs((header[key].box[1] + header[key].box[3]) / 2 - ay):
+            header[key] = cell
+            if cell is not ln:
+                split_lines.add(ln)
+    if "pn" not in header and len(header) >= 2 and ("qty" in header or "desc" in header):
+        # The PART NUMBER label is unreadable but the other column labels are there: the part
+        # number column is where the lone part numbers under the header line up.
+        top = max(h.box[3] for h in header.values())
+        stop = min((ln.box[1] for ln in lines if ln.box[1] > top and _req_heading(ln.text)),
+                   default=float("inf"))
+        lone = [ln for ln in lines if top < ln.box[1] < stop and len(ln.text.split()) == 1
+                and _pn_candidates(ln.text, doc.ocr)]
+        if lone:
+            ref = min(header.values(), key=lambda h: h.box[0])
+            x0 = sorted(ln.box[0] for ln in lone)[len(lone) // 2]
+            if x0 < ref.box[0]:
+                header["pn"] = Line("PART NUMBER", ref.conf, ref.page,
+                                    (x0, ref.box[1], x0 + 5 * max(ref.h, 8.0), ref.box[3]), -1)
+    if "pn" not in header:
+        return None
+    # a label line OCR read across several columns is taller than its text by the skew over its width
+    merged_header = max(split_lines, key=lambda ln: ln.box[2] - ln.box[0]) if split_lines else None
+    whole = [h for h in header.values() if h.i >= 0]
+    slope = _deskew_slope(whole) if len(whole) >= 3 else 0.0
     page = header["pn"].page
     x_ref = header["pn"].box[0]
 
@@ -1273,11 +1615,11 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
     head_bottom = max(h.box[3] - slope * (h.box[0] - x_ref) for h in header.values())
     end_y = float("inf")
     for ln in lines:
-        if ln.page == page and dy(ln) > head_y and re.search(
-                r"REQUIREMENTS|^\W*TERMS\b|SUPPLIER\s+RESP|^NOTES\b", ln.text.upper()):
+        if ln.page == page and dy(ln) > head_y and (_req_heading(ln.text) or _req_end(ln.text) or re.search(
+                r"^NOTES\b", ln.text.upper()) or _numbered_sentence(ln.text, doc.ocr)):
             end_y = min(end_y, dy(ln))
     body = [ln for ln in lines if ln.page == page and dy(ln) > head_bottom - 2 and dy(ln) < end_y - 2
-            and ln not in header.values() and ln is not merged_header]
+            and ln not in header.values() and ln not in split_lines]
     if not body:
         return None
     heights = sorted(ln.h for ln in body if ln.h)
@@ -1346,6 +1688,14 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
                     continue  # a speck in the quantity cell ("E" at 0% confidence) is not a break
                 row["qty"].append(text)
                 row["qty_conf"] = min(row["qty_conf"] or 100.0, ln.conf if ln.conf is not None else 100.0)
+            elif col == "desc" and not any(k in header for k in ("matfin", "material", "finish")):
+                # the MATERIAL / FINISH label is unreadable, so the description column reaches over
+                # that column too: sort its pieces by what the words are
+                d, mf = _split_desc_matfin(_strip_junk(text))
+                if d:
+                    cells.setdefault("desc", []).append(d)
+                if mf:
+                    cells.setdefault("matfin", []).append(mf)
             elif col != "pn" or not _pn_candidates(text, doc.ocr) or fold(_pn_candidates(text, doc.ocr)[0]) != fold(row["pn"]):
                 cells.setdefault(col, []).append(text)
             elif col == "pn":
@@ -1370,6 +1720,9 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
         material, finish = (c.get("material"), c.get("finish"))
         if "matfin" in c:
             material, finish = _split_matfin(c["matfin"])
+        elif material and not finish and "/" in material:
+            # MATERIAL and FINISH are two columns, but the cell ran across both: 'AL 6061-T6511 / HARD ANODIZE'
+            material, finish = _split_matfin(material)
         rev = _clean_rev(c.get("rev", "")) if c.get("rev") else None
         if not rev and c.get("pn"):
             after = c["pn"].split()
@@ -1382,9 +1735,12 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
         if r["qty"] and r["qty"][0].rstrip(" *").endswith("/") and len(r["qty"]) == 1:
             complete = False
         desc = _strip_junk(c.get("desc", "")) or None
+        if desc and re.fullmatch(r"[A-Z]{1,2}", desc):
+            rev, desc = rev or _clean_rev(desc), None  # the REV cell, filed under DESCRIPTION when its label is unreadable
         out.append({"part_number": r["pn"], "rev": rev, "description": desc, "material": material,
                     "finish": finish, "quantities": qty, "qty_complete": complete,
-                    "conf": r["qty_conf"] if r["qty_conf"] is not None else r["conf"]})
+                    # the part number cell's confidence for the row, the quantity cell's for the breaks
+                    "conf": r["conf"], "qty_conf": r["qty_conf"] if r["qty_conf"] is not None else r["conf"]})
     return out
 
 
@@ -1394,17 +1750,24 @@ def _form_rows_text(doc: Doc) -> List[Dict[str, Any]]:
     start = next((i for i, r in enumerate(rows) if re.search(r"PART\s*(?:NUMBER|NO)|DESCRIPTI", r.upper())), None)
     if start is None:
         start = 0
-    end = next((i for i in range(start + 1, len(rows)) if re.search(r"REQUIREMENTS|^TERMS\b|SUPPLIER\s+RESP",
-                                                                      rows[i].upper())), len(rows))
+    end = next((i for i in range(start + 1, len(rows)) if _req_heading(rows[i]) or _req_end(rows[i])), len(rows))
     header_end = start
     while header_end + 1 < end and _col_of(rows[header_end + 1]) and not _pn_candidates(rows[header_end + 1], doc.ocr):
         header_end += 1
     region = rows[header_end + 1:end]
     groups: List[List[str]] = []
-    for row in region:
+    for k, row in enumerate(region):
         if _pn_candidates(row, doc.ocr) and not re.search(r"\bRFQ\b", row.upper()):
             groups.append([row])
+        elif re.fullmatch(r"\W*\d{1,2}\W*", row) and int(re.sub(r"\D", "", row)) in (len(groups), len(groups) + 1) \
+                and (k + 1 < len(region) and _pn_candidates(region[k + 1], doc.ocr) or
+                     k and _pn_candidates(region[k - 1], doc.ocr)):
+            continue  # the item number of a row, read on its own line next to its part number
         elif groups:
+            if len(groups[-1]) == 1 and re.fullmatch(r"[A-Z]{1,2}", row.strip(" |")) and \
+                    not (PN_OCR_RE if doc.ocr else PN_RE).sub("", groups[-1][0]).strip(" |"):
+                groups[-1][0] += " " + row.strip(" |")  # the REV cell, read on its own line
+                continue
             groups[-1].append(row)
     out = []
     for g in groups:
@@ -1421,7 +1784,7 @@ def _form_rows_text(doc: Doc) -> List[Dict[str, Any]]:
         qty, complete, desc, matfin = None, True, [], []
         for p in parts:
             p = p.replace("|", " ")
-            q = re.search(r"(?:\d[\d,OIl]*\s*/\s*)+\d[\d,OIl]*\s*/?|\d[\d,]*\s*/\s*$", p)
+            q = _qty_search(re.compile(r"(?:\d[\d,OIlSB]*\s*/\s*)+\d[\d,OIlSB]*\s*/?|\d[\d,]*\s*/\s*$"), p)
             if q and qty is None:
                 qty, complete = parse_quantities(q.group(0))
                 p = (p[:q.start()] + " " + p[q.end():]).strip()
@@ -1492,13 +1855,52 @@ def _cell_value(rows: List[str], labels: Sequence[str], accept: Callable[[str], 
 
 REQ_HEADING = re.compile(r"REQUIREMENTS|QUALITY\s+CLAUSES|SPECIAL\s+INSTRUCTIONS")
 REQ_END = re.compile(r"^\W*TERMS\b|SUPPLIER\s+RESP|QUOTED\s+BY|^\W*PAGE\s+\d|^\W*SIGNATURE")
-ITEM_NO = re.compile(r"^\W{0,2}\d{1,2}\s*(?:[.,)]+\W*|\|)\s*")
+# The same words folded, so a heading OCR bent ('QU0TE REQUIREMENT5', 'TERM5: NET 45') still counts.
+_REQ_HEADING_FOLDED = [fold(w) for w in ("REQUIREMENTS", "QUALITY CLAUSES", "SPECIAL INSTRUCTIONS")]
+_REQ_END_FOLDED = [fold(w) for w in ("SUPPLIER RESPONSE", "QUOTED BY")]
+
+
+def _req_heading(text: str) -> bool:
+    return bool(REQ_HEADING.search(text.upper())) or any(w in fold(text) for w in _REQ_HEADING_FOLDED)
+
+
+def _req_end(text: str) -> bool:
+    f = fold(text)
+    return bool(REQ_END.search(text.upper())) or f.startswith(fold("TERMS")) or any(w in f for w in _REQ_END_FOLDED)
+ITEM_NO = re.compile(r"^\W{0,2}(?:\d{1,2}|[Il|])\s*(?:[.,)]+\W*|\|)\s*")
+
+
+# Words of quote requirements, for putting back the spaces OCR drops between them on a tight
+# form row ('FIRSTARTICLE INSPECTION', 'MATERIALCERTSAND'). A run is split only when it breaks
+# into these words completely, so a real word or a part number is never cut.
+REQ_WORDS = {"MATERIAL", "MATERIALS", "CERT", "CERTS", "CERTIFICATION", "CERTIFICATIONS", "CERTIFIED", "AND",
+             "OR", "OF", "C", "WITH", "EACH", "SHIPMENT", "FIRST", "ARTICLE", "INSPECTION", "REPORT", "ON",
+             "LOT", "LOTS", "REQUIRED", "QUOTE", "LEAD", "TIME", "IN", "WEEKS", "FOR", "QUANTITY", "BREAK",
+             "PARTS", "PART", "CLEAN", "CLEANED", "DOUBLE", "BAG", "BAGGED", "LABEL", "PER", "NO", "SUPPLIER",
+             "TRACEABLE", "TRACEABILITY", "TO", "HEAT", "PLUG", "CAP", "ALL", "PORTS", "PRESSURE", "TEST",
+             "INDIVIDUALLY", "PROTECT", "FROM", "CONTACT", "DELIVERY", "PCS", "LINE", "THE", "BY", "AS",
+             "SEPARATE", "SHOW", "SAVINGS", "OPTION", "PACKAGING", "PACKAGE", "COMPLIANCE", "CONFORMANCE"}
+
+
+def _split_run(word: str) -> str:
+    """'FIRSTARTICLE' -> 'FIRST ARTICLE' when the run is made of REQ_WORDS alone, else unchanged."""
+    if len(word) < 7 or not word.isalpha() or not word.isupper() or word in REQ_WORDS:
+        return word
+    best: List[Optional[List[str]]] = [[]] + [None] * len(word)
+    for i in range(1, len(word) + 1):
+        for j in range(max(0, i - 14), i):
+            if best[j] is not None and word[j:i] in REQ_WORDS and (best[i] is None or len(best[j]) + 1 < len(best[i])):
+                best[i] = best[j] + [word[j:i]]
+    parts = best[len(word)]
+    return " ".join(parts) if parts and len(parts) > 1 and all(len(x) > 1 or x == "C" for x in parts) else word
 
 
 def _req_text(text: str) -> str:
     """One requirement without its item number and the OCR crumbs around it."""
     t = ITEM_NO.sub("", clean(text).strip())
     t = clean(t.replace("|", " "))
+    t = " ".join(_split_run(w) for w in t.split())
+    t = re.sub(r"\b[1l|]SO\b", "ISO", t)  # 'ISO 13485' with its I read as a one
     t = re.sub(r"\bC\s?OF\s?C\b", "C OF C", t)  # OCR drops the space: "C OFC"
     words = t.split()
     while words and (re.fullmatch(r"[^A-Za-z0-9]+", words[-1]) or re.fullmatch(r"[a-z]{1,2}", words[-1])):
@@ -1519,18 +1921,37 @@ def _form_requirements(doc: Doc) -> List[str]:
     A tall thin 'line' is the column of item numbers read as one word, and is dropped."""
     items: List[str] = []
     lines = [ln for ln in doc.lines if ln.box]
-    head = next((ln for ln in lines if REQ_HEADING.search(ln.text.upper()) and len(ln.text) < 60), None)
+    head = next((ln for ln in lines if _req_heading(ln.text) and len(ln.text) < 60), None)
+    if head is None:
+        # the heading itself is unreadable: the block starts at the first of two numbered items in a
+        # row ('1.' then '2.') under the parts table
+        table = max((ln.box[3] for ln in lines if len(ln.text) < 20 and _col_of(ln.text) in ("qty", "price", "lead")),
+                    default=None)  # the table's header labels, not a sentence that mentions quantities
+        nums = [ln for ln in lines if table is not None and ln.box[1] > table
+                and re.match(r"^\W{0,2}([1-9Il|])\s*[.,)]", ln.text)]
+        for a in nums:
+            if re.match(r"^\W{0,2}[1Il|]\s*[.,)]", a.text) and any(
+                    re.match(r"^\W{0,2}2\s*[.,)]", b.text) and 0 < b.box[1] - a.box[1] < 4 * max(a.h, 10.0) for b in nums):
+                h = max(a.h, 10.0)
+                # an item's text line can start above its number (a taller box), so the virtual
+                # heading sits a line and a half above the number
+                head = Line("REQUIREMENTS", a.conf, a.page, (a.box[0], a.box[1] - 2.5 * h, a.box[2], a.box[1] - 1.5 * h), -1)
+                break
     if head is not None:
         end_y = min((ln.box[1] for ln in lines if ln.page == head.page and ln.box[1] > head.box[3]
-                     and REQ_END.search(ln.text.upper())), default=float("inf"))
+                     and _req_end(ln.text)), default=float("inf"))
         block = [ln for ln in lines if ln.page == head.page and head.box[3] - 0.3 * head.h < ln.box[1] < end_y - 2
                  and ln is not head]
         heights = sorted(ln.h for ln in block if ln.h)
         unit = heights[len(heights) // 2] if heights else 20.0
         block = [ln for ln in block if ln.h <= 2.2 * unit and (ln.conf is None or ln.conf >= 40 or len(ln.text) > 12)]
+        # One printed row, by the middle of each piece: when two OCR passes are merged, one row
+        # can come back as pieces with boxes of different heights ('FIRST ARTICLE' and 'INSPECTION
+        # REPORT ...' of item 2, its item number a third piece), so their tops do not line up.
         rows: List[List[Line]] = []
-        for ln in sorted(block, key=lambda l: (l.box[1], l.box[0])):
-            if rows and abs(ln.box[1] - rows[-1][0].box[1]) < 0.5 * unit:
+        mid = lambda l: (l.box[1] + l.box[3]) / 2  # noqa: E731
+        for ln in sorted(block, key=lambda l: (mid(l), l.box[0])):
+            if rows and abs(mid(ln) - sum(mid(x) for x in rows[-1]) / len(rows[-1])) < 0.6 * unit:
                 rows[-1].append(ln)
             else:
                 rows.append([ln])
@@ -1556,12 +1977,12 @@ def _form_requirements(doc: Doc) -> List[str]:
             prev_right, prev_text = row[-1].box[2], clean(row[-1].text)
         return items
     rows_ = doc.rows
-    start = next((i for i, r in enumerate(rows_) if REQ_HEADING.search(r.upper())), None)
+    start = next((i for i, r in enumerate(rows_) if _req_heading(r)), None)
     if start is None:
         return items
     prev = ""
     for r in rows_[start + 1:]:
-        if REQ_END.search(r.upper()):
+        if _req_end(r):
             break
         text = _req_text(r)
         if not text or not _is_req(text):
@@ -1603,7 +2024,16 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
         for ln in doc.lines:
             if max(_label_score(ln.text, lb, tail_ok=False) for lb in resp_labels) >= 0.9:
                 label_seen = True
-                hit = _below(doc, ln, first_date, max_rows=3.0)
+                label = ln
+                hit = _below(doc, ln, lambda t, label=label: first_date(t), max_rows=3.0)
+                if hit and hit[1] is not None and len(_iso_dates(hit[1].text)) > 1:
+                    # 'DATE' and 'RESPOND BY' side by side, their values read as one line
+                    # ('2026-09-23 2026-10-12'): the date that sits under this label
+                    vl, cx = hit[1], (label.box[0] + label.box[2]) / 2
+                    n = max(1, len(vl.text))
+                    best = min(re.finditer(r"[2Z][0O][0-9OIlSB]{2}-[0-9OIlSB]{2}-[0-9OIlSB]{2}", vl.text),
+                               key=lambda m: abs(vl.box[0] + (vl.box[2] - vl.box[0]) * (m.start() + m.end()) / 2 / n - cx))
+                    hit = (best.group(0), vl)
                 if hit:
                     got = hit
                     break
@@ -1628,6 +2058,11 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
             break
     out["rows"] = (_form_rows_boxed(doc) if doc.boxed else None) or _form_rows_text(doc)
     reqs = _form_requirements(doc)
+    if doc.ocr:
+        for row in out["rows"]:
+            for field in ("description", "material", "finish"):
+                row[field] = ocr_fix_words(row.get(field))
+        reqs = [ocr_fix_words(r) for r in reqs]
     out["requirements"] = reqs
     rows = doc.rows
     for r in rows:
@@ -1799,6 +2234,37 @@ def email_requirements(content: List[str], sents: List[str]) -> List[str]:
     return reqs
 
 
+# One part per line in the body: 'BWM-3105 Rev A, pivot pin, 17-4 PH stainless, condition H1025, passivated',
+# 'P/N 400-1187-02 Rev B, handle, Ti-6Al-4V ELI, qty 25/50', 'PL-1001 base plate, 6061-T6, 40 pcs'.
+PART_ROW_RE = re.compile(r"^\s*(?P<label>(?:P/N|PN|PART\s*(?:NUMBER|NO\.?|#))\s*[:#.]?\s*)?"
+                         r"(?P<pn>" + PN_BODY + r"|\d(?:\d|-(?=\d)){2,24}(?:-[A-Z0-9]{1,4})?)"
+                         r"\s*(?:,?\s*REV(?:ISION)?\.?\s*(?P<rev>[A-Z0-9]{1,2}))?\s*(?:(?P<sep>[,:-])\s*|\s+)(?P<rest>.+)$",
+                         re.IGNORECASE)
+# A list of quantities: numbers with thousands commas inside ('1,000'), joined by a slash, '&',
+# 'and', 'or', or a comma and a space. Each comma can be read only one way (inside a number when a
+# digit follows it, a separator when a space does), so a long run like '1,1,1,...' followed by no
+# unit fails in linear time instead of trying every split (the old pattern hung on it).
+_QTY_NUM = r"\d+(?:,\d+)*"
+_QTY_SEP = r"(?:\s*(?:/|&|;|\bAND\b|\bOR\b)\s*|,\s+)"
+_QTY_LIST = r"(" + _QTY_NUM + r"(?:" + _QTY_SEP + _QTY_NUM + r")*)"
+PART_QTY_RE = re.compile(r"\b(?:QTY|QUANTITY|QUANTITIES)\.?\s*(?:OF\s+)?[:=]?\s*" + _QTY_LIST +
+                         r"|" + _QTY_LIST + r"\s*(?:PCS|PC|PIECES|EA|UNITS|SETS)\b", re.IGNORECASE)
+
+
+def _email_pns(text: str) -> List["re.Match[str]"]:
+    """Part numbers in email text: the letter-prefixed kind anywhere, and any kind right after a
+    'P/N' or 'part number' label, in the order they appear, without overlaps."""
+    found = [m for m in PN_RE.finditer(text)]
+    for m in LABELED_PN_RE.finditer(text):
+        tok = m.group(1)
+        if not re.search(r"\d", tok) or _looks_like_date(tok) or any(f.start(1) <= m.start(1) < f.end(1) for f in found):
+            continue
+        if re.fullmatch(r"\d{1,3}", tok):
+            continue  # 'item 3', 'part # 12': a line number, not a part number
+        found.append(m)
+    return sorted(found, key=lambda m: m.start(1))
+
+
 def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     subject = clean(email.get("subject"))
     content, signature = split_body(email.get("body") or "", email.get("from_name") or "")
@@ -1813,10 +2279,17 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
         if m:
             rfq = (m.group(0).upper(), src)
             break
-        m = RFQ_NO_RE.search(text)
+        m = RFQ_NO_RE.search(text) or RFQ_PLAIN_NO_RE.search(text)
         if m:
             rfq = (m.group(1).upper(), src)
             break
+    if rfq and PN_RE.fullmatch(rfq[0]) and not re.fullmatch(r"(?:[A-Z]{1,5}-)?\d{2}-\d{3,5}", rfq[0]):
+        # "RFQ NA-7710: fitting" with "the attached drawing NA-7710 rev D" in the body: the number
+        # after RFQ is the part the RFQ is for, not a separate RFQ number
+        tok = re.escape(rfq[0])
+        if re.search(r"\b(?:DRAWING|DWG|PRINT|P/N|PN|PART(?:\s+(?:NUMBER|NO\.?))?)\s*[:#]?\s*" + tok + r"\b|\b" + tok +
+                     r"\s*,?\s*REV(?:ISION)?\.?\s*[A-Z0-9]{1,2}\b", subject + "\n" + "\n".join(content), re.IGNORECASE):
+            rfq = None
     out["rfq_number"] = rfq
     qref = None
     for src, text in (("subject", subject), ("email body", body_text)):
@@ -1825,19 +2298,33 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             qref = (m.group(1).upper(), src)
             break
     out["quote_ref"] = qref
-    revision = bool(qref) and bool(re.search(r"\b(?:UPDATE|REVISE|REVISED|REVISION|REQUOTE|RE-QUOTE|AGAINST REV|"
-                                              r"NEW REV|RELEASED REV)\b", (subject + " " + body_text).upper()))
-    revision = revision or bool(re.search(r"\b(?:REVISED QUOTE|UPDATE(?:D)? (?:OUR |THE |YOUR )?QUOTE|REQUOTE)\b",
-                                          body_text.upper()))
-    out["request"] = "quote revision" if revision else "new RFQ"
+    # a quote revision: a quote number plus words that change it, or an explicit ask to requote
+    revision_src = None
+    if qref:
+        for src, text in (("subject", subject), ("email body", body_text)):
+            if re.search(r"\b(?:UPDATE|REVISE|REVISED|REVISION|REQUOTE|RE-QUOTE|AGAINST REV|NEW REV|RELEASED REV)\b",
+                         text.upper()):
+                revision_src = src
+                break
+    for src, text in (("subject", subject), ("email body", body_text)):
+        if not revision_src and re.search(r"\b(?:REVISED QUOTE|UPDATE(?:D)? (?:OUR |THE |YOUR )?QUOTE|REQUOTE|RE-QUOTE)\b",
+                                          text.upper()):
+            revision_src = src
+    out["request"] = "quote revision" if revision_src else "new RFQ"
+    out["request_source"] = revision_src or (
+        "subject" if re.search(r"\bRFQ\b|\bRFP\b|QUOT|PRICING|\bPRICE\b|\bBID\b", subject.upper()) else "email body")
 
     # part numbers named in the email, with a rev when one sits next to them
     excluded = {fold(rfq[0])} if rfq else set()
     if qref:
         excluded.add(fold(qref[0]))
     pns: List[Dict[str, Any]] = []
+    overflow = False
     for src, text in (("subject", subject), ("email body", "\n".join(content))):
-        for m in PN_RE.finditer(text):
+        for m in _email_pns(text):
+            if len(pns) >= MAX_EMAIL_PNS:
+                overflow = True
+                break
             pn = m.group(1).upper()
             if (fold(pn) in excluded or pn.split("-")[0] in SPEC_PREFIXES or re.search(r"(?:^|-)RF[QP](?:-|$)", pn)
                     or any(fold(pn) == fold(e) or fold(pn).endswith(fold(e)) for e in excluded)):
@@ -1856,25 +2343,42 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             if not rev:
                 sent = next((s for s in re.split(r"(?<=[.!?])\s+", text) if pn in s.upper()), "")
                 r = re.search(r"\bREV(?:ISION)?\.?\s+([A-Z0-9]{1,2})\s+OF\b", sent, re.IGNORECASE)
-                if r and len(set(PN_RE.findall(sent))) == 1:
+                if r and len({x.group(1).upper() for x in _email_pns(sent)}) == 1:
                     rev = r.group(1).upper()
             hit = next((p for p in pns if fold(p["pn"]) == fold(pn)), None)
             if hit:
-                hit["rev"] = hit["rev"] or rev
+                if rev and not hit["rev"]:
+                    hit["rev"], hit["rev_src"] = rev, src
+                hit["ref"] = hit["ref"] and ref  # named as a part to quote anywhere: it is one
                 continue
-            pns.append({"pn": pn, "rev": rev, "src": src, "pos": m.start(), "ref": ref})
+            pns.append({"pn": pn, "rev": rev, "rev_src": src if rev else None, "src": src, "pos": m.start(),
+                        "ref": ref})
     out["part_numbers"] = pns
+    out["pn_overflow"] = overflow
 
     # per-part lines in the body ("BWM-3105 Rev A, pivot pin, 17-4 PH stainless, condition H1025, passivated")
-    per_part: Dict[str, Dict[str, Optional[str]]] = {}
+    per_part: Dict[str, Dict[str, Any]] = {}
     part_rows = set()
     for ln in content:
-        m = re.match(r"^\s*(?:P/N\s*)?(" + PN_BODY + r")\s*(?:,?\s*REV\.?\s*([A-Z0-9]{1,2}))?\s*[,:-]\s*(.+)$",
-                     ln, re.IGNORECASE)
+        m = PART_ROW_RE.match(ln)
         if not m:
             continue
-        fields = [f.strip() for f in re.split(r",\s*", m.group(3)) if f.strip()]
-        info: Dict[str, Optional[str]] = {"description": None, "material": None, "finish": None}
+        label, pn, rest = m.group("label"), m.group("pn"), m.group("rest")
+        if not re.search(r"[A-Za-z]", pn) and not (label and re.search(r"-|\d{5}", pn)):
+            continue  # '25 pcs of ...': a number starts the line, not a part number
+        if not m.group("sep"):
+            # 'PL-1001 base plate, 6061-T6, 40 pcs' is a row; 'QA-41127 is the bracket we quoted' is a sentence
+            first = rest.split(",")[0]
+            if "," not in rest or len(first.split()) > 5 or re.match(
+                    r"(?:is|was|are|were|has|have|had|will|would|should|can|could|needs?|requires?|and|or|to|in|at|"
+                    r"on|for|from|with|of|as)\b", first, re.IGNORECASE):
+                continue
+        info: Dict[str, Any] = {"description": None, "material": None, "finish": None, "quantities": None}
+        q = PART_QTY_RE.search(rest)
+        if q:
+            info["quantities"] = parse_quantities(q.group(1) or q.group(2))[0]
+            rest = (rest[:q.start()] + rest[q.end():]).strip(" ,;")
+        fields = [f.strip(" .") for f in re.split(r",\s*", rest) if f.strip(" .")]
         mat: List[str] = []
         for f in fields:
             if FINISH_RE.search(f) and not info["finish"]:
@@ -1886,7 +2390,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             elif not info["description"] and not mat:
                 info["description"] = f
         info["material"] = ", ".join(mat) or None
-        per_part[fold(m.group(1))] = info
+        per_part[fold(pn)] = info
         part_rows.add(ln)
     out["per_part"] = per_part
     # material and finish said for the whole email come from the other sentences: a per-part row's
@@ -1930,13 +2434,17 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
         if q:
             qty, qty_text = q, src_text
             break
-    for s in [subject] + sents:
-        up = s.upper()
-        if re.search(r"\bANNUAL|PER YEAR|/\s*YR\b|A YEAR\b|\bEAU\b|YEARLY|USAGE\b|\bVOLUME\b", up):
+    for s in [subject] + general:
+        # A quantity is stated near the start of its sentence. The number-list patterns below
+        # backtrack over every item of a long list, so an endless "sentence" (a pasted table with
+        # no full stops: 3,000 numbers took 11 s) is read only as far as a real one would go.
+        up = s.upper()[:MAX_SENTENCE_CHARS]
+        if re.search(r"\bANNUAL|PER YEAR|/\s*YR\b|A YEAR\b|\bEAU\b|YEARLY|USAGE\b|\bVOLUME\b|PER ANNUM", up):
             m = re.search(r"(?:ANNUAL\s+(?:USAGE|VOLUME)|USAGE|EAU|VOLUME)[A-Z ]{0,30}?(?:IS|OF|:)?\s*(?:ABOUT|AROUND|"
                           r"APPROX\.?|APPROXIMATELY|ROUGHLY|~)?\s*(\d[\d,.]*K?)\s*(?:PCS|PIECES|EA|UNITS)?", up)
             if not m:
-                m = re.search(r"(\d[\d,.]*K?)\s*(?:PCS|PIECES)?\s*(?:/\s*YR|PER YEAR|A YEAR|ANNUALLY)", up)
+                m = re.search(r"(\d[\d,.]*K?)\s*(?:PCS|PIECES|UNITS|SETS|EA)?\s*(?:/\s*YR|PER YEAR|A YEAR|ANNUALLY|"
+                              r"PER ANNUM)", up)
             if m and _num(m.group(1)) and annual is None:
                 annual = _num(m.group(1))
         if qty:
@@ -1945,32 +2453,33 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
         if m:
             qty, qty_text = [_num(m.group(1))], s
             continue
-        m = re.search(r"\bQUANTIT(?:Y|IES)\s*[:=]?\s*((?:\d[\d,]*\s*(?:PCS|PIECES)?\s*(?:/|,|AND|&)?\s*)+)", up)
+        m = re.search(r"\bQUANTIT(?:Y|IES)\s*(?:OF\s+)?[:=]?\s*((?:\d[\d,]*\s*(?:PCS|PIECES)?\s*(?:/|,|AND|&)?\s*)+)", up)
         if m and _num(m.group(1).split()[0].strip(",/")):
             q, _ = parse_quantities(m.group(1))
             if q:
                 qty, qty_text = q, s
                 continue
-        m = re.search(r"\bQTY\.?\s*[:=]?\s*(\d[\d,]*(?:\s*(?:/|,)\s*\d[\d,]*)*)", up)
+        m = re.search(r"\bQTY\.?\s*(?:OF\s+)?[:=]?\s*(\d[\d,]*(?:\s*(?:/|,|AND|&)\s*\d[\d,]*)*)", up)
         if m:
             q, _ = parse_quantities(m.group(1))
             if q:
                 qty, qty_text = q, s
                 continue
         scrub = PN_RE.sub(" ", up)
-        scrub = re.sub(r"\b[A-Z]+\d[\w-]*|\b\d+[A-Z][\w-]*", " ", scrub)  # 316L, 6061-T6, H1025
+        scrub = re.sub(r"\b[A-Z]+\d[\w-]*|\b\d+(?!(?:EA|PCS?)\b)[A-Z][\w-]*", " ", scrub)  # 316L, 6061-T6, H1025
         scrub = re.sub(r"\(.*?\)", " ", scrub)
         scrub = re.sub(r"\b(?:POSSIBLY|MAYBE|PERHAPS)\s+\d[\d,]*\s+MORE\b.*", " ", scrub)
         scrub = re.sub(r"\b\d[\d,]*\s+MORE\b", " ", scrub)
         if re.search(r"ANNUAL|PER YEAR|/\s*YR|USAGE|VOLUME", scrub):
             continue
-        m = re.search(r"((?:\d[\d,]*\s*(?:,|/|AND|&|OR)\s*)*\d[\d,]*)\s*(?:PCS|PC|PIECES|EA|UNITS)\b", scrub)
-        if m:
-            q, _ = parse_quantities(m.group(1))
-            if q:
-                qty, qty_text = q, s
-                continue
-        m = re.search(r"\b(?:QUOTE|QUOTATION|PRICING|PRICE)\s+(?:FOR|ON)\s+(\d[\d,]*)\s+[A-Z]", scrub)
+        # every "N pcs" of the sentence: "2 pcs for prototype and 50 pcs for production"
+        found: List[int] = []
+        for m in re.finditer(_QTY_LIST + r"\s*(?:PCS|PC|PIECES|EA|UNITS|SETS)\b", scrub):
+            found += [n for n in (parse_quantities(m.group(1))[0] or []) if n not in found]
+        if found and len(found) <= MAX_BREAKS:
+            qty, qty_text = found, s
+            continue
+        m = re.search(r"\b(?:QUOTE|QUOTATION|PRICING|PRICE)\s+(?:FOR\s+|ON\s+)?(\d[\d,]*)\s+[A-Z]", scrub)
         # "blanket pricing for 3 enclosure covers" counts part numbers, not pieces
         if m and s is not subject and not (_num(m.group(1)) == len(pns) and len(pns) > 1):
             qty, qty_text = [_num(m.group(1))], s
@@ -1979,6 +2488,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
 
     # descriptions: the words before a part number, the subject, or "12 gimbal yokes"
     descs: Dict[str, str] = {}
+    desc_src: Dict[str, str] = {}
     body_join = "\n".join(content)
     for p in pns:
         text = subject if p["src"] == "subject" else body_join
@@ -1988,10 +2498,29 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
         before = re.sub(r"[,\s]*(?:P/N|PN|PART(?:\s+NUMBER)?|#)?[\s,]*$", "", before, flags=re.IGNORECASE)
         m = re.search(r"(?:\b(?:the attached|attached|the|a|an|our|your|this|of|on|for)\s+)((?:[a-z][a-z0-9-]*\s*){1,5})$",
                       before)
+        d = ""
         if m:
-            d = re.sub(r"^(?:a|an|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
+            d = re.sub(r"^(?:(?:a|an|the|our|your|this|these|those|attached|enclosed|following)\s+)+", "",
+                       m.group(1).strip() + " ", flags=re.IGNORECASE).strip()
+        if not d:
+            # "for the QA-40988 brackets": nothing but an article before the number, so the noun
+            # after it, when it names a kind of part
+            a = re.match(r"\s*(?:,?\s*rev\.?\s*[A-Z0-9]{1,2}\s*)?([a-z][a-z-]*(?:\s+[a-z][a-z-]*){0,2})(?=[\s,.;:!?]|$)",
+                         text[idx + len(p["pn"]):] if idx >= 0 else "")
+            words = a.group(1).split() if a else []
+
+            def noun(w: str) -> bool:
+                w = w.upper()
+                return w in PART_NOUNS or w[:-1] in PART_NOUNS and w.endswith("S") or \
+                    w[:-2] in PART_NOUNS and w.endswith("ES")
+            while words and not noun(words[-1]):
+                words.pop()
+            d = " ".join(words)
+        if d:
             if not re.search(r"\b(?:drawing|print|rfq|file|scan|photo|model|step|quote|pdf|package|revision|rev)\b", d):
-                descs.setdefault(fold(p["pn"]), d)
+                if fold(p["pn"]) not in descs:
+                    descs[fold(p["pn"])] = d
+                    desc_src[fold(p["pn"])] = "subject" if p["src"] == "subject" else "email body"
     sub_desc = None
     m = re.search(r"(?:\bRFQ\b[^:]*|QUOTE REQUEST|REQUEST FOR QUOTE|QUOTE|RFQ)\s*:\s*(.+)$", subject, re.IGNORECASE)
     if m:
@@ -2005,9 +2534,11 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     qty_desc = None
     m = re.search(r"\b(?:quote|quotation|pricing|price)\s+(?:for|on)\s+\d[\d,]*\s+([a-z][a-z -]{2,40}?)(?:\s+in\b|\s+of\b|,|\.|$)",
                   body_text)
-    if m:
-        qty_desc = m.group(1).strip()
+    if m and not re.match(r"(?:pieces?|pcs?|units?|ea|each|sets? of|qty|off|of|the|parts?|items?|more)\b", m.group(1),
+                          re.IGNORECASE):
+        qty_desc = m.group(1).strip()  # '150 pieces of part number 7731-004' names no part kind
     out["descriptions"], out["subject_description"], out["qty_description"] = descs, sub_desc, qty_desc
+    out["description_sources"] = desc_src
 
     # sizes stated in the email
     size = None
@@ -2108,10 +2639,11 @@ def materials_agree(a: Optional[str], b: Optional[str]) -> bool:
     return not (conds_a and conds_b and not (conds_a & conds_b))
 
 
-FINISH_FAMILIES = [("anodize", r"ANODI"), ("passivate", r"PASSIVAT"), ("chem film", r"CHEM\w*\s+FILM|CONVERSION|ALODINE"),
+FINISH_FAMILIES = [("anodize", r"ANODI|HARD\s*COAT"), ("passivate", r"PASSIVAT"),
+                   ("chem film", r"CHEM\w*\s+FILM|CONVERSION|ALODINE"),
                    ("electroless nickel", r"ELECTROLESS"), ("black oxide", r"BLACK\s+OXIDE"),
                    ("powder coat", r"POWDER"), ("paint", r"PAINT"), ("zinc", r"ZINC"), ("gold", r"GOLD"),
-                   ("none", r"^NONE\b")]
+                   ("none", r"^NONE\b|NO\s+FINISH|AS[- ]MACHINED")]
 
 
 def finishes_agree(a: Optional[str], b: Optional[str]) -> bool:
@@ -2147,10 +2679,37 @@ def _v(value: Any = None, source: Optional[str] = None, **extra: Any) -> Dict[st
 
 
 def lookup_customer(from_email: str, shop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    domain = (from_email or "").split("@")[-1].lower().strip()
-    for customer in (shop or {}).get("customers", []):
-        if customer.get("domain", "").lower() == domain:
+    domain = clean(from_email).split("@")[-1].lower().strip()
+    customers = shop.get("customers") if isinstance(shop, dict) else None
+    for customer in customers if isinstance(customers, list) else []:
+        if domain and isinstance(customer, dict) and clean(customer.get("domain")).lower() == domain:
             return customer
+    return None
+
+
+def email_view(email: Any) -> Dict[str, Any]:
+    """The email with every field this module reads as plain text of a sane length, whatever the
+    caller passed (a missing body, a number for a subject, a 5 MB pasted log). The id and the
+    received time are kept as they are: they identify the email, they are not parsed."""
+    e = email if isinstance(email, dict) else {}
+    out = dict(e)
+    for key in ("subject", "from_name", "from_email"):
+        out[key] = guard(e.get(key), 2_000).strip()
+    out["body"] = guard(e.get("body"), MAX_BODY_CHARS)
+    atts = e.get("attachments")
+    out["attachments"] = list(atts) if isinstance(atts, (list, tuple)) else []
+    return out
+
+
+def _decided(decision: Any) -> Optional[bool]:
+    """Jev's is_rfq answer when the decision holds one (a bool, or a plain yes / no string)."""
+    if not isinstance(decision, dict):
+        return None
+    v = decision.get("is_rfq")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str) and v.strip().lower() in ("true", "yes", "1", "false", "no", "0"):
+        return v.strip().lower() in ("true", "yes", "1")
     return None
 
 
@@ -2159,8 +2718,10 @@ def is_rfq(email: Dict[str, Any], decision: Optional[Dict[str, Any]] = None) -> 
     email is not an order (placing, changing, releasing, or chasing a PO) or a sales pitch.
     A question about what 'something like this' would cost, with no part named, is a capability
     question for a person to answer, not an RFQ (E17 in the beta inbox)."""
-    if decision and "is_rfq" in decision:
-        return bool(decision["is_rfq"])
+    decided = _decided(decision)
+    if decided is not None:
+        return decided
+    email = email_view(email)
     subject = clean(email.get("subject")).upper()
     content, _ = split_body(email.get("body") or "", email.get("from_name") or "")
     body = " ".join(content).upper()
@@ -2181,6 +2742,13 @@ def is_rfq(email: Dict[str, Any], decision: Optional[Dict[str, Any]] = None) -> 
                     r"\bBLANKET PRICING\b|\bLOOKING FOR PRICING\b|\bQUOTE\b.*\b(?:PCS|QTY|DRAWING)\b|\bUPDATE (?:OUR |THE )?QUOTE\b|"
                     r"\bA QUOTE\b",
                     text)
+    # "What would you charge for 50 of these?" asks for a price once it names a part or a quantity;
+    # "What would something like this cost?" about unnamed parts is a capability question (E17)
+    price_q = re.search(r"\bWHAT WOULD (?:YOU|IT) CHARGE\b|\bHOW MUCH (?:WOULD|WILL|FOR|IS|ARE)\b|"
+                        r"\bWHAT (?:WOULD|WILL)\b.{0,40}\bCOST\b|\bWHAT(?:'S| IS| WOULD BE) (?:THE|YOUR) (?:PRICE|COST)\b", text)
+    if price_q and not ask and (_email_pns(subject + "\n" + body) or re.search(
+            r"\b\d[\d,]*\s*(?:PCS|PIECES|EA|UNITS|SETS|OF THESE|OF THEM|OF EACH)\b|\bQTY\b", text)):
+        ask = price_q
     explicit = re.search(r"\bRFQ\b|REQUEST FOR (?:A )?QUOT|\bQUOTE REQUEST\b|\bPLEASE QUOTE\b|\bNEED A QUOTE\b|"
                          r"\bUPDATE (?:OUR |THE )?QUOTE\b", text)
     if pitch and not re.search(r"\bRFQ\b|REQUEST FOR QUOT", subject):
@@ -2229,23 +2797,30 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             decision: Optional[Dict[str, Any]] = None, *, today: Optional[dt.date] = None) -> Dict[str, Any]:
     """One RFQ record from an email and the ocr.file_text result of each attachment. Relative dates
     ("next Friday") resolve against `today`, else the day the email arrived when it says, else today."""
+    email = email_view(email)
     today = today or _email_date(email) or dt.date.today()
-    texts = texts or {}
+    texts = texts if isinstance(texts, dict) else {}
     em = parse_email(email, today)
     check: List[str] = []
 
     # attachments
     docs: List[Doc] = []
     for att in email.get("attachments") or []:
-        name = att.get("name") if isinstance(att, dict) else str(att)
-        media = (att.get("media") if isinstance(att, dict) else "") or Path(name or "").suffix.lstrip(".").lower()
+        raw_name = att.get("name") if isinstance(att, dict) else att
+        name = clean(raw_name) or "attachment"
+        media = clean(att.get("media") if isinstance(att, dict) else "").lower() or \
+            Path(name).suffix.lstrip(".").lower()
         media = {"stp": "step", "jpeg": "jpg"}.get(media, media)
-        doc = Doc(name, media, texts.get(name))
+        result = texts.get(raw_name) if isinstance(raw_name, str) else None
+        doc = Doc(name, media, result if result is not None else texts.get(name))
         doc.kind, doc.capture = classify(doc) if doc.text else (
             ("3D model" if media == "step" else "photo" if media == "jpg" else "screenshot" if media == "png" else "other"),
             "digital")
         docs.append(doc)
     email_pns = [p["pn"] for p in em["part_numbers"] if not p.get("ref")]
+    if em.get("pn_overflow"):
+        check.append(f"The email names more than {MAX_EMAIL_PNS} part numbers (a parts list?); only the first "
+                     f"{MAX_EMAIL_PNS} were read")
     for doc in docs:
         if doc.kind == "RFQ form":
             doc.parsed = parse_form(doc)
@@ -2398,12 +2973,13 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             hit = find_line(row["part_number"], allow_prefix=False)
             ln = hit[0] if hit else new_line(row["part_number"])
             conf = row.get("conf") if f.ocr else None
+            qconf = row.get("qty_conf", conf) if f.ocr else None
             add(ln, "part_number", "form", row["part_number"], f.label, conf)
             add(ln, "rev", "form", row.get("rev"), f.label, conf)
             add(ln, "description", "form", row.get("description"), f.label, conf)
             add(ln, "material", "form", row.get("material"), f.label, conf)
             add(ln, "finish", "form", row.get("finish"), f.label, conf)
-            add(ln, "quantities", "form", row.get("quantities"), f.label, conf)
+            add(ln, "quantities", "form", row.get("quantities"), f.label, qconf)
             if not row.get("qty_complete", True):
                 ln["_qty_complete"] = False
     # drawings: one line each, or every dash-number line of the form that starts with the drawing number
@@ -2422,6 +2998,9 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                 conf.get("title") if d.ocr else None)
             add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material") if d.ocr else None)
             add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish") if d.ocr else None)
+        for field, label in (p.get("cut") or {}).items():
+            check.append(f"The {'description' if field == 'title' else field} on {d.name} stops at '{label}' with "
+                         f"nothing readable after it; the rest of the callout may be missing")
     unnumbered = [d for d in docs if d.kind == "drawing" and not d.parsed.get("part_number")]
     for d in models:
         p = d.parsed
@@ -2440,9 +3019,10 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                 continue
             targets = [new_line(p["pn"])]
         src = "subject" if p["src"] == "subject" else "email body"
+        rev_src = "subject" if p.get("rev_src") == "subject" else "email body"
         for ln in targets:
             add(ln, "part_number", "email", p["pn"], src)
-            add(ln, "rev", "email", p.get("rev"), src)
+            add(ln, "rev", "email", p.get("rev"), rev_src)
     if not lines:
         new_line(None)
     # A drawing whose number OCR could not read still describes a part: when the RFQ has one
@@ -2467,15 +3047,22 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             add(ln, "description", "email", info.get("description"), "email body")
             add(ln, "material", "email", info.get("material"), "email body")
             add(ln, "finish", "email", info.get("finish"), "email body")
-        desc = em["descriptions"].get(ln["_key"]) or next(
-            (v for k, v in em["descriptions"].items() if ln["_key"].startswith(k)), None)
+            add(ln, "quantities", "email", info.get("quantities"), "email body")
+        dkey = ln["_key"] if ln["_key"] in em["descriptions"] else next(
+            (k for k in em["descriptions"] if ln["_key"] and ln["_key"].startswith(k)), None)
+        desc = em["descriptions"].get(dkey) if dkey else None
+        dsrc = em["description_sources"].get(dkey, "email body") if dkey else None
         if not desc and len(lines) == 1:
-            desc = em["subject_description"] or em["qty_description"]
-        add(ln, "description", "email", desc, "email body" if desc in em["descriptions"].values() else "subject")
+            if em["subject_description"]:
+                desc, dsrc = em["subject_description"], "subject"
+            elif em["qty_description"]:
+                desc, dsrc = em["qty_description"], "email body"
+        add(ln, "description", "email", desc, dsrc or "email body")
         if not info:
             add(ln, "material", "email", em["material"], "email body")
             add(ln, "finish", "email", em["finish"], "email body")
-        add(ln, "quantities", "email", qty, "email body")
+        if not (info and info.get("quantities")):
+            add(ln, "quantities", "email", qty, "email body")
         add(ln, "annual_usage", "email", em["annual_usage"], "email body")
         add(ln, "size", "email", em["size"], "email body")
 
@@ -2556,9 +3143,16 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                     check.append(f"Line {n} quantities may be incomplete: OCR could not read every break in {source}")
             if ocr_win and conf is not None and conf < LOW_OCR_CONF and field in ("part_number", "rev", "quantities"):
                 confirmed = any("(OCR" not in s2 and fold(str(v2)) == fold(str(value)) for _, v2, s2, _ in c[field])
+                if field == "quantities" and ln["_qty_complete"] and all(a < b for a, b in zip(value, value[1:])):
+                    # Tesseract scores a slash list like '25/ 75/150' near 0 even when every digit is
+                    # right, so for breaks the score says little: a list that read completely into
+                    # rising breaks needs no note; a partial or jumbled one gets it
+                    confirmed = True
                 if not confirmed:
-                    check.append(f"Line {n} {field.replace('_', ' ')} read by OCR at {conf:.0f}% confidence "
-                                 f"from {source}: verify")
+                    shown = " / ".join(map(str, value)) if isinstance(value, list) else value
+                    check.append(f"Line {n} {field.replace('_', ' ')} {shown}: OCR read it at {conf:.0f}% confidence "
+                                 f"on {re.sub(r' [(](?:OCR|text layer|STEP header)[^)]*[)]$', '', source)} "
+                                 f"and no other source confirms it; verify")
             rec[field] = _v(value, source)
         out_lines.append(rec)
 
@@ -2575,7 +3169,11 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
     elif any(not (ln["quantities"]["value"] or ln["annual_usage"]["value"]) for ln in out_lines):
         missing.append("quantity for some lines")
     has_drawing = any(d.kind in ("drawing", "3D model") for d in docs)
-    if not has_drawing and not em["drawing_links"]:
+    # A PDF or picture nobody could read (no OCR on this server, a broken file) may well be the
+    # drawing: the note below says it could not be read, so it is not reported as never sent.
+    unread = any((d.method == "none" or not d.text) and d.media in ("pdf", "jpg", "png", "tif", "tiff", "dxf", "dwg")
+                 for d in docs)
+    if not has_drawing and not unread and not em["drawing_links"]:
         missing.append("drawing")
     if em["drawing_links"] and not has_drawing:
         check.append("Drawings are behind a link, not attached: " + ", ".join(em["drawing_links"]))
@@ -2586,13 +3184,20 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
     for d in docs:
         if d.method == "none" or not d.text:
             check.append(f"No text could be read from {d.name}" + (f" ({d.error})" if d.error else ""))
+        elif d.kind == "other":
+            # read, but not recognizably a drawing, an RFQ form, or a model: a spec sheet, terms, or
+            # a scan OCR could not make sense of; a person should look before the quote goes out
+            check.append(f"{d.name} is not recognizably a drawing, RFQ form, or model"
+                         + (f" (OCR {d.conf:.0f}%)" if d.ocr and d.conf is not None else "") + "; look at it")
 
     routing = None
-    if decision:
-        due = decision.get("due") or {}
+    if isinstance(decision, dict) and any(decision.get(k) for k in ("lane", "lane_name", "owner", "priority", "due")):
+        due = decision.get("due")
+        quote_by = due.get("date") if isinstance(due, dict) else due if isinstance(due, str) else None
         routing = {"lane": decision.get("lane_name") or decision.get("lane"), "lane_id": decision.get("lane"),
                    "estimator": decision.get("owner"), "priority": decision.get("priority"),
-                   "quote_by": due.get("date") if isinstance(due, dict) else None}
+                   "quote_by": quote_by if isinstance(quote_by, str) and re.fullmatch(r"20\d\d-\d\d-\d\d", quote_by)
+                   else None}
 
     seen = set()
     check = [c for c in check if not (c in seen or seen.add(c))]
@@ -2601,7 +3206,12 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         "is_rfq": is_rfq(email, decision),
         "customer": customer, "customer_source": customer_src, "customer_tier": cust.get("tier") if cust else None,
         "contact": clean(email.get("from_name")) or None, "contact_email": clean(email.get("from_email")) or None,
+        # the sender's name and address come from the message header; the UI shows them with the
+        # other values and their sources, so these say where they were read like the rest
+        "contact_source": "email header" if clean(email.get("from_name")) else None,
+        "contact_email_source": "email header" if clean(email.get("from_email")) else None,
         "rfq_number": rfq_number, "quote_ref": quote_ref, "request": em["request"],
+        "request_source": em["request_source"],
         "respond_by": respond, "delivery": delivery, "terms": terms,
         "requirements": requirements, "export_control": export,
         "lines": out_lines, "files": files, "missing": missing, "check": check, "routing": routing,
@@ -2635,6 +3245,9 @@ def _cell(value: Any) -> str:
     if value is None:
         return ""
     s = re.sub(r"\s*[\r\n]+\s*", " ", str(value)).replace("\x00", "")  # one spreadsheet row per part line
+    s = _SURROGATES.sub("�", s)  # the id and received time are passed through as they came
+    if len(s) > 32_000:
+        s = s[:32_000] + " ..."  # Excel cuts a cell at 32,767 characters
     if s[:1] in ("=", "+", "@", "\t", "\r") or (s[:1] == "-" and len(s) > 1 and not re.match(r"-\d", s)):
         return "'" + s
     return s
@@ -2668,12 +3281,14 @@ def to_csv(records: List[Dict[str, Any]], bom: bool = False) -> str:
                 "; ".join(r.get("missing") or []), "; ".join(r.get("check") or []),
                 routing.get("lane"), routing.get("estimator"), routing.get("priority"), routing.get("quote_by")]])
     text = buf.getvalue()
-    return ("﻿" + text) if bom else text
+    return ("\ufeff" + text) if bom else text
 
 
 def to_json(records: List[Dict[str, Any]]) -> str:
-    return json.dumps({"about": "RFQ details extracted by rfq_details.py: one record per RFQ email, every value "
+    text = json.dumps({"about": "RFQ details extracted by rfq_details.py: one record per RFQ email, every value "
                                 "with the place it came from.", "records": records}, indent=1, ensure_ascii=False) + "\n"
+    # a lone surrogate (from a broken \ud83d escape in the inbox JSON) cannot be written as UTF-8
+    return _SURROGATES.sub("�", text)
 
 
 # --------------------------------------------------------------------------- #
@@ -2785,7 +3400,8 @@ def _source_kind(field: str, where: List[str], files: Dict[str, Dict[str, Any]],
         for w, f in typed:
             return f.get("text", "text layer")
         return "email"
-    order = ("RFQ form", "drawing") if field in ("quantities", "respond_by") else ("drawing", "RFQ form", "3D model")
+    order = ("RFQ form", "drawing") if field in ("quantities", "respond_by", "delivery") else \
+        ("drawing", "RFQ form", "3D model")
     for t in order:
         if by_type.get(t):
             return files[by_type[t][0]].get("text", "text layer")
@@ -2811,6 +3427,8 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
             add(eid, field, _text_ok(r.get(field), {"value": t[field]}), "email", r.get(field), t[field], False)
         add(eid, "customer_tier", r.get("customer_tier") == t.get("customer_tier"), "email", r.get("customer_tier"),
             t.get("customer_tier"), False)
+        for field in ("contact", "contact_email"):
+            add(eid, field, (r.get(field) or None) == t.get(field), "email", r.get(field), t.get(field), False)
         for field in ("rfq_number", "quote_ref"):
             tv = t[field]
             got = (r.get(field) or {}).get("value")
@@ -2824,6 +3442,13 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
         where = tv.get("where") or []
         add(eid, "respond_by", got == tv.get("value"), _source_kind("respond_by", where, files, tv.get("value")),
             got, tv.get("value"), bool(where) and not any(w in ("email", "subject") for w in where))
+        tv = t.get("delivery") or {"value": None}
+        got = (r.get("delivery") or {}).get("value")
+        where = tv.get("where") or []
+        # the sentence that says when parts are needed counts when it holds the key's words
+        ok = _text_ok(got, tv) or bool(tv.get("value") and got and norm(tv["value"]) in norm(got))
+        add(eid, "delivery", ok, _source_kind("delivery", where, files, tv.get("value")), got, tv.get("value"),
+            bool(where) and not any(w in ("email", "subject") for w in where))
         tv = t["export_control"]
         got = (r.get("export_control") or {}).get("value")
         where = tv.get("where") or []
@@ -2869,7 +3494,8 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
             gl = got_lines[match] if match is not None else {}
             if match is not None:
                 used.add(match)
-            for field in ("part_number", "rev", "description", "material", "finish", "quantities", "annual_usage"):
+            for field in ("part_number", "rev", "description", "material", "finish", "quantities", "annual_usage",
+                          "size"):
                 tv = tl.get(field) or {"value": None}
                 got = (gl.get(field) or {}).get("value")
                 if field in ("part_number", "rev"):
@@ -2893,6 +3519,9 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
             if tf:
                 add(eid, "file type", f["type"] == tf["type"], tf.get("text", "text layer"), f["type"], tf["type"],
                     False)
+                if tf.get("capture"):
+                    add(eid, "file capture", f.get("capture") == tf["capture"], tf.get("text", "text layer"),
+                        f.get("capture"), tf["capture"], False)
     for eid in truth.get("not_rfq") or []:
         if eid in by_id:
             add(eid, "is_rfq", False, "email", "RFQ", "not an RFQ", False)

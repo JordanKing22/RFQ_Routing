@@ -1,5 +1,5 @@
 {
- "about": "Hand-checked answer key for rfq_details.py on the beta inbox (data/rfq_beta/emails.json). Attachment values come from the specs that printed each file (tests/rfq_beta_truth.json); email values from reading each body. Today is 2026-09-25 (a Friday). 'where' lists every place a value appears ('subject', 'email', or a file name); a value whose 'where' has no 'subject' or 'email' appears only in an attachment. 'accept' lists other correct wordings. 'email' and 'form' on material and finish show the shorter wording those sources use; the drawing wins.",
+ "about": "Hand-checked answer key for rfq_details.py on the beta inbox (data/rfq_beta/emails.json). Attachment values come from the specs that printed each file (tests/rfq_beta_truth.json); email values from reading each body. Today is 2026-09-25 (a Friday). 'where' lists every place a value appears ('subject', 'email', or a file name); a value whose 'where' has no 'subject' or 'email' appears only in an attachment. 'accept' lists other correct wordings. 'email' and 'form' on material and finish show the shorter wording those sources use; the drawing wins. 'delivery' is the sentence or form line that says when parts are needed; a value that contains the key's wording counts. 'contact' and 'contact_email' come from the message header.",
  "today": "2026-09-25",
  "not_rfq": [
   "E10",
@@ -178,7 +178,7 @@
    "email": "E71",
    "type": "drawing",
    "text": "OCR",
-   "capture": "screen"
+   "capture": "screenshot"
   },
   "WS-4471_RevB.pdf": {
    "email": "E72",
@@ -1351,14 +1351,15 @@
       ]
      },
      "finish": {
-      "value": "Passivate per ASTM A967, then precision clean for high vacuum and double bag",
+      "value": "Passivate per ASTM A967",
       "where": [
        "email"
       ],
       "accept": [
-       "Passivate per ASTM A967",
-       "Passivate per ASTM A967, then precision clean for high vacuum"
-      ]
+       "Passivate per ASTM A967, then precision clean for high vacuum",
+       "Passivate per ASTM A967, then precision clean for high vacuum and double bag"
+      ],
+      "why": "The finish is the passivation; 'precision clean for high vacuum and double bag' is its own requirement (listed under requirements), so the longer wording is accepted but not preferred."
      },
      "quantities": {
       "value": [
