@@ -11,6 +11,11 @@ Rerun everything here with:
     python ocr.py --evaluate --heldout                # the 25 held-out pages the search never saw
     python ocr.py --evaluate --search --type scan     # the settings search for one kind of file
     python ocr.py --evaluate --settings best --model /path/to/tessdata_best
+    python ocr.py --evaluate --settings best --regions title_block:6:600   # a region crop read again
+    python rfq_details.py --check --heldout           # extraction on the held-out pages
+
+Every OCR'd page is also run through the YOLO region detector (`layout.py`), so each line knows
+the region it was printed in and the extractor's sources name it; see "Regions" at the end.
 
 ## The chosen settings
 
@@ -81,10 +86,14 @@ drawings, which have no dark bands, read exactly as before. The before-and-after
 time, model, and version tables below are the final run with both changes; the search tables
 were made before them.
 
-Settings that never helped anywhere: `-c preserve_interword_spaces=1` and the word lists off
-(`load_system_dawg=0`, `load_freq_dawg=0`) gave exactly the same words as the same settings
-without them on all five kinds (the TSV output lists words one by one, so kept spaces do not
-show, and the LSTM model hardly leans on the word lists); `autocontrast`, `unsharp`, and
+Settings that never helped anywhere: `-c preserve_interword_spaces=1` gave exactly the same
+words as the same settings without it on all five kinds (the TSV output lists words one by
+one, so kept spaces do not show). The word lists off (`-c load_system_dawg=0 -c
+load_freq_dawg=0`) also gave exactly the same words, but not because the model ignores its word
+list: with `--oem 1` these variables never reach the LSTM recognizer, which loads its own word
+lists with default settings (`LSTMRecognizer::LoadDictionary`, Tesseract 5.3 and 5.5), so the
+output is byte for byte the same. A model with the word list really removed reads differently,
+and worse (see "Third review"); `autocontrast`, `unsharp`, and
 `color` never gained a key and lost some on most kinds; `deskew` lost keys on the scans,
 copier, and fax and changed nothing on the photo and screenshot, for 0.4 to 1.1 CPU seconds a page (the skews here
 are 1.4 degrees at most, which Tesseract follows by itself); `--psm 6` (one uniform block)
@@ -154,30 +163,38 @@ screenshot, where the viewer's toolbar is now read with the page.
 ## The held-out check
 
 `python ocr.py --evaluate --heldout`: the 25 "check" pages (5 drawings the search never saw,
-each through the five effects), scored with the final settings. These pages carry random noise
-that changes from run to run (see "Review"); this table is the sample that command gives in a
-fresh process, and three more samples are in the review.
+each through the five effects), scored with the final settings. The pages are rendered from
+the specs by `drawings.py` at run time, so they change when the drawings change, and the
+generator's scan and fax noise changes from run to run (see "Review"). This table is the
+command's output after the drawings review was merged into this branch (the third review
+below); the search, and the review's noise samples, used the drawings as they were before.
 
 | kind | pages | keys, before | keys, best | keys, fast | word F1, before | word F1, best | word F1, fast |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| scan | 5 | 16/20 | 19/20 | 19/20 | 0.856 | 0.921 | 0.890 |
-| copier | 5 | 15/20 | 14/20 | 14/20 | 0.823 | 0.823 | 0.823 |
-| fax | 5 | 13/20 | 16/20 | 15/20 | 0.871 | 0.864 | 0.854 |
-| photo | 5 | 16/20 | 16/20 | 17/20 | 0.795 | 0.878 | 0.820 |
-| screen | 5 | 16/20 | 18/20 | 18/20 | 0.864 | 0.880 | 0.880 |
-| all | 25 | 76/100 | 83/100 | 83/100 | 0.842 | 0.873 | 0.853 |
+| scan | 5 | 16/20 | 19/20 | 19/20 | 0.866 | 0.928 | 0.899 |
+| copier | 5 | 14/20 | 14/20 | 14/20 | 0.826 | 0.831 | 0.831 |
+| fax | 5 | 15/20 | 16/20 | 15/20 | 0.867 | 0.865 | 0.858 |
+| photo | 5 | 16/20 | 16/20 | 16/20 | 0.779 | 0.871 | 0.817 |
+| screen | 5 | 16/20 | 18/20 | 18/20 | 0.858 | 0.878 | 0.878 |
+| all | 25 | 77/100 | 83/100 | 82/100 | 0.839 | 0.875 | 0.857 |
 
-The gain carries over for scans, faxes, and screenshots. The copier recipe is one field worse
-than before on this sample (it gains the TO-5520 finish but loses the KF-3408 material and the
+The gain carries over for scans (+3: the TO-5520 finish, the FR-3101 finish and rev C),
+screenshots (+2), and faxes (+1). The copier recipe is even with the old pipeline on this
+sample (it gains the KF-3408 part number and rev but loses the KF-3408 material and the
 BWM-3106 part number), after being 5 better on the tune pages and 3 better on the real copier
-scans; on three more noise samples it was 1 better, 2 better, and even, so on drawings the
-copier recipe is about as good as before, and its gain is on the real copier scans. Most
-fields still missed here are long notes that wrap onto a second line in the drawing's notes or
-title block (".002 THK. MASK PORT THREADS.", "MARKERS: TANTALUM PER ASTM F560"): the
-harness wants the whole value in one run of text or one chained table cell, so a reading that
-has every word but breaks the line elsewhere still counts as a miss. The rest are rev letters
-alone in a small title block cell (FR-3101 C on the copier page, BWM-3106 A on the copier page
-and the screenshot) that were not read beside their drawing number.
+scans, so on drawings the copier recipe is about as good as before and its gain is on the real
+copier scans. The photo recipe is also even here (it gains the TO-5520 finish and loses its CUI
+legend) while its word F1 rises from 0.779 to 0.871. Before the drawings changed, the same
+command gave 76, 83, and 83 of 100 (before, best, fast), with the copier one field worse and
+the photo even; one or two keys within a kind is noise (see "Review").
+
+Most fields still missed here are long notes that wrap onto a second line in the drawing's
+notes or title block (".002 THK. MASK PORT THREADS.", "MARKERS: TANTALUM PER ASTM F560",
+"CHEM FILM PER MIL-DTL-5541 TYPE II CLASS 3, CLEAR"): the harness wants the whole value in one
+run of text or one chained table cell, so a reading that has every word but breaks the line
+elsewhere still counts as a miss. The rest are rev letters alone in a small title block cell
+(FR-3101 C on the copier page, BWM-3106 A on the copier page and the screenshot) that were not
+read beside their drawing number.
 
 ## Time: here and on Render
 
@@ -192,6 +209,9 @@ Seconds per page, from the per-file table above:
 | fast (`FAST_RECIPES`) | 1.69 | 0.99 (E07 fax) to 2.68 (E09 copier) | about 17 s a page, 10 to 27 s | about 4 minutes |
 | baseline (plain `--psm 3`) | 1.61 | 0.84 (screenshot) to 2.56 (E09 copier) | about 16 s a page | about 3.5 minutes |
 
+The region detector adds 0.10 to 0.13 CPU seconds to every OCR'd page on top of these (about a
+second a page on Render's free plan; see "Regions"); the table is the OCR alone.
+
 On the free plan a container gets about a tenth of one CPU, so wall time is about ten times
 the CPU time (more if the host's cores are slower than these). Two things keep that off the
 demo's path:
@@ -202,15 +222,18 @@ demo's path:
   it through `OCR_SEED_FILE`, finds every beta file in it at start, and runs neither Tesseract
   nor pypdf for them. Render only runs OCR for a file that is not in the cache: a live upload,
   or a beta file whose bytes changed. Rebuild the cache after changing a file or a recipe:
-  `python ocr.py --build-cache` (65 to 100 s here, depending on the load).
+  `python ocr.py --build-cache` (40 to 100 s here, depending on the load).
 - **Uploads use `FAST_RECIPES`** (`RFQ_UPLOAD_OCR_EFFORT=fast` in `attachments.py`): one
   Tesseract pass per page, 80 of 81 real keys against 81 for best, about a third less time.
   `RFQ_OCR_WORKERS` (default 1) keeps a second upload waiting instead of halving the speed of
   both, and `RFQ_OCR_TIMEOUT` (default 300 s a file) leaves room for a slow page.
 
 Memory: Tesseract peaks at about 90 MB on a 400 dpi letter page and at about 190 MB on the
-largest picture it is ever given (36 million pixels, see "Very large pages" below), inside the
-free plan's 512 MB.
+largest picture it is ever given (36 million pixels, see "Very large pages" below). Python's
+side is the decoded picture plus the clean-up: 74 MB for the E22 phone photo, 286 MB for a 48
+megapixel phone photo (577 MB before the third review), and the source picture is let go
+before Tesseract starts. A picture that would take more than 200 MB once decoded is not read
+whole (see "Very large pages"), so one job stays inside the free plan's 512 MB.
 
 ## How it was measured
 
@@ -243,11 +266,12 @@ Two sets of pages were scored:
   every candidate on one set of pages, so its choices are fair, but each held-out count is one
   noise sample, good to about 3 keys per kind (see "Review").
 
-Tesseract: 5.3.4 is installed here (Ubuntu 24.04). The Render image is Debian bookworm, which
-ships 5.3.0, so 5.3.0 was built from the upstream tag (`cmake`, no OpenMP) and the chosen
-settings were run on it too (`RFQ_TESSERACT=/path/to/tesseract python ocr.py --evaluate`).
-Both use the same `eng.traineddata` (the Debian and Ubuntu package `tesseract-ocr-eng`
-1:4.1.0, a 4 MB integer LSTM model).
+Tesseract: 5.3.4 is installed here (Ubuntu 24.04). The Docker image, `python:3.12-slim`, is now
+built on Debian 13 trixie, which installs 5.5.0 (see "Tesseract on Render"). 5.5.0 and Debian
+bookworm's 5.3.0 were built from the upstream tags (`cmake`, no OpenMP) and the chosen settings
+were run on both (`RFQ_TESSERACT=/path/to/tesseract python ocr.py --evaluate`). All three use the
+same `eng.traineddata` (package `tesseract-ocr-eng` 1:4.1.0 in Ubuntu 24.04, Debian bookworm,
+and Debian trixie, a 4 MB integer LSTM model).
 
 ## What was tried
 
@@ -272,7 +296,7 @@ with a clearly better word F1 for its time; `_better` in `ocr.py`). The options:
 | `-c thresholding_method` | default (0, Otsu), 1 (adaptive Otsu), 2 (Sauvola) | Tesseract's own binarization |
 | `--dpi` | on, off | tell Tesseract the resolution of the picture it gets |
 | `-c preserve_interword_spaces=1` | off, on (round 1) | |
-| `-c load_system_dawg=0 -c load_freq_dawg=0` | off, on (round 1) | no English word lists |
+| `-c load_system_dawg=0 -c load_freq_dawg=0` | off, on (round 1) | meant to turn off the English word lists; with `--oem 1` it changes nothing (see above) |
 | `repair` | off, on | an `l` in an all-caps line becomes `I` (Helvetica draws them alike: "Cl-10442", "TYPE Ill"); after the search, also a capital read twice ("Cc") becomes one |
 | `min_conf` | off, 40, 60 | drop words Tesseract is less sure of, except words with a digit and lone capitals |
 | model | installed `eng` (tessdata_fast based, 4 MB), `tessdata_best` `eng` (15 MB) | see below |
@@ -280,9 +304,10 @@ with a clearly better word F1 for its time; `_better` in `ocr.py`). The options:
 Rounds:
 
 - **Rounds 1 and 2: the 13 real files only** (284 runs). `preserve_interword_spaces` and the
-  word lists gave the same words as the same settings without them, so they were dropped from
-  later rounds. The two-pass modes 4+11, 6+11, and 3+12 cost twice the time and never beat
-  the best single pass or 3+11 / 11+3. These rounds picked Sauvola thresholding for the
+  word lists gave the same words as the same settings without them (the word list variables
+  because they never reach the LSTM model), so they were dropped from later rounds. The
+  two-pass modes 4+11, 6+11, and 3+12 cost twice the time and never beat the best single pass
+  or 3+11 / 11+3. These rounds picked Sauvola thresholding for the
   copier and adaptive Otsu at 400 dpi for the fax, each from 2 real files, and the page
   finder lost a field on the one real photo. That is too little to choose from: on degraded
   copies of the other drawings, adaptive Otsu lost 4 of 24 fax fields and the page finder
@@ -541,21 +566,26 @@ E09 finish, and the E22 material. The recipes were tuned on the installed model,
 the tuning, but nothing here suggests a retuned float model would pay for doubling the time on
 a 0.1 CPU host and adding 15 MB to the image. The Docker build should keep Debian's model.
 
-## Tesseract 5.3.0 (the Render image)
+## Tesseract on Render: 5.5.0, not 5.3.0
 
-The Render image (python:3.12-slim, Debian bookworm) gets tesseract 5.3.0 and leptonica 1.82.0
-from apt. Both were built here from the upstream tags (`cmake`, release, no OpenMP), and every
-option `ocr.py` can pass was checked against that build's `--help-extra` and
-`--print-parameters` (5.3.4 adds only debug, graphics, and curl variables):
+The Dockerfile starts `FROM python:3.12-slim` without naming a Debian release, and that tag
+now points at Debian 13 trixie (docker-library's `library/python` lists `3.12-slim` as
+`3.12.14-slim-trixie`; bookworm is only `3.12-slim-bookworm`). Trixie's apt installs tesseract
+5.5.0, leptonica 1.84.1, poppler 25.03, and the same `eng.traineddata` as bookworm and Ubuntu
+(`tesseract-ocr-eng` 1:4.1.0). Earlier versions of this page assumed bookworm and 5.3.0.
+Tesseract 5.5.0 with leptonica 1.84.1 and 5.3.0 with leptonica 1.82.0 were built here from the
+upstream tags (`cmake`, release, no OpenMP), and every option `ocr.py` can pass was checked
+against each build's `--print-parameters` (5.3.4 adds only debug, graphics, and curl variables,
+5.5.0 adds PAGE XML output):
 
-| option | used by | in 5.3.0 |
+| option | used by | in 5.3.0 and 5.5.0 |
 | --- | --- | --- |
 | `-l eng --oem 1 --psm 3/4/11 --dpi N` | every recipe | yes (`--dpi` since 4.0) |
-| `--psm 0` | orientation check, only for a page that looks turned | yes (needs `osd.traineddata`) |
-| `-c tessedit_create_tsv=1` | every call: the word table with boxes and confidences | yes |
+| `--psm 0` | orientation check, only for a page that looks turned | yes (needs `osd.traineddata`); the `Rotate:` and `Orientation confidence:` lines it prints are unchanged |
+| `-c tessedit_create_tsv=1` | every call: the word table with boxes and confidences | yes, same columns |
 | `-c thresholding_method=1/2` | not chosen, search only | yes (added in 5.0) |
 | `-c preserve_interword_spaces=1` | not chosen, search only | yes |
-| `-c load_system_dawg=0 -c load_freq_dawg=0` | not chosen, search only | yes |
+| `-c load_system_dawg=0 -c load_freq_dawg=0` | not chosen, search only | yes, and ignored by the LSTM engine in both |
 | `--tessdata-dir` | `RFQ_OCR_TESSDATA`, another model | yes |
 
 `ocr.py` also guards at run time: it reads `tesseract --print-parameters` once and leaves out
@@ -564,19 +594,31 @@ any `-c` variable the installed build does not list (without that list, by versi
 defaults instead of failing. `tests/test_ocr.py` builds the command line for every recipe and
 checks each option against the 5.3.0 list. Debian's `tesseract-ocr` package depends on
 `tesseract-ocr-osd`; if `osd.traineddata` is missing anyway, the orientation check is skipped.
+Nothing else in `ocr.py` depends on the version: it parses the version number from `tesseract
+--version`, the TSV columns, and the two `--psm 0` lines, all the same in 5.3.0, 5.3.4, and
+5.5.0. poppler 25.03 was not tested here (24.02 is installed); `ocr.py` uses only long-standing
+options of `pdftoppm`, `pdfimages -list`, `pdfinfo`, and `pdftotext`.
 
-The same evaluation on the 5.3.0 build (`RFQ_TESSERACT=/path/to/5.3.0/tesseract python ocr.py
---evaluate --settings best --settings fast`), with the same Debian `eng.traineddata`:
+The same evaluation on each build (`RFQ_TESSERACT=/path/to/tesseract ocr.py --evaluate --settings
+best --settings fast`), with the same `eng.traineddata`, on the 13 real files:
 
-| | keys, best | word F1, best | CPU s/page, best | keys, fast | CPU s/page, fast |
-| --- | --- | --- | --- | --- | --- |
-| tesseract 5.3.4 (here) | 81/81 | 0.913 | 2.61 | 80/81 | 1.69 |
-| tesseract 5.3.0 (Render) | 80/81 | 0.911 | 2.40 | 79/81 | 1.57 |
+| | keys, best | word F1, best | CPU s/page, best | keys, fast | word F1, fast | CPU s/page, fast |
+| --- | --- | --- | --- | --- | --- | --- |
+| tesseract 5.3.4 (here, Ubuntu) | 81/81 | 0.913 | 2.61 | 80/81 | 0.902 | 1.69 |
+| tesseract 5.5.0 (Render: python:3.12-slim, trixie) | 81/81 | 0.914 | 2.46 | 80/81 | 0.903 | 1.73 |
+| tesseract 5.3.0 (Debian bookworm) | 80/81 | 0.911 | 2.41 | 79/81 | 0.902 | 1.55 |
 
-Every file reads the same key fields on both versions except the screenshot, where 5.3.0 does
-not read the rev letter "A" beside the drawing number (3 of 4). Word recall and precision
-differ by 0.04 at most on any file. The committed cache was built with 5.3.4, so the demo on
-Render shows the 5.3.4 results for the beta files; only live uploads run on 5.3.0.
+5.5.0 reads the same key fields as 5.3.4 on every file, with word recall and precision within
+0.02 on any file, and on the 25 held-out pages it gives the same keys per kind as 5.3.4 (77,
+83, and 82 of 100 for before, best, and fast). 5.3.0 differs only on the screenshot, where it
+does not read the rev letter "A" beside the drawing number (3 of 4). The CPU seconds of the
+two local builds (no OpenMP) are within 10 % of the packaged 5.3.4; the time estimates on this
+page use the packaged 5.3.4.
+
+The committed cache was built with 5.3.4, so the demo on Render shows the 5.3.4 results for
+the beta files; only live uploads run on 5.5.0. The settings hold on all three versions. To
+make the image reproducible, pin the release in the Dockerfile: `python:3.12-slim-trixie`
+(5.5.0) keeps what Render runs now, `python:3.12-slim-bookworm` gives 5.3.0.
 
 ## Practical limits
 
@@ -616,7 +658,12 @@ What the measurements above cover: letter-size pages at 120 to 300 dpi, skewed u
   rendered the page in full first: a 97 in page took 2.4 GB in pdftoppm and 1.6 GB in Python
   before failing, which would have killed a 512 MB host. A picture file above 36 million
   pixels is scaled down before OCR, and one claiming more than 80 million is refused (without
-  Pillow, from its header). At most 6 pages of a PDF are read (`RFQ_OCR_MAX_PAGES`).
+  Pillow, from its header). So is one that would take more than 200 MB once decoded
+  (`MAX_INPUT_BYTES`; Pillow keeps RGB, RGBA, and CMYK at 4 bytes a pixel, so that is 50
+  megapixels in color): a 79 megapixel RGBA PNG took 1.2 GB of Python memory before the third
+  review. A JPEG over either limit is decoded at a half, a quarter, or an eighth of its size
+  instead, which the JPEG decoder does for free: a 64 or 108 megapixel phone photo is read at
+  16 or 27 megapixels. At most 6 pages of a PDF are read (`RFQ_OCR_MAX_PAGES`).
 - **Scans finer than 300 dpi.** Rendered down to 300 dpi (`MAX_RASTER_DPI`): on 600 dpi office
   scans of the five check drawings, 300 dpi found 19 of 20 key fields, 400 dpi and the scan's
   own 600 dpi 17, and 600 dpi took 6.7 CPU seconds a page against 3.0. Only 600 dpi was measured.
@@ -635,7 +682,11 @@ What the measurements above cover: letter-size pages at 120 to 300 dpi, skewed u
   page goes to Tesseract with no clean-up: 71 of 81.
 - **Slow hosts.** One OCR job at a time (`RFQ_OCR_WORKERS`, default 1) and a limit of 300 s a
   file (`RFQ_OCR_TIMEOUT`): on 0.1 CPU a multi-page scan upload can run into it, and then the
-  file shows an error instead of text.
+  file shows an error instead of text. The limit stops Tesseract, pdftoppm, and pdftotext
+  mid-run; the Python clean-up of one page is not interrupted and can finish up to its own
+  length past the limit (1.5 CPU seconds for a 48 megapixel photo, well under a second for a
+  scanned page). pypdf's text layer read has its own limit in `attachments.py`
+  (`RFQ_PDF_TEXT_TIMEOUT`, 25 s).
 
 ## Review
 
@@ -657,9 +708,11 @@ page, fast 1.70 against 1.68). The tables above are the final run with the revie
 `tools/make_rfq_beta.py` seeds Python's `random` before `Image.effect_noise`, but Pillow draws
 that noise from C `rand()`, so every run of the generator in a new order makes new noise: the
 same held-out drawing, skew, and effect, different speckle and grain. The documented commands
-give the same pages in a fresh process, which is why the tables reproduce; a search or a
-`--type` filter makes its own. Three more noise samples of the 25 check pages, burning a
-different number of `rand()` values before generating them:
+give the same pages in a fresh process as long as `drawings.py` does not change, which is why
+the tables reproduced in this review (they no longer do since the drawings review was merged;
+see "Third review"); a search or a `--type` filter makes its own. Three more noise samples of
+the 25 check pages, burning a different number of `rand()` values before generating them (with
+the drawings as they were then):
 
 | noise sample | keys, before | keys, best | keys, fast | best minus before: scan, copier, fax, photo, screen |
 | --- | --- | --- | --- | --- |
@@ -738,3 +791,307 @@ it now says the file's time limit ran out.
   504 of 504 fields with the old cache and with the new one.
 - **Tests.** `tests/test_ocr.py` (46 tests, 12 of them new for the faults above and E62) and
   `tests/test_beta.py` (10) pass; with an empty `PATH`, 16 OCR tests skip and the rest pass.
+
+## Third review
+
+A third pass reran every table on this page, tried settings the earlier passes rejected or
+never tried, fed the pipeline broken, odd, and very large files, and checked the cache, the
+server, the time and worker limits, and the Tesseract version Render actually runs. It changed
+no OCR setting and no OCR output: the reviewed code gives every one of the 30 cached results
+byte for byte (text, lines, confidence, steps), so the cache was not rebuilt. It fixed how much
+memory a large picture takes and corrected this page in four places: the Tesseract version on
+Render, the reason the word list switches did nothing, the held-out table, and the memory
+figures.
+
+### What reproduced and what did not
+
+- `python ocr.py --evaluate` in a fresh process gave every key count, word recall, precision,
+  and F1 in the per-file and per-kind tables exactly (71, 70, 81, and 80 of 81 for baseline,
+  before, best, and fast). CPU seconds came out 3 % higher on this run (best 2.70 against 2.61
+  a page, fast 1.75 against 1.69, baseline 1.65 against 1.61), within the load noise of a shared
+  machine; the tables keep the earlier run.
+- `--model tessdata_best`: 77 and 78 of 81, the same four misses, 5.58 and 3.43 CPU seconds a
+  page. The 5.3.0 build: 80 and 79 of 81, F1 0.911, 2.41 and 1.55 CPU seconds a page. Both as
+  documented.
+- `python ocr.py --evaluate --heldout` did not reproduce: 77, 83, and 82 of 100 against 76, 83,
+  and 83. The held-out pages are drawn by `drawings.py` at run time, and the drawings review
+  merged into this branch after those tables were made rewrote much of it (742 lines added);
+  even the noise-free screenshots read differently. The held-out table above is the new output.
+  The best recipes still beat the old pipeline by 6 keys in 100 on it.
+
+### Settings tried in the third review
+
+Each against the chosen recipe on the same pages: the real files of that kind, all 11 held-out
+drawings of that kind, and held-out RFQ forms (the 4 form specs of the beta set rendered through
+the same effect, two copies each with fresh skews and noise, one for the screenshot), because
+the stock held-out set has no forms. Keys are real / held-out drawings / held-out forms; word F1
+and CPU seconds a page are over all of those pages.
+
+| setting | kind | keys, chosen | keys, tried | word F1, chosen / tried | CPU s/page, chosen / tried | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--psm 6` (one uniform block), meant for the forms | scan | 49/49, 39/44, 77/82 | 43/49, 35/44, 76/82 | 0.941 / 0.863 | 2.90 / 1.51 | no: worse on forms too (29 of 31 real form keys against 31: the E32 and E72 revs); on drawings it loses E61's ITAR legend and material and E16's material and rev |
+| `--psm 6` then `--psm 11`, merged by confidence | scan | 49/49, 39/44, 77/82 | 44/49, 35/44, 79/82 | 0.941 / 0.930 | 2.90 / 2.77 | no: 2 held-out form keys for 5 real and 4 drawing keys |
+| `--psm 3` then `--psm 6`, merged by confidence | scan | 49/49, 39/44, 77/82 | 48/49, 40/44, 78/82 | 0.941 / 0.925 | 2.90 / 2.82 | no: loses the E56 form's quantity list for one drawing and one form key, lower F1 |
+| `--psm 6` | copier | 14/14, 39/44, 78/82 | 13/14, 37/44, 77/82 | 0.869 / 0.754 | 2.21 / 2.39 | no |
+| `--psm 6` | fax | 10/10, 39/44, 75/82 | 10/10, 34/44, 74/82 | 0.902 / 0.817 | 2.01 / 1.12 | no |
+| `-c thresholding_method=1` (adaptive Otsu) | fax | 10/10, 39/44, 75/82 | 10/10, 39/44, 70/82 | 0.902 / 0.900 | 2.01 / 2.05 | no: 4 to 7 held-out keys fewer on each of three noise samples |
+| `-c thresholding_method=2` (Sauvola) | fax | 10/10, 39/44, 75/82 | 10/10, 39/44, 78/82 | 0.902 / 0.900 | 2.01 / 2.09 | no: +3 keys on this sample, then 0 and -4 on two more noise samples of the held-out fax pages |
+| Sauvola with `-c thresholding_kfactor=0.2` (default 0.34), never tried | fax | 10/10, 39/44, 75/82 | 10/10, 39/44, 73/82 | 0.902 / 0.896 | 2.01 / 2.10 | no |
+| `-c load_system_dawg=0 -c load_freq_dawg=0` | scan | 49/49, 39/44, 77/82 | 49/49, 39/44, 77/82 | 0.941 / 0.941 | 2.90 / 2.75 | no effect: byte for byte the same text on 5.3.4 and 5.5.0, because the LSTM recognizer builds its word lists with default settings |
+| a model without its word list (`lstm-word-dawg` removed with `combine_tessdata`), never tried | scan | 49/49, 39/44, 77/82 | 47/49, 39/44, 76/82 | 0.941 / 0.937 | 2.90 / 2.71 | no: loses the E32 finish and the E56 rev |
+| a model without any word list, number, or punctuation pattern | scan | 49/49, 39/44, 77/82 | 46/49, 38/44, 78/82 | 0.941 / 0.938 | 2.90 / 2.71 | no: also loses the E72 quantities |
+| the model without its word list | copier | 14/14, 39/44, 78/82 | 14/14, 39/44, 78/82 | 0.869 / 0.867 | 2.21 / 2.36 | no: the same keys |
+| the model without its word list | fax | 10/10, 39/44, 75/82 | 9/10, 37/44, 75/82 | 0.902 / 0.895 | 2.01 / 1.96 | no |
+| the model without its word list | photo | 4/4, 38/44, 58/82 | 3/4, 38/44, 56/82 | 0.895 / 0.893 | 3.60 / 3.60 | no |
+| the model without its word list | screen | 4/4, 42/44, 31/41 | 4/4, 39/44, 31/41 | 0.884 / 0.881 | 1.73 / 1.71 | no |
+
+So the chosen settings hold: page segmentation 6 breaks tables apart on forms as it does on
+drawings, Tesseract's own thresholding gains nothing on a page that is already black and white,
+and the English word list helps rather than hurts on these files.
+
+### Faults fixed
+
+| input | before the third review | now |
+| --- | --- | --- |
+| a 48 megapixel phone photo (8000 x 6000 JPEG) | 577 MB of Python memory and 4.0 s before Tesseract started: `exif_transpose` copied the whole picture even with nothing to turn, and the color check converted all of it to HSV | 286 MB and 1.5 s: EXIF turning only when the photo says so, the color and bit depth checks on a 2 megapixel sample |
+| a 79 megapixel RGBA PNG (under the 80 megapixel cap) | 1.2 GB (three full RGBA pictures to lay it on white), enough to get the server killed on a 512 MB host | refused with "the picture is too large to read" (`MAX_INPUT_BYTES`, 200 MB decoded); a transparent picture is laid on white in gray, one byte a pixel |
+| a 64 or 108 megapixel phone photo | 64: decoded whole (256 MB before any copy); 108: refused | decoded at half size by the JPEG decoder: 16 and 27 megapixels |
+| the page picture during OCR | the source picture stayed in memory beside Tesseract | let go once cleaned |
+| `pdftotext` in the text layer check | a fixed 30 s, whatever the file's limit | bounded by the file's limit |
+| a PNG claiming 100,000 x 100,000 pixels | "the picture could not be read (DecompressionBombError)" | "the picture is too large to read" |
+
+The docstrings and comments in `ocr.py` that named Debian bookworm and 5.3.0 as the Render
+image, and the one that said the word list switches make Tesseract read characters instead of
+words, were corrected with this page.
+
+### Checked and fine
+
+- **Broken files.** Garbage bytes as a PDF, PNG, JPEG, or STEP file, a PDF header followed by
+  garbage, scans cut at 50 %, 90 %, and 99.9 %, a typed PDF cut in half, a JPEG cut at 90 %, a
+  PNG cut at 60 %, and headers claiming 100,000 or 65,000 pixels a side: `method` "none" with an
+  error string, in under 0.4 s. A scan missing only its last 0.1 % cannot be read by pdftoppm
+  or pypdf either (the cut falls inside the page picture), so the error is right.
+- **Encrypted PDFs.** A user password: "the PDF is protected by a password". An empty user
+  password with copying forbidden: the typed PDF gives its text layer, the scanned one is OCR'd
+  to the same text as the plain scan.
+- **Stamps.** 10 and 49 letters and digits typed over the E61 scan: OCR'd, the drawing is read.
+  245: taken as the text layer, the documented limit (`SCAN_STAMP_MAX_CHARS`).
+- **Picture modes.** An RGBA PNG with black text on transparency and an LA PNG read the same
+  1704 characters as the opaque screenshot; a CMYK JPEG of the phone photo reads, part number
+  included; 1 x 1 PNG, JPEG, and PDF pages and a 3 x 2000 sliver give "OCR found no text".
+- **Missing tools.** Without Pillow (its import blocked), every kind reads with no clean-up.
+  Without poppler (a PATH with only tesseract), pages are classified from pypdf's pictures and
+  E61 loses its part number, as "Without poppler or Pillow" says. Without tesseract, and with an
+  empty PATH, scans give "the file has no text layer and tesseract is not installed" while text
+  PDFs and STEP files still read.
+- **Time limits.** Limits of 0.5, 1.5, and 3 s on a scan, a sideways scan, the phone photo, a
+  fax, and a 48 megapixel photo: every call that ran into its limit returned within 0.01 s of
+  it and left no Tesseract running, except the 48 megapixel photo at 0.5 s, which returned at
+  1.5 s (its Python clean-up, see "Slow hosts").
+- **The worker limit.** Four files at once: with `RFQ_OCR_WORKERS=1` never more than one
+  Tesseract ran, with 2 never more than two, and a file with a 2 s limit waiting for a slot gave
+  up at 2.0 s with "the server is busy".
+- **No peeking.** With an audit hook recording every file opened and program started, all 24
+  PDFs and pictures read with no name and again under a misleading one (a fax name on a scan, a
+  PDF name on the photo): the same text and source type every time, `tests/rfq_beta_truth.json`
+  never opened, and no program handed a path from `data/`. In the code, `file_text` never reads
+  its `name` argument; only the `--evaluate` harness and `--build-cache` touch the truth file,
+  the generator, or `data/rfq_beta/files`.
+- **The cache.** 30 entries, one per beta file by the SHA-256 of its bytes, each naming its
+  file: 13 OCR, 11 text layer, 6 STEP; no failure cached; the recipes it records are the current
+  `RECIPES`; no em or en dash in it, in `ocr.py`, in this page, or in the tests. A fresh
+  `build_cache` into a scratch file took 40 s and matched it entry for entry apart from the
+  seconds.
+- **The server.** `server.py` on port 8781 with a fresh `RFQ_CACHE_DIR` and the mock Jev, once
+  with poppler but no tesseract on PATH and once with an empty PATH: `/healthz` in 0.2 to 0.3 s,
+  401 without the password, `/api/att/E61/0/text` has CI-10442 and the ITAR legend, all 24 beta
+  PDFs and pictures served with text, and no OCR result written to the live cache.
+- **Tests.** `tests/test_ocr.py` (50 tests, 4 new for the memory budget, EXIF turning,
+  transparent pictures, and the pdftotext limit) and `tests/test_beta.py` (10) pass; with an
+  empty PATH the 17 OCR tests of `tests/test_ocr.py` skip and the rest pass
+  (`tests/test_beta.py` then fails its page picture check, which needs pdftoppm in
+  `attachments.py`, not OCR).
+
+## Regions: the YOLO detector paired with Tesseract
+
+`layout.py` finds the regions of a page that matter (title block, revision block, notes, export
+legend, proprietary notice, RFQ form header, line table, requirements; see
+`docs/layout_model.md`). This pass pairs it with the OCR, measured against the pipeline as it was
+(the tables above), in three steps: provenance (say where on the page every value was printed),
+region-aware reading in the extractor, and a second Tesseract reading of the title block and line
+table crops. Provenance is kept, four small reading rules are kept, and no crop reading is.
+
+### Provenance: what is stored
+
+- **The same pixels.** When the detector can run (numpy, onnxruntime, Pillow, and
+  `models/rfq_layout.onnx`), `ocr.py` runs `layout.detect` on each OCR'd page after Tesseract, on
+  the very picture Tesseract read: the cleaned page, after any upscale, after the sheet of a phone
+  photo is flattened, and after a sideways page is turned. So a region box and a line box share
+  pixels, and both are divided by the page's scale into the page picture at the source resolution
+  (for a phone photo, the flattened sheet's pixels, not the photo's).
+- **In the result and the cache.** `file_text` adds `"regions": [{"page", "label", "conf",
+  "box": [x0, y0, x1, y1]}]`, gives each line the `"region"` its center falls in (the smallest box
+  when two overlap; no key for a line outside every box), and records `settings["layout"]` (model,
+  confidence threshold 0.35, seconds). `data/rfq_beta/ocr_cache.json` holds them for the 13 OCR'd
+  files and says in its header which model made them (`"regions": {"model": "rfq_layout.onnx",
+  "model_bytes": 10610252, "conf": 0.35}`); text-layer and STEP entries have none.
+- **Nothing else changes.** Text, lines, confidences, and steps are identical with and without
+  the detector: all 68 pages measured here (the 13 real files and 55 held-out pages) and all 30
+  cached files, compared field by field. Without the model or onnxruntime, or with
+  `RFQ_OCR_REGIONS=0`, a result has no region keys at all, byte for byte what it was before, and a
+  cache entry without regions (an older cache, or one built on such a host) loads and is used as
+  it is.
+- **Sources name the region.** `rfq_details.py` names the region in each value's source:
+  `CI-10442_RevC.pdf, title block (OCR 88%)`, `RFQ-26-0931.pdf, line table (OCR 93%)`, and for
+  export control the legend box: `CI-10442_RevC.pdf, export legend (OCR 88%)` (also in the CSV's
+  "Export control found in" column). The region goes before the parenthesis, not inside it,
+  because the UI reads the confidence from a source that ends in `(OCR 88%)` (the OCR chip, and
+  the "found in" text that drops that part); `(OCR 88%, title block)` would lose the chip. On the
+  beta inbox 85 of the 89 values read by OCR name their region; the other 4 are the TERMS lines of
+  the four RFQ forms, printed below the requirements where none of the 8 classes is boxed. Each
+  file entry of a record also lists the regions found on it (`"regions": ["export legend",
+  "notes", "revision block", "title block"]`).
+
+Which picture the detector should read was checked first, on the 13 uncopyable files against
+their region labels (a region counts as found when a box of the same class overlaps it with IoU
+0.5 or better):
+
+| picture given to `layout.detect` | regions found | false boxes | median IoU | lowest IoU | detect CPU s/page |
+| --- | --- | --- | --- | --- | --- |
+| the page picture before clean-up | 48 of 48 | 0 | 0.972 | 0.70 | 0.13 |
+| the cleaned picture Tesseract reads | 45 of 45, and the 3 regions of the flattened photo | 0 | 0.966 | 0.68 | 0.10 |
+
+The flattened photo cannot be compared with labels made on the photo, but its three boxes are the
+three regions the sheet has. The lowest IoU on both is the faint proprietary footer of the E62
+copier form. So the detector is as good on the OCR raster as on the viewer's page image, and that
+is the picture that shares pixels with the lines.
+
+### How it was measured
+
+Every variant was scored on the same pixels:
+
+- the 13 real uncopyable files (OCR key fields, `python ocr.py --evaluate`), and the 19 real RFQs
+  (`python rfq_details.py --check`, 504 fields);
+- the real RFQs with OCR noise: the extraction review's perturbation, 20 seeds that drop 5 % of
+  the OCR lines and swap 3 % of the characters for a look-alike (O/0, I/1, S/5, B/8), 10,080
+  graded fields;
+- two samples of 55 held-out pages: the 11 digital beta PDFs (all drawings) through the five
+  effects, rendered once and saved so that every variant read the same pixels (the generator's
+  noise changes from run to run). Sample 1 is what `--heldout all` renders in a fresh process;
+  sample 2 salts every seed of the effects (skew, speckle, noise, photo corners) so it shares no
+  noise with sample 1. For extraction, each held-out page stands in for the typed PDF it was made
+  from, in that PDF's email, and the email is graded against the same answer key (the printed
+  values are the same), minus "file capture": 1,770 graded fields a sample. `python
+  rfq_details.py --check --heldout` runs this for a fresh render.
+
+CPU seconds are this process and its children with `OMP_THREAD_LIMIT=1`, one file at a time,
+before and after measured side by side on the same pages. The noise runs and the two saved
+samples were scored with scratch scripts outside the repository; the commands named here rerun
+the rest.
+
+### Before and after
+
+OCR, with the chosen recipes (the text is the same, so only the time moves):
+
+| pages | keys, before | keys, after | word F1 | CPU s/page best, before / after | CPU s/page fast, before / after |
+| --- | --- | --- | --- | --- | --- |
+| 13 real files, `--evaluate` in a fresh process | best 81/81, fast 80/81 | the same | 0.913 best, 0.902 fast, the same | 2.76 / 2.95 | 1.78 / 1.88 |
+| 13 real files, side by side | the same | the same | the same | 2.69 / 2.82 | 1.74 / 1.86 |
+| held-out sample 1, 55 pages | best 188/220, fast 186/220 | the same | 0.873, 0.851, the same | 2.46 / 2.56 | 1.72 / 1.82 |
+| held-out sample 2, 55 pages | best 193/220, fast 190/220 | the same | 0.876, 0.852 | 2.59 (after) | 1.83 (after) |
+| `--heldout` (the 25 check pages, fresh render) | before 77, best 83, fast 82 of 100 | HELDOUT_AFTER | | | |
+
+The detector adds 0.10 to 0.13 CPU seconds a page (the first row's larger step is two runs at
+different times on a shared machine; the side-by-side rows are the fair comparison): 4 to 7 %
+on top of Tesseract, about a second a page on Render's 0.1 CPU. It runs only when a page is
+OCR'd, so text-layer PDFs, STEP files, and everything in the committed cache cost nothing.
+
+Extraction (`rfq_details.py`), before regions and with the final code:
+
+| what | before | after |
+| --- | --- | --- |
+| 19 real RFQs, `--check` | 504/504 | 504/504 |
+| real RFQs with OCR noise, best cache | 9,959/10,080 (98.80 %) | 9,959/10,080 |
+| real RFQs with OCR noise, fast OCR | 9,963/10,080 (98.84 %), 1 stray line | the same |
+| held-out sample 1, best | 1,763/1,770 (7 wrong) | 1,768/1,770 (2 wrong) |
+| held-out sample 1, fast | 1,757/1,770 (13 wrong) | 1,762/1,770 (8 wrong) |
+| held-out sample 2, best | 1,761/1,770 (9 wrong) | 1,765/1,770 (5 wrong) |
+| held-out sample 2, fast | 1,758/1,770 (12 wrong) | 1,762/1,770 (8 wrong) |
+| `--check --heldout`, fresh render | CHECKHO_BEFORE | CHECKHO_AFTER |
+| OCR values whose source names a region | 0 of 89 | 85 of 89 |
+
+No field that was right before is wrong after, on any of these.
+
+### What was tried
+
+**(a) Reading each field from its region first**, in `rfq_details.py`, each rule measured on its
+own (held-out fields gained, sample 1, best and fast OCR; every rule left the real files at
+504/504 and the noise runs unchanged):
+
+| rule | best | fast | kept |
+| --- | --- | --- | --- |
+| revision table rows only from the detected revision block | +2 | +3 | yes |
+| the REV label and its letter both inside the detected title block make the rev, even when the drawing number beside them is unreadable | +2 (the same pages) | +3 (the same) | yes |
+| title, material, finish, and DWG NO. looked up in the title block's lines first | 0 | 0 | no: changed nothing |
+| RFQ number and respond-by from the form header's lines, table rows from the line table's lines, first | 0 (real forms only; no held-out forms) | 0 | no: changed nothing |
+| the loose (OCR-tolerant) export legend match only inside the export legend box, the exact patterns everywhere | 0 | 0 | no: changed nothing |
+| a part number candidate inside the detected title block counts as placed in it | 0 | -1 | no: the title block box also covers the tolerance block, and "Y14.5-2018" read as "YI4S-2018" became a part line |
+
+The two rev rules fix the same three pages, from two sides. On the copier and fax copies of
+BWM-3105 and BWM-3106, the proprietary notice at the foot of the sheet ran into the title block's
+drawn-by and date cells on one text row: "OR USE IT FOR ANY PURPOSE ... | M. HALE | 2026-09-02",
+which reads like a revision table row (a rev letter, words, a date), so the rev came out as "OR"
+or "GR". The detector puts that line in the proprietary notice and the real revision rows in the
+revision block. Both rules are kept: one stops rogue rows, the other reads the title block's own
+REV cell when the drawing number is broken ("BWM 3105 ©"), and they fail differently.
+
+**(b) A second Tesseract reading of the title block and line table crops**, merged with the page
+reading (`python ocr.py --evaluate --settings best --regions title_block:6:600,line_table:6:450`,
+add `--heldout` for the held-out pages; the recipe setting `regions`). Sample 1, best recipes:
+
+| crop reading | keys, real | keys, held-out check | keys, held-out all 55 | word F1, all 55 | CPU s/page, real / held-out | extraction, held-out | noise runs | kept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none (provenance only) | 81/81 | 85/100 | 188/220 | 0.873 | 2.82 / 2.56 | 1,763 | 98.80 % | |
+| title block `--psm 6` at 600 dpi, line table `--psm 6` at 450 dpi, merged by confidence | 81/81 | 86/100 | 190/220 | 0.879 | 3.63 / 3.21 | 1,763 | 98.89 % | no |
+| the same, the crop replacing the page's words where its mean confidence is higher | 72/81 | 86/100 | 186/220 | 0.873 | 3.63 / 3.20 | | | no: loses 9 real keys |
+| title block `--psm 11` at 600 dpi, merged by confidence | 81/81 | 87/100 | 191/220 | 0.879 | 3.37 / 3.28 | 1,763 | 98.38 % | no |
+| title block `--psm 6` at its own resolution, merged by confidence | 81/81 | 86/100 | 190/220 | 0.876 | 3.15 / 3.02 | 1,763 | 98.72 % | no |
+
+The crops gain 2 or 3 held-out key fields (the harness's text test), but each gain is a mix of
+fields found and lost (for the first: 5 found, 3 lost), about the noise of one sample, and none of
+them gives the extractor a field it did not already get: held-out extraction stays at 1,763 of
+1,770, and two of them read the noisy real text worse. They cost 12 to 29 % more CPU. The line
+table crop could only be judged on the 4 real forms, which were already complete. So no recipe
+uses `regions`; the setting stays, off, so the comparison can be rerun.
+
+**(c) What the numbers suggested next.** With (a) in, the held-out misses left were title block
+values OCR had read in pieces. Two more rules, in the extractor:
+
+| rule | sample 1, best / fast | sample 2, best / fast | kept |
+| --- | --- | --- | --- |
+| pieces of one title block value on the same baseline, inside the title block, joined ("STAINLESS" + "STEEL 17-4 PH PER ASTM A564, CONDITION", which the two OCR passes returned apart; "HARD ANODIZE PER MIL-A-8625 TYPE" + "CLASS 1, .002 THK" across a lost word) | +2 / +1 | with the next rule: +4 / +4 | yes |
+| the title block's REV cell read as a capital and a lowercase letter ("Ce") is the capital (the twin "Cc" was already repaired in `ocr.py`) | +1 / +1 | | yes |
+
+Sample 2 was rendered after these rules were chosen on sample 1, as a check: all four kept rules
+together gain 4 fields there with best and with fast OCR, and lose none. The misses left on sample
+1 (best) are two finishes of KF-3408, where OCR lost words ("HARD ANODIZE PER MI MASK PORT" on the
+photo); on sample 2 a truncated title ("COVER CONTROLLER" for "COVER, CONTROLLER ENCLOSURE") and
+two finishes.
+
+### What was kept, and what it costs
+
+- **Kept:** provenance (regions in every OCR result and in the cache, a region tag on every line,
+  the region in every source), and `REGION_READING` in `rfq_details.py` with its four rules:
+  revision rows from the revision block, the title block's REV cell, joined title block pieces,
+  and "Ce". It changes no value on the real files, fixes 4 or 5 in 1,770 on each held-out sample,
+  and does nothing at all without regions.
+- **Not kept:** the crop readings (b), and the region rules of (a) that changed nothing or lost a
+  field.
+- **Cost:** 0.10 to 0.13 CPU seconds a page for the detection, only on pages that are OCR'd; the
+  detector's memory (about 35 MB for the loaded model on top of numpy and onnxruntime, see
+  `docs/layout_model.md`, "Speed and memory", the same session the viewer's "Detected regions"
+  overlay already loads); 22 KB more in the committed cache (148 to 170 KB).
+  The extractor's rules cost nothing measurable.
+- **Rerun:** `python ocr.py --build-cache` where the detector runs (the cache test checks that the
+  committed cache has regions); `python rfq_details.py --check --heldout` (about 3 minutes) for
+  the held-out extraction; `RFQ_OCR_REGIONS=0` in front of either for the pipeline without regions.

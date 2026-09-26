@@ -51,23 +51,23 @@
      "line": 1,
      "part_number": {
       "value": "QA-41127",
-      "source": "QA-41127_RevB.pdf (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
      },
      "rev": {
       "value": "B",
-      "source": "QA-41127_RevB.pdf (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
      },
      "description": {
       "value": "BRACKET, SENSOR MOUNTING",
-      "source": "QA-41127_RevB.pdf (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "QA-41127_RevB.pdf (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
      },
      "finish": {
       "value": "BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2",
-      "source": "QA-41127_RevB.pdf (OCR 90%)"
+      "source": "QA-41127_RevB.pdf, title block (OCR 90%)"
      },
      "quantities": {
       "value": [
@@ -93,7 +93,13 @@
      "type": "drawing",
      "capture": "scan",
      "text_from": "OCR 90%",
-     "chars": 1483
+     "chars": 1483,
+     "regions": [
+      "notes",
+      "proprietary notice",
+      "revision block",
+      "title block"
+     ]
     },
     {
      "name": "QA-41127_RevB.step",
@@ -534,23 +540,23 @@
      "line": 1,
      "part_number": {
       "value": "FR-2290",
-      "source": "FR-2290_heatsink.pdf (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
      },
      "rev": {
       "value": "A",
-      "source": "FR-2290_heatsink.pdf (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
      },
      "description": {
       "value": "HEAT SINK PLATE, SERVO DRIVE",
-      "source": "FR-2290_heatsink.pdf (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
      },
      "material": {
       "value": "ALUMINUM 6063-T6 PER ASTM B221",
-      "source": "FR-2290_heatsink.pdf (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
      },
      "finish": {
       "value": "CLEAR ANODIZE PER MIL-A-8625 TYPE II CLASS 1",
-      "source": "FR-2290_heatsink.pdf (OCR 84%)"
+      "source": "FR-2290_heatsink.pdf, title block (OCR 84%)"
      },
      "quantities": {
       "value": null,
@@ -572,7 +578,12 @@
      "type": "drawing",
      "capture": "fax",
      "text_from": "OCR 84%",
-     "chars": 1176
+     "chars": 1176,
+     "regions": [
+      "notes",
+      "revision block",
+      "title block"
+     ]
     },
     {
      "name": "FR-2290_heatsink.step",
@@ -633,23 +644,23 @@
      "line": 1,
      "part_number": {
       "value": "HPV-2045",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
      },
      "rev": {
       "value": "D",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
      },
      "description": {
       "value": "MANIFOLD BLOCK, VALVE, 4-PORT",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
      },
      "finish": {
       "value": "HARD ANODIZE PER MIL-A-8625 TYPE III CLASS 1",
-      "source": "HPV-2045_manifold_RevD.pdf (OCR 70%)"
+      "source": "HPV-2045_manifold_RevD.pdf, title block (OCR 70%)"
      },
      "quantities": {
       "value": [
@@ -673,7 +684,13 @@
      "type": "drawing",
      "capture": "copier",
      "text_from": "OCR 70%",
-     "chars": 2005
+     "chars": 2005,
+     "regions": [
+      "notes",
+      "proprietary notice",
+      "revision block",
+      "title block"
+     ]
     },
     {
      "name": "HPV-2045_manifold_RevD.step",
@@ -732,23 +749,23 @@
      "line": 1,
      "part_number": {
       "value": "AW-310",
-      "source": "AW-310_frame_assy.pdf (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
      },
      "rev": {
       "value": "B",
-      "source": "AW-310_frame_assy.pdf (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
      },
      "description": {
       "value": "FRAME ASSY, SEED METER MOUNT, WELDED",
-      "source": "AW-310_frame_assy.pdf (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
      },
      "material": {
       "value": "STEEL, ASTM A36: 2 X 2 X .188 SQ TUBE, .50 PLATE",
-      "source": "AW-310_frame_assy.pdf (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
      },
      "finish": {
       "value": "POWDER COAT RAL 6018, 2-4 MILS, AFTER MACHINING",
-      "source": "AW-310_frame_assy.pdf (OCR 92%)"
+      "source": "AW-310_frame_assy.pdf, title block (OCR 92%)"
      },
      "quantities": {
       "value": [
@@ -772,12 +789,17 @@
      "type": "drawing",
      "capture": "scan",
      "text_from": "OCR 92%",
-     "chars": 1354
+     "chars": 1354,
+     "regions": [
+      "notes",
+      "revision block",
+      "title block"
+     ]
     }
    ],
    "missing": [],
    "check": [
-    "Line 1 part number AW-310: OCR read it at 42% confidence on AW-310_frame_assy.pdf and no other source confirms it; verify"
+    "Line 1 part number AW-310: OCR read it at 42% confidence on AW-310_frame_assy.pdf, title block and no other source confirms it; verify"
    ],
    "routing": null
   },
@@ -963,23 +985,23 @@
      "line": 2,
      "part_number": {
       "value": "FR-3102",
-      "source": "FR-3102.pdf (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)"
      },
      "rev": {
       "value": "B",
-      "source": "FR-3102.pdf (OCR 89%)"
+      "source": "FR-3102.pdf, notes (OCR 89%)"
      },
      "description": {
       "value": "COVER, DRIVE ENCLOSURE",
-      "source": "FR-3102.pdf (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6 PER AMS-QQ-A-250/11",
-      "source": "FR-3102.pdf (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)"
      },
      "finish": {
       "value": "CHEM FILM PER MIL-DTL-5541 TYPE II CLASS 3, CLEAR",
-      "source": "FR-3102.pdf (OCR 89%)"
+      "source": "FR-3102.pdf, title block (OCR 89%)"
      },
      "quantities": {
       "value": null,
@@ -1043,7 +1065,12 @@
      "type": "drawing",
      "capture": "scan",
      "text_from": "OCR 89%",
-     "chars": 1025
+     "chars": 1025,
+     "regions": [
+      "notes",
+      "revision block",
+      "title block"
+     ]
     },
     {
      "name": "FR-3103.pdf",
@@ -1112,23 +1139,23 @@
      "line": 1,
      "part_number": {
       "value": "OPM-22817",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
      },
      "rev": {
       "value": "B",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
      },
      "description": {
       "value": "BLOCK, KNIFE HOLDER",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
      },
      "material": {
       "value": "STEEL, AISI 4140 PRE-HARDENED, 28-32 HRC",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
      },
      "finish": {
       "value": "BLACK OXIDE PER MIL-DTL-13924 CLASS 1, OIL DIP",
-      "source": "OPM-22817_RevB_photo.jpg (OCR 83%)"
+      "source": "OPM-22817_RevB_photo.jpg, title block (OCR 83%)"
      },
      "quantities": {
       "value": [
@@ -1152,7 +1179,12 @@
      "type": "drawing",
      "capture": "photo",
      "text_from": "OCR 83%",
-     "chars": 1333
+     "chars": 1333,
+     "regions": [
+      "notes",
+      "revision block",
+      "title block"
+     ]
     }
    ],
    "missing": [],
@@ -1279,7 +1311,7 @@
    "request_source": "subject",
    "respond_by": {
     "value": "2026-10-09",
-    "source": "RFQ-26-0931.pdf (OCR 93%)",
+    "source": "RFQ-26-0931.pdf, form header (OCR 93%)",
     "text": "RESPOND BY 2026-10-09"
    },
    "delivery": {
@@ -1293,19 +1325,19 @@
    "requirements": [
     {
      "value": "MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT",
-     "source": "RFQ-26-0931.pdf (OCR 93%)"
+     "source": "RFQ-26-0931.pdf, requirements (OCR 93%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT ON FIRST LOT (AS9102 FORMAT ACCEPTABLE)",
-     "source": "RFQ-26-0931.pdf (OCR 93%)"
+     "source": "RFQ-26-0931.pdf, requirements (OCR 93%)"
     },
     {
      "value": "PLUG AND CAP ALL PORTS FOR SHIPMENT. PRESSURE TEST PERFORMED BY KESTREL",
-     "source": "RFQ-26-0931.pdf (OCR 93%)"
+     "source": "RFQ-26-0931.pdf, requirements (OCR 93%)"
     },
     {
      "value": "QUOTE LEAD TIME IN WEEKS ARO FOR EACH QUANTITY BREAK",
-     "source": "RFQ-26-0931.pdf (OCR 93%)"
+     "source": "RFQ-26-0931.pdf, requirements (OCR 93%)"
     },
     {
      "value": "Please quote each break on the form and show any NRE or first article charges as their own line",
@@ -1349,7 +1381,7 @@
        75,
        150
       ],
-      "source": "RFQ-26-0931.pdf (OCR 93%)"
+      "source": "RFQ-26-0931.pdf, line table (OCR 93%)"
      },
      "annual_usage": {
       "value": null,
@@ -1388,7 +1420,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0931.pdf (OCR 93%)"
+      "source": "RFQ-26-0931.pdf, line table (OCR 93%)"
      },
      "annual_usage": {
       "value": null,
@@ -1406,7 +1438,12 @@
      "type": "RFQ form",
      "capture": "scan",
      "text_from": "OCR 93%",
-     "chars": 1083
+     "chars": 1083,
+     "regions": [
+      "form header",
+      "line table",
+      "requirements"
+     ]
     },
     {
      "name": "KF-3408_RevB.pdf",
@@ -1473,30 +1510,30 @@
    "requirements": [],
    "export_control": {
     "value": "CUI",
-    "source": "AGI-3052_RevA.pdf (OCR 81%)"
+    "source": "AGI-3052_RevA.pdf, export legend (OCR 81%)"
    },
    "lines": [
     {
      "line": 1,
      "part_number": {
       "value": "AGI-3052",
-      "source": "AGI-3052_RevA.pdf (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
      },
      "rev": {
       "value": "A",
-      "source": "AGI-3052_RevA.pdf (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
      },
      "description": {
       "value": "COVER PLATE, SENSOR ENCLOSURE",
-      "source": "AGI-3052_RevA.pdf (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
      },
      "material": {
       "value": "STAINLESS STEEL 316L PER ASTM A240, ANNEALED",
-      "source": "AGI-3052_RevA.pdf (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
      },
      "finish": {
       "value": "PASSIVATE PER ASTM A967 NITRIC 2",
-      "source": "AGI-3052_RevA.pdf (OCR 81%)"
+      "source": "AGI-3052_RevA.pdf, title block (OCR 81%)"
      },
      "quantities": {
       "value": [
@@ -1520,12 +1557,18 @@
      "type": "drawing",
      "capture": "fax",
      "text_from": "OCR 81%",
-     "chars": 1507
+     "chars": 1507,
+     "regions": [
+      "export legend",
+      "notes",
+      "revision block",
+      "title block"
+     ]
     }
    ],
    "missing": [],
    "check": [
-    "CUI marking found only in AGI-3052_RevA.pdf (OCR 81%); the email does not mention it"
+    "CUI marking found only in AGI-3052_RevA.pdf, export legend (OCR 81%); the email does not mention it"
    ],
    "routing": null
   },
@@ -1553,7 +1596,7 @@
    "request_source": "subject",
    "respond_by": {
     "value": "2026-10-15",
-    "source": "RFQ-26-0317.pdf (OCR 91%)",
+    "source": "RFQ-26-0317.pdf, form header (OCR 91%)",
     "text": "RESPOND BY 2026-10-15"
    },
    "delivery": {
@@ -1567,23 +1610,23 @@
    "requirements": [
     {
      "value": "ISO 13485:2016 CERTIFIED SUPPLIER REQUIRED",
-     "source": "RFQ-26-0317.pdf (OCR 91%)"
+     "source": "RFQ-26-0317.pdf, requirements (OCR 91%)"
     },
     {
      "value": "MATERIAL CERTS WITH TRACEABILITY TO RESIN LOT AND BAR LOT",
-     "source": "RFQ-26-0317.pdf (OCR 91%)"
+     "source": "RFQ-26-0317.pdf, requirements (OCR 91%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT, 3 PCS PER DASH NUMBER",
-     "source": "RFQ-26-0317.pdf (OCR 91%)"
+     "source": "RFQ-26-0317.pdf, requirements (OCR 91%)"
     },
     {
      "value": "CLEAN, DOUBLE BAG, AND LABEL PER BWM-QS-0412. NO STERILIZATION BY SUPPLIER",
-     "source": "RFQ-26-0317.pdf (OCR 91%)"
+     "source": "RFQ-26-0317.pdf, requirements (OCR 91%)"
     },
     {
      "value": "OPTION B: QUOTE WITH BRIGHTWATER-FURNISHED PEEK BAR, SHOW MATERIAL SAVINGS AS A SEPARATE LINE",
-     "source": "RFQ-26-0317.pdf (OCR 91%)"
+     "source": "RFQ-26-0317.pdf, requirements (OCR 91%)"
     }
    ],
    "export_control": {
@@ -1595,7 +1638,7 @@
      "line": 1,
      "part_number": {
       "value": "BWM-3140-08",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1603,7 +1646,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 8 MM",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1619,7 +1662,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1634,7 +1677,7 @@
      "line": 2,
      "part_number": {
       "value": "BWM-3140-10",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1642,7 +1685,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 10 MM",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1658,7 +1701,7 @@
        200,
        400
       ],
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1673,7 +1716,7 @@
      "line": 3,
      "part_number": {
       "value": "BWM-3140-12",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "rev": {
       "value": "A",
@@ -1681,7 +1724,7 @@
      },
      "description": {
       "value": "CAGE, LUMBAR INTERBODY, TLIF, 12 MM",
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "material": {
       "value": "PEEK, IMPLANT GRADE, PER ASTM F2026. MARKERS: TANTALUM PER ASTM F560",
@@ -1697,7 +1740,7 @@
        150,
        300
       ],
-      "source": "RFQ-26-0317.pdf (OCR 91%)"
+      "source": "RFQ-26-0317.pdf, line table (OCR 91%)"
      },
      "annual_usage": {
       "value": null,
@@ -1715,7 +1758,12 @@
      "type": "RFQ form",
      "capture": "scan",
      "text_from": "OCR 91%",
-     "chars": 1243
+     "chars": 1243,
+     "regions": [
+      "form header",
+      "line table",
+      "requirements"
+     ]
     },
     {
      "name": "BWM-3140_RevA.pdf",
@@ -1784,30 +1832,30 @@
    ],
    "export_control": {
     "value": "ITAR",
-    "source": "CI-10442_RevC.pdf (OCR 88%)"
+    "source": "CI-10442_RevC.pdf, export legend (OCR 88%)"
    },
    "lines": [
     {
      "line": 1,
      "part_number": {
       "value": "CI-10442",
-      "source": "CI-10442_RevC.pdf (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
      },
      "rev": {
       "value": "C",
-      "source": "CI-10442_RevC.pdf (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
      },
      "description": {
       "value": "HOUSING, DRIVE ELECTRONICS",
-      "source": "CI-10442_RevC.pdf (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T6511 PER ASTM B221",
-      "source": "CI-10442_RevC.pdf (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
      },
      "finish": {
       "value": "ELECTROLESS NICKEL PER AMS 2404 CLASS 1, .0003-.0005 THK",
-      "source": "CI-10442_RevC.pdf (OCR 88%)"
+      "source": "CI-10442_RevC.pdf, title block (OCR 88%)"
      },
      "quantities": {
       "value": [
@@ -1833,7 +1881,13 @@
      "type": "drawing",
      "capture": "scan",
      "text_from": "OCR 88%",
-     "chars": 1682
+     "chars": 1682,
+     "regions": [
+      "export legend",
+      "notes",
+      "revision block",
+      "title block"
+     ]
     },
     {
      "name": "CI-10442_RevC.step",
@@ -1845,7 +1899,7 @@
    ],
    "missing": [],
    "check": [
-    "ITAR marking found only in CI-10442_RevC.pdf (OCR 88%); the email does not mention it"
+    "ITAR marking found only in CI-10442_RevC.pdf, export legend (OCR 88%); the email does not mention it"
    ],
    "routing": null
   },
@@ -1873,38 +1927,38 @@
    "request_source": "subject",
    "respond_by": {
     "value": "2026-10-15",
-    "source": "RFQ-26-0318.pdf (OCR 85%)",
+    "source": "RFQ-26-0318.pdf, form header (OCR 82%)",
     "text": "RESPOND BY 2026-10-15"
    },
    "delivery": {
     "value": "REQUIRED DELIVERY: 8 WEEKS ARO",
-    "source": "RFQ-26-0318.pdf (OCR 85%)",
+    "source": "RFQ-26-0318.pdf, requirements (OCR 82%)",
     "date": null
    },
    "terms": {
     "value": "NET 45, FOB DESTINATION",
-    "source": "RFQ-26-0318.pdf (OCR 85%)"
+    "source": "RFQ-26-0318.pdf (OCR 82%)"
    },
    "requirements": [
     {
      "value": "ISO 13485 CERTIFIED SUPPLIER",
-     "source": "RFQ-26-0318.pdf (OCR 85%)"
+     "source": "RFQ-26-0318.pdf, requirements (OCR 82%)"
     },
     {
      "value": "MATERIAL CERTS TRACEABLE TO HEAT OR LOT",
-     "source": "RFQ-26-0318.pdf (OCR 85%)"
+     "source": "RFQ-26-0318.pdf, requirements (OCR 82%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT, 5 PCS PER LINE, ON FIRST LOT",
-     "source": "RFQ-26-0318.pdf (OCR 85%)"
+     "source": "RFQ-26-0318.pdf, requirements (OCR 82%)"
     },
     {
      "value": "PARTS CLEANED AND DOUBLE BAGGED. NO SILICONE-BASED LUBRICANTS",
-     "source": "RFQ-26-0318.pdf (OCR 85%)"
+     "source": "RFQ-26-0318.pdf, requirements (OCR 82%)"
     },
     {
      "value": "REQUIRED DELIVERY: 8 WEEKS ARO",
-     "source": "RFQ-26-0318.pdf (OCR 85%)"
+     "source": "RFQ-26-0318.pdf, requirements (OCR 82%)"
     }
    ],
    "export_control": {
@@ -1940,7 +1994,7 @@
        500,
        1000
       ],
-      "source": "RFQ-26-0318.pdf (OCR 85%)"
+      "source": "RFQ-26-0318.pdf, line table (OCR 82%)"
      },
      "annual_usage": {
       "value": null,
@@ -1979,7 +2033,7 @@
        500,
        1000
       ],
-      "source": "RFQ-26-0318.pdf (OCR 85%)"
+      "source": "RFQ-26-0318.pdf, line table (OCR 82%)"
      },
      "annual_usage": {
       "value": null,
@@ -1996,8 +2050,14 @@
      "name": "RFQ-26-0318.pdf",
      "type": "RFQ form",
      "capture": "copier",
-     "text_from": "OCR 85%",
-     "chars": 1148
+     "text_from": "OCR 82%",
+     "chars": 1151,
+     "regions": [
+      "form header",
+      "line table",
+      "proprietary notice",
+      "requirements"
+     ]
     },
     {
      "name": "BWM-3105_RevA.pdf",
@@ -2068,23 +2128,23 @@
      "line": 1,
      "part_number": {
       "value": "LO-1186",
-      "source": "LO-1186_RevA_screenshot.png (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
      },
      "rev": {
       "value": "A",
-      "source": "LO-1186_RevA_screenshot.png (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
      },
      "description": {
       "value": "MOUNT, FOLD MIRROR, COMPOUND ANGLE",
-      "source": "LO-1186_RevA_screenshot.png (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
      },
      "material": {
       "value": "ALUMINUM 6061-T651 PLATE PER AMS 4027",
-      "source": "LO-1186_RevA_screenshot.png (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
      },
      "finish": {
       "value": "BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2. MASK PADS, BORES, AND DATUM A",
-      "source": "LO-1186_RevA_screenshot.png (OCR 91%)"
+      "source": "LO-1186_RevA_screenshot.png, title block (OCR 91%)"
      },
      "quantities": {
       "value": [
@@ -2108,7 +2168,13 @@
      "type": "drawing",
      "capture": "screenshot",
      "text_from": "OCR 91%",
-     "chars": 1698
+     "chars": 1698,
+     "regions": [
+      "notes",
+      "proprietary notice",
+      "revision block",
+      "title block"
+     ]
     }
    ],
    "missing": [],
@@ -2139,7 +2205,7 @@
    "request_source": "subject",
    "respond_by": {
     "value": "2026-10-12",
-    "source": "WS-RFQ-26-0388.pdf (OCR 95%)",
+    "source": "WS-RFQ-26-0388.pdf, form header (OCR 95%)",
     "text": "RESPOND BY 2026-10-12"
    },
    "delivery": {
@@ -2153,24 +2219,24 @@
    "requirements": [
     {
      "value": "MATERIAL CERTS AND C OF C REQUIRED WITH EACH SHIPMENT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+     "source": "WS-RFQ-26-0388.pdf, requirements (OCR 95%)"
     },
     {
      "value": "FIRST ARTICLE INSPECTION REPORT (AS9102) ON FIRST LOT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+     "source": "WS-RFQ-26-0388.pdf, requirements (OCR 95%)"
     },
     {
      "value": "QUOTE LEAD TIME IN WEEKS ARO FOR EACH QUANTITY BREAK",
-     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+     "source": "WS-RFQ-26-0388.pdf, requirements (OCR 95%)"
     },
     {
      "value": "INDIVIDUALLY BAG PARTS. PROTECT JOURNALS FROM CONTACT",
-     "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+     "source": "WS-RFQ-26-0388.pdf, requirements (OCR 95%)"
     }
    ],
    "export_control": {
     "value": "ITAR",
-    "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+    "source": "WS-RFQ-26-0388.pdf, export legend (OCR 95%)"
    },
    "lines": [
     {
@@ -2201,7 +2267,7 @@
        100,
        250
       ],
-      "source": "WS-RFQ-26-0388.pdf (OCR 95%)"
+      "source": "WS-RFQ-26-0388.pdf, line table (OCR 95%)"
      },
      "annual_usage": {
       "value": null,
@@ -2219,7 +2285,13 @@
      "type": "RFQ form",
      "capture": "scan",
      "text_from": "OCR 95%",
-     "chars": 1302
+     "chars": 1302,
+     "regions": [
+      "export legend",
+      "form header",
+      "line table",
+      "requirements"
+     ]
     },
     {
      "name": "WS-4471_RevB.pdf",
@@ -2231,7 +2303,7 @@
    ],
    "missing": [],
    "check": [
-    "ITAR marking found only in WS-RFQ-26-0388.pdf (OCR 95%); the email does not mention it"
+    "ITAR marking found only in WS-RFQ-26-0388.pdf, export legend (OCR 95%); the email does not mention it"
    ],
    "routing": null
   }

@@ -388,6 +388,54 @@ class HostileInputTests(unittest.TestCase):
             self.assertEqual(run["labels"], [], name)
             self.assertLess(run["grew_mb"], 40, name)
 
+    def test_big_opaque_rgba_and_16_bit_pictures_shrink_without_full_size_copies(self):
+        # Pillow reduces RGBA through a full-size premultiplied copy (a 36 MP picture: 144 MB more), and a
+        # 16-bit scan used to be stretched to 8 bits at full size first. Both now shrink before any copy.
+        import struct
+        import zlib
+
+        def png(w, h, depth, ctype, pixel):
+            def chunk(kind, body):
+                return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+            row = b"\x00" + pixel * w
+            comp = zlib.compressobj(9)
+            data = b"".join(comp.compress(row) for _ in range(h)) + comp.flush()
+            ihdr = struct.pack(">IIBBBBB", w, h, depth, ctype, 0, 0, 0)
+            return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", data) + chunk(b"IEND", b"")
+        with tempfile.TemporaryDirectory() as tmp:
+            rgba = Path(tmp) / "rgba.png"
+            rgba.write_bytes(png(6000, 6000, 8, 6, b"\xf0\xf0\xf0\xff"))  # 36 MP, opaque, 144 MB decoded
+            report = _memory_runs([rgba])
+        self.assertEqual(report["runs"][0]["labels"], [])
+        self.assertLess(report["runs"][0]["grew_mb"], 230, report)  # 275 to 290 MB before
+        # the per-channel path gives what reducing the flattened picture gives
+        from PIL import Image
+        img = Image.open(DATA / SHOT).convert("RGBA")
+        img = img.resize((img.size[0] * 2, img.size[1] * 2), Image.Resampling.NEAREST)
+        self.assertEqual(layout._reduced(img, 3).tobytes(), img.convert("RGB").reduce(3).tobytes())
+        # and a big 16-bit scan finds what its 8-bit twin finds, with boxes in its own pixels
+        small = Image.open(DATA / SHOT).convert("L")
+        big16 = small.resize((small.size[0] * 4, small.size[1] * 4), Image.Resampling.NEAREST).convert("I")
+        big16 = big16.point(lambda v: v * 256).convert("I;16")
+        want = {d["label"]: d["box"] for d in layout.detect(small)}
+        got = layout.detect(_encode(big16, "PNG", compress_level=1))
+        self.assertEqual(sorted(d["label"] for d in got), sorted(want))
+        for d in got:
+            for a, b in zip(d["box"], want[d["label"]]):
+                self.assertLess(abs(a - 4 * b), 0.02 * big16.size[0], (d, want[d["label"]]))
+
+    def test_relative_model_path_survives_a_change_of_directory(self):
+        # The session loads lazily; a relative RFQ_LAYOUT_MODEL must still point at the same file afterwards.
+        code = ("import os, sys; sys.path.insert(0, os.getcwd()); import layout; os.chdir('/'); "
+                "print(layout.available()['ready'], layout.MODEL_PATH)")
+        env = dict(os.environ, RFQ_LAYOUT_MODEL=os.path.join("models", "rfq_layout.onnx"))
+        proc = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=env, capture_output=True, text=True,
+                              timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
+        ready, path = proc.stdout.split()
+        self.assertEqual(ready, "True", proc.stdout)
+        self.assertEqual(path, str(ROOT / "models" / "rfq_layout.onnx"))
+
     def test_big_picture_is_shrunk_before_the_color_conversion(self):
         # A 5760 x 4680 greyscale PNG (27 MP): converting it to RGB at full size would add about
         # 110 MB; box-averaging it down first keeps the call near the size of the decoded picture.
@@ -499,6 +547,19 @@ class PdfTests(unittest.TestCase):
         report = json.loads(proc.stdout.strip().splitlines()[-1])
         self.assertEqual(report["size"], list(img.size))
         self.assertLess(report["child_mb"], 400, report)
+
+    @unittest.skipUnless(HAVE_PDFTOPPM, "needs pdftoppm")
+    def test_huge_pdf_page_without_pdfinfo_is_cropped(self):
+        # Without pdfinfo the page size is unknown, so pdftoppm is told to render at most a
+        # 5000 x 5000 pixel area; uncropped, this page is a 30000 x 30000 bitmap.
+        real = shutil.which
+        with mock.patch.object(layout.shutil, "which", side_effect=lambda n: None if n == "pdfinfo" else real(n)):
+            img = layout.render_pdf_page(_minimal_pdf(1, 14400, 14400), dpi=150)
+            self.assertEqual(img.size, (5000, 5000))
+            # ordinary pages are not affected by the crop area
+            page = layout.render_pdf_page((DATA / LEGENDS["E61"]).read_bytes())
+            self.assertEqual(page.size, (1650, 1275))
+            self.assertIn("title_block", _labels(layout.detect(page)))
 
     def test_missing_pdftoppm(self):
         data = (DATA / LEGENDS["E61"]).read_bytes()

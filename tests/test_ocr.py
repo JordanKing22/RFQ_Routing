@@ -35,6 +35,15 @@ TOOLS = ocr.available()
 HAVE_OCR = bool(TOOLS["ocr"] and TOOLS["pdftoppm"] and TOOLS["pillow"])
 NO_OCR = "needs tesseract, pdftoppm, and Pillow"
 HAVE_PDF_TEXT = importlib.util.find_spec("pypdf") is not None or shutil.which("pdftotext") is not None
+# The region detector (layout.py): numpy, onnxruntime, Pillow, and models/rfq_layout.onnx.
+try:
+    import layout  # noqa: E402
+
+    HAVE_LAYOUT = bool(layout.available().get("ready"))
+except Exception:  # noqa: BLE001
+    layout = None  # type: ignore[assignment]
+    HAVE_LAYOUT = False
+NO_LAYOUT = "needs the region detector (numpy, onnxruntime, Pillow, models/rfq_layout.onnx)"
 
 UNCOPYABLE = sorted(rel for rel, t in TRUTH.items() if not t.get("copyable"))
 TEXT_PDFS = sorted(rel for rel, t in TRUTH.items() if t.get("copyable") and rel.endswith(".pdf"))
@@ -317,6 +326,37 @@ class BrokenInputTest(unittest.TestCase):
         png = (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr
                + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr)) + b"\x00" * 64)
         self.assertError(ocr.file_text(png, "png", timeout=60))
+        # Well formed after the header, it is refused for its size, and says so.
+        def chunk(kind: bytes, body: bytes) -> bytes:
+            return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00" * 1000))
+               + chunk(b"IEND", b""))
+        on = {"tesseract": True, "tesseract_version": "5.3.0", "pdftoppm": True, "pillow": TOOLS["pillow"], "ocr": True}
+        with mock.patch.object(ocr, "available", return_value=on), \
+                mock.patch.object(ocr, "_tesseract_words", side_effect=AssertionError("tesseract ran")):
+            res = ocr.file_text(png, "png", timeout=60)
+        self.assertError(res)
+        self.assertIn("too large", res["error"])
+
+    def test_pdftotext_keeps_to_the_time_limit(self):
+        # The text layer check runs before OCR; pdftotext must not outlast the file's limit.
+        import subprocess
+        seen: list = []
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kw):
+            if cmd and cmd[0] == "fake-pdftotext":
+                seen.append(kw.get("timeout"))
+                return subprocess.CompletedProcess(cmd, 0, b"", b"")
+            return real_run(cmd, *args, **kw)
+        tools = dict(ocr._tools(), pdftotext="fake-pdftotext")
+        with mock.patch.object(ocr, "_tools", return_value=tools), \
+                mock.patch.object(ocr.subprocess, "run", side_effect=fake_run), \
+                mock.patch.dict(sys.modules, {"attachments": None}):
+            ocr._pdf_text_layer(b"%PDF-1.4\n", time.monotonic() + 2)
+            ocr._pdf_text_layer(b"%PDF-1.4\n", time.monotonic() - 1)  # already out of time
+        self.assertEqual(len(seen), 1)
+        self.assertLessEqual(seen[0], 2.0)
 
     @unittest.skipUnless(HAVE_OCR, NO_OCR)
     def test_timeout(self):
@@ -512,6 +552,52 @@ class PictureModesTest(unittest.TestCase):
         self.assertEqual(ocr._gray(clear).getextrema(), (255, 255))
         self.assertFalse(ocr.classify(clear)["color"])
 
+    def test_transparent_gray_matches_compositing_on_white(self):
+        # Blended in gray to save memory; it must still be the gray of the picture over white.
+        from PIL import Image, ImageChops
+        import random
+        rnd = random.Random(7)
+        img = Image.new("RGBA", (32, 32))
+        img.putdata([tuple(rnd.randrange(256) for _ in range(4)) for _ in range(32 * 32)])
+        ref = Image.alpha_composite(Image.new("RGBA", img.size, (255, 255, 255, 255)), img).convert("L")
+        self.assertLessEqual(ImageChops.difference(ocr._gray(img), ref).getextrema()[1], 2)
+        pal = Image.new("P", (4, 4), 0)
+        pal.putpalette([0, 0, 0, 10, 10, 10] + [0] * 762)
+        pal.info["transparency"] = 0  # palette entry 0 is see-through
+        pal.putpixel((0, 0), 1)
+        gray = ocr._gray(pal)
+        self.assertEqual((gray.getpixel((1, 1)), gray.getpixel((0, 0))), (255, 10))
+
+    def test_big_pictures_stay_within_the_memory_budget(self):
+        # A picture that would pass MAX_INPUT_BYTES once decoded is refused (a PNG) or, for a
+        # JPEG, decoded at a half or a quarter of its size by the JPEG decoder itself.
+        from PIL import Image
+        import io
+        png, jpg = io.BytesIO(), io.BytesIO()
+        Image.new("RGBA", (400, 300), (0, 0, 0, 255)).save(png, "PNG")
+        Image.new("RGB", (400, 300), (255, 255, 255)).save(jpg, "JPEG")
+        with mock.patch.object(ocr, "MAX_INPUT_BYTES", 200 * 150 * 4):
+            with self.assertRaisesRegex(ocr.OcrError, "too large"):
+                ocr._open_image(png.getvalue())
+            self.assertEqual(ocr._open_image(jpg.getvalue()).size, (200, 150))
+        self.assertEqual(ocr._open_image(jpg.getvalue()).size, (400, 300))
+        # Pillow keeps RGB at 4 bytes a pixel: a 48 megapixel phone photo is read whole, a
+        # 79 megapixel RGBA PNG is not (1.2 GB of Python memory before the budget).
+        self.assertLessEqual(ocr._decoded_bytes("RGB", (8000, 6000)), ocr.MAX_INPUT_BYTES)
+        self.assertGreater(ocr._decoded_bytes("RGBA", (8900, 8900)), ocr.MAX_INPUT_BYTES)
+
+    def test_sideways_photo_is_turned_by_its_exif(self):
+        from PIL import Image
+        import io
+        img = Image.new("RGB", (40, 20), "white")
+        exif = img.getexif()
+        exif[0x0112] = 6  # stored on its side: turn 90 degrees to view
+        turned, plain = io.BytesIO(), io.BytesIO()
+        img.save(turned, "JPEG", exif=exif.tobytes())
+        img.save(plain, "JPEG")
+        self.assertEqual(ocr._open_image(turned.getvalue()).size, (20, 40))
+        self.assertEqual(ocr._open_image(plain.getvalue()).size, (40, 20))
+
     def test_picture_sizes_from_headers(self):
         from PIL import Image
         import io
@@ -619,6 +705,180 @@ class PiecesTest(unittest.TestCase):
                  for i, t in enumerate(("Cc", "Oo", "Ok", "Cl", "cC"))]
         ocr._repair_case(words)
         self.assertEqual([w["text"] for w in words], ["C", "O", "Ok", "Cl", "cC"])
+
+
+
+class RegionsTest(unittest.TestCase):
+    """The YOLO regions paired with the OCR lines (docs/ocr_settings.md, "Regions")."""
+
+    def test_region_at_picks_the_smallest_region_around_the_center(self):
+        regions = [{"page": 1, "label": "title_block", "conf": 0.9, "box": [100, 100, 500, 400]},
+                   {"page": 1, "label": "export_legend", "conf": 0.9, "box": [120, 120, 300, 200]},
+                   {"page": 2, "label": "notes", "conf": 0.9, "box": [0, 0, 1000, 1000]}]
+        self.assertEqual(ocr.region_at(regions, 1, [130, 130, 200, 150]), "export_legend")
+        self.assertEqual(ocr.region_at(regions, 1, [350, 300, 450, 320]), "title_block")
+        # a line that sticks out of a box but has its center inside is in it; one centered outside is not
+        self.assertEqual(ocr.region_at(regions, 1, [60, 380, 400, 390]), "title_block")
+        self.assertIsNone(ocr.region_at(regions, 1, [480, 390, 700, 400]))
+        self.assertIsNone(ocr.region_at(regions, 1, [600, 600, 700, 620]))
+        self.assertEqual(ocr.region_at(regions, 2, [600, 600, 700, 620]), "notes")
+        self.assertIsNone(ocr.region_at(regions, 1, None))
+        self.assertIsNone(ocr.region_at([], 1, [0, 0, 1, 1]))
+
+    def test_regions_are_saved_in_the_line_boxes_pixels(self):
+        # The detector ran on the cleaned picture (here upscaled 2x); the line boxes are in the
+        # source picture's pixels, and so must the region boxes be.
+        out = {"lines": [{"text": "CI-10442", "conf": 90.0, "page": 1, "bbox": [110, 110, 150, 120]},
+                         {"text": "NOTES:", "conf": 90.0, "page": 1, "bbox": [10, 10, 40, 20]}], "settings": {}}
+        found = [([{"label": "title_block", "conf": 0.91234, "box": [200.0, 200.0, 400.0, 300.0]}], 0.1)]
+        ocr._attach_regions(out, found, [2.0])
+        self.assertEqual(out["regions"], [{"page": 1, "label": "title_block", "conf": 0.912, "box": [100, 100, 200, 150]}])
+        self.assertEqual(out["lines"][0]["region"], "title_block")
+        self.assertNotIn("region", out["lines"][1])
+        self.assertEqual(out["settings"]["layout"]["conf"], ocr.REGION_CONF)
+        # the detector ran and found nothing: an empty list, which is not the same as "not run"
+        out = {"lines": [], "settings": {}}
+        ocr._attach_regions(out, [([], 0.1)], [1.0])
+        self.assertEqual(out["regions"], [])
+
+    def test_without_the_detector_the_result_is_what_it_was(self):
+        lines = [{"text": "CI-10442", "conf": 90.0, "page": 1, "bbox": [110, 110, 150, 120]}]
+        out = {"lines": json.loads(json.dumps(lines)), "settings": {"pages": []}}
+        ocr._attach_regions(out, [None, None], [1.0, 1.0])
+        self.assertEqual(out, {"lines": lines, "settings": {"pages": []}})
+        with mock.patch.object(ocr, "OCR_REGIONS", False):
+            self.assertIsNone(ocr._layout())
+        with mock.patch.object(ocr, "Image", None):
+            self.assertIsNone(ocr._layout())
+
+    @unittest.skipUnless(layout is not None, "layout.py cannot be imported")
+    def test_a_missing_model_file_means_no_regions(self):
+        with mock.patch.object(layout, "MODEL_PATH", "/nonexistent/rfq_layout.onnx"):
+            layout.reset()
+            try:
+                self.assertIsNone(ocr._layout())
+            finally:
+                layout.reset()
+        self.assertEqual(ocr._layout() is not None, HAVE_LAYOUT)
+
+    def test_a_broken_layout_module_means_no_regions(self):
+        broken = mock.MagicMock()
+        broken.available.side_effect = RuntimeError("damaged")
+        with mock.patch.dict(sys.modules, {"layout": broken}):
+            self.assertIsNone(ocr._layout())
+
+    @unittest.skipUnless(HAVE_OCR, NO_OCR)
+    def test_graceful_fallback_reads_the_same_text(self):
+        # The fax is the quickest page. With the detector off (as on a host without the model or
+        # onnxruntime) the result has no region keys at all; with it on, the words are the same.
+        data = read(rel_of("E07/FR-2290_heatsink.pdf"))
+        with mock.patch.object(ocr, "OCR_REGIONS", False):
+            off = ocr.file_text(data, "pdf", "", effort="fast", timeout=900)
+        self.assertEqual(off["method"], "ocr", off.get("error"))
+        self.assertNotIn("regions", off)
+        self.assertNotIn("layout", off["settings"])
+        self.assertFalse([ln for ln in off["lines"] if "region" in ln])
+        if not HAVE_LAYOUT:
+            return
+        on = ocr.file_text(data, "pdf", "", effort="fast", timeout=900)
+        self.assertEqual(on["text"], off["text"])
+        self.assertEqual([{k: v for k, v in ln.items() if k != "region"} for ln in on["lines"]], off["lines"])
+        self.assertIn("title_block", {r["label"] for r in on["regions"]})
+        self.assertTrue(any(ln.get("region") == "title_block" for ln in on["lines"]))
+
+    @unittest.skipUnless(HAVE_OCR and HAVE_LAYOUT, NO_OCR + " and " + NO_LAYOUT)
+    def test_regions_on_the_itar_scan(self):
+        res = ocr_result(rel_of("E61/CI-10442_RevC.pdf"))
+        labels = {r["label"] for r in res["regions"]}
+        self.assertLessEqual({"title_block", "revision_block", "notes", "export_legend"}, labels)
+        self.assertTrue(any(ln.get("region") == "title_block" for ln in res["lines"] if "10442" in ln["text"]))
+        legend = " ".join(ln["text"] for ln in res["lines"] if ln.get("region") == "export_legend").upper()
+        self.assertIn("ITAR", legend)
+        self.assertEqual(res["settings"]["layout"]["model"], Path(layout.MODEL_PATH).name)
+        w, h = 3300, 2550  # the scan's own pixels (300 dpi letter landscape), like the line boxes
+        for r in res["regions"]:
+            x0, y0, x1, y1 = r["box"]
+            self.assertTrue(0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h, r)
+
+    def test_old_cache_entries_without_regions_still_load(self):
+        data = b"%PDF-1.4 an old cached scan"
+        sha = hashlib.sha256(data).hexdigest()
+        old = {"method": "ocr", "text": "CI-10442 REV C", "confidence": 88.0, "pages": 1,
+               "lines": [{"text": "CI-10442", "conf": 90.0, "page": 1, "bbox": [1, 2, 3, 4]}],
+               "settings": {"pages": [{"source": "scan"}]}, "seconds": 2.0, "error": None}
+        path = Path(tempfile.mkdtemp(prefix="ocr-cache-test-")) / "cache.json"
+        self.addCleanup(shutil.rmtree, path.parent, True)
+        path.write_text(json.dumps({"tesseract_version": "5.3.4", "entries": {sha: old}}), encoding="utf-8")
+        cache = ocr.OcrCache(path)
+        with mock.patch.object(ocr, "_ocr", side_effect=AssertionError("OCR ran")):
+            res = ocr.file_text(data, "pdf", cache=cache)
+        self.assertEqual({k: v for k, v in res.items() if k not in ("sha256", "cached")}, old)
+        sys.path.insert(0, str(ROOT))
+        import rfq_details
+        doc = rfq_details.Doc("CI-10442.pdf", "pdf", res)
+        self.assertIsNone(doc.regions)
+        self.assertEqual(doc.src("title_block"), "CI-10442.pdf (OCR 88%)")
+
+    @unittest.skipUnless(TOOLS["pillow"], "needs Pillow")
+    def test_region_reading_maps_words_back_to_the_page(self):
+        # The "regions" recipe setting (measured, used by no recipe): a detected region is cut out
+        # with a margin, scaled to its target dpi, read alone, and its word boxes are put back
+        # into the page picture's pixels, where they merge with the page's own words.
+        from PIL import Image
+        g = Image.new("L", (1000, 800), 255)
+        regions = [{"label": "title_block", "conf": 0.9, "box": [600.0, 500.0, 900.0, 700.0]},
+                   {"label": "notes", "conf": 0.9, "box": [0.0, 0.0, 100.0, 100.0]}]
+        recipe = {"psm": [3], "tess_dpi": True, "regions": ocr.parse_regions("title_block:6:600")}
+        seen = []
+
+        def fake(path, psm, dpi, rec, deadline, stats=None):
+            with Image.open(path) as im:
+                seen.append((psm, dpi, im.size))
+            return [{"text": "CI-10442", "conf": 95.0, "box": [100, 60, 300, 100], "line": (psm, 1, 1, 1)}]
+        tmp = tempfile.mkdtemp(prefix="ocr-region-test-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with mock.patch.object(ocr, "_tesseract_words", side_effect=fake):
+            passes = ocr._region_words(g, 300.0, regions, recipe, tmp, time.monotonic() + 60, "p1")
+        pad = 9  # 0.03 inch at 300 dpi
+        self.assertEqual(seen, [(6, 600.0, ((300 + 2 * pad) * 2, (200 + 2 * pad) * 2))])  # notes not asked for
+        self.assertEqual(len(passes), 1)
+        word = passes[0][0]
+        self.assertEqual(word["box"], [591 + 50, 491 + 30, 591 + 150, 491 + 50])
+        self.assertEqual(word["line"][0], "title_block0:6")
+        page = [{"text": "Cl-1O442", "conf": 40.0, "box": [640, 520, 740, 540], "line": (3, 1, 1, 1)},
+                {"text": "NOTES:", "conf": 95.0, "box": [10, 10, 60, 30], "line": (3, 1, 1, 2)}]
+        merged = ocr._merge_region([dict(w) for w in page], passes, "conf")
+        self.assertEqual([w["text"] for w in merged], ["CI-10442", "NOTES:"])
+        replaced = ocr._merge_region([dict(w) for w in page], passes, "replace")
+        self.assertEqual(sorted(w["text"] for w in replaced), ["CI-10442", "NOTES:"])
+        self.assertEqual(ocr.parse_regions("title_block:6:600,line_table:4+6"),
+                         {"title_block": {"psm": [6], "target_dpi": 600.0}, "line_table": {"psm": [4, 6]}})
+        self.assertEqual(ocr.settings_text(recipe), "psm=3,regions=title_block:6:600,tess_dpi=1")
+
+    @unittest.skipUnless(ocr.DEFAULT_CACHE.exists(), "the committed cache is not built")
+    def test_committed_cache_has_regions_for_the_uncopyable_files(self):
+        cache = ocr.OcrCache(ocr.DEFAULT_CACHE)
+        self.assertEqual((cache.meta.get("regions") or {}).get("model"), "rfq_layout.onnx",
+                         "rebuild the cache where the detector runs: python ocr.py --build-cache")
+        by_file = {e.get("file"): e for e in cache.entries.values()}
+        legends = {rel_of("E61/CI-10442_RevC.pdf"), rel_of("E52/AGI-3052_RevA.pdf"), rel_of("E72/WS-RFQ")}
+        for rel in UNCOPYABLE:
+            with self.subTest(rel=rel):
+                e = by_file[rel]
+                labels = {r["label"] for r in e["regions"]}
+                kind = TRUTH[rel]["spec"]["kind"]
+                want = {"title_block", "revision_block", "notes"} if kind == "drawing" else \
+                    {"form_header", "line_table", "requirements"}
+                self.assertLessEqual(want, labels)
+                self.assertEqual("export_legend" in labels, rel in legends)
+                self.assertEqual(e["settings"]["layout"]["model"], "rfq_layout.onnx")
+                tagged = [ln for ln in e["lines"] if ln.get("region")]
+                self.assertGreater(len(tagged), 10)
+                for ln in e["lines"]:
+                    self.assertEqual(ln.get("region"), ocr.region_at(e["regions"], ln["page"], ln["bbox"]))
+        for rel, e in by_file.items():
+            if e["method"] != "ocr":
+                self.assertNotIn("regions", e, rel)
 
 
 if __name__ == "__main__":

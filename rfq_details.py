@@ -4,6 +4,7 @@ to one consolidated file with one row per part line.
 
     python rfq_details.py                  # beta inbox -> data/rfq_beta/rfq_details.csv and .json
     python rfq_details.py --check          # field accuracy against tests/rfq_beta_fields_truth.json
+    python rfq_details.py --check --heldout  # the same on scanned, faxed, photographed copies of the text PDFs
 
 Standard library only. The text of each attachment comes from ocr.file_text (text layer, OCR, or
 STEP header); this module never runs tesseract itself. It reads four kinds of source:
@@ -34,6 +35,7 @@ import json
 import re
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -498,11 +500,27 @@ def _number(value: Any) -> Optional[float]:
     return f if f == f and abs(f) != float("inf") else None
 
 
-class Line:
-    __slots__ = ("text", "conf", "page", "box", "i")
+# The page regions layout.py's detector finds (ocr.py tags every OCR line with the one it sits in),
+# as a source names them: "CI-10442_RevC.pdf, title block (OCR 88%)".
+REGION_NAMES = {"title_block": "title block", "revision_block": "revision block", "notes": "notes",
+                "export_legend": "export legend", "proprietary_notice": "proprietary notice",
+                "form_header": "form header", "line_table": "line table", "requirements": "requirements"}
+# Use the detected regions to read a drawing's title block, where they help: revision table rows
+# only from the revision block, the title block's REV cell even when the drawing number beside it
+# is unreadable (and 'Ce' in it is C), and pieces of one title block value that OCR read apart on
+# one baseline joined. Each rule fixed fields on the held-out pages and lost none, on the real files
+# or the held-out ones; the other region rules tried changed nothing and were left out
+# (docs/ocr_settings.md, "Regions"). Without regions (no detector, an older cache) nothing changes.
+REGION_READING = True
 
-    def __init__(self, text: str, conf: Optional[float], page: int, box: Optional[Sequence[float]], i: int):
+
+class Line:
+    __slots__ = ("text", "conf", "page", "box", "i", "region")
+
+    def __init__(self, text: str, conf: Optional[float], page: int, box: Optional[Sequence[float]], i: int,
+                 region: Optional[str] = None):
         self.text, self.conf, self.page, self.i = text, conf, page, i
+        self.region = region  # the detected region the line sits in (ocr.py, from layout.py), or None
         nums = [_number(v) for v in box] if isinstance(box, (list, tuple)) and len(box) == 4 else []
         self.box = tuple(nums) if nums and all(v is not None for v in nums) and nums[2] >= nums[0] \
             and nums[3] >= nums[1] else None
@@ -534,9 +552,18 @@ class Doc:
         for i, ln in enumerate(raw_lines[:MAX_DOC_LINES]):
             if isinstance(ln, dict) and clean(guard(ln.get("text"), 2_000)):
                 page = _number(ln.get("page"))
+                region = ln.get("region")
                 self.lines.append(Line(clean(guard(ln.get("text"), 2_000)), _number(ln.get("conf")),
-                                       int(page) if page and page >= 1 else 1, ln.get("bbox"), i))
+                                       int(page) if page and page >= 1 else 1, ln.get("bbox"), i,
+                                       region if region in REGION_NAMES else None))
         self.boxed = sum(1 for ln in self.lines if ln.box) >= 5
+        # The regions the detector found (ocr.py saves them when layout.py's model ran), or None
+        # when it did not run: an older cache entry, a text layer, a host without the model.
+        regs = r.get("regions") if self.method == "ocr" else None
+        self.regions: Optional[List[str]] = None
+        if isinstance(regs, (list, tuple)):
+            self.regions = sorted({g.get("label") for g in regs[:200] if isinstance(g, dict)
+                                   and g.get("label") in REGION_NAMES})
         # Reading-order lines for text parsing. OCR text joins the cells of one row with wide gaps;
         # those gaps are kept as " | " so a cell boundary is still visible.
         self.rows: List[str] = [re.sub(r"\s{3,}", " | ", ln).strip() for ln in raw.splitlines()[:MAX_DOC_LINES]]
@@ -555,6 +582,54 @@ class Doc:
         if self.method == "step-header":
             return f"{self.name} (STEP header)"
         return self.name
+
+    def src(self, region: Optional[str] = None) -> str:
+        """The source for a value read from this file, naming the region it was printed in when
+        the detector found one: "CI-10442_RevC.pdf, title block (OCR 88%)". The region goes before
+        the parenthesis so the "(OCR 88%)" that says how the file was read stays last, where the
+        UI's OCR chip and the grader look for it."""
+        if not region or region not in REGION_NAMES or self.method != "ocr" or self.regions is None:
+            return self.label
+        return f"{self.name}, {REGION_NAMES[region]} ({self.text_from})"
+
+    def region_of(self, value: Any, hint: Any = None, prefer: Sequence[str] = ()) -> Optional[str]:
+        """The region a value was printed in: the region of the line the parser took it from (hint,
+        a Line); else the region most cells of the reading-order row it came from sit in (hint, a
+        str; the cells that hold the value vote first, and a cell that reads the same in two
+        regions, like a lone "A", does not vote); else the region of the lines the value can be
+        found on, the first of prefer when it is printed in more than one. None without regions,
+        and None for a value printed outside every region."""
+        if self.regions is None or value in (None, "", []):
+            return None
+        if isinstance(hint, Line):
+            return hint.region
+        if isinstance(value, (list, tuple)):
+            value = "/".join(str(v) for v in value)
+        key = fold(value)
+        if not key:
+            return None
+
+        def pick(found: List[Optional[str]]) -> Optional[str]:
+            counts = Counter(found)
+            top = max(counts.values())
+            best = [r for r in counts if counts[r] == top]
+            return next((p for p in prefer if p in best), None) or min(best, key=lambda r: r or "~")
+
+        if isinstance(hint, str) and hint:
+            cells = {fold(c) for c in hint.split("|") if fold(c)}
+            where = {c: {ln.region for ln in self.lines if fold(ln.text) == c} for c in cells}
+            for group in ([c for c in cells if key in c], list(cells)):
+                votes = [next(iter(where[c])) for c in group if len(where[c]) == 1]
+                if votes:
+                    return pick(votes)
+        cands: List[Line] = []
+        if len(key) >= 3:
+            cands = [ln for ln in self.lines if key in fold(ln.text)]
+            if not cands:
+                # a value that wrapped over several lines: the lines that are pieces of it
+                cands = [ln for ln in self.lines if len(fold(ln.text)) >= 6 and fold(ln.text) in key]
+        found = [ln.region for ln in cands if ln.region]
+        return pick(found) if found else None
 
     @property
     def text_from(self) -> str:
@@ -698,10 +773,11 @@ def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[
             if m and accept(m.group(1)):
                 where["same_line"] = True
                 return accept(m.group(1)), ln
-        for row in doc.rows:
+        for k, row in enumerate(doc.rows):
             m = pat.search(row)
             if m and accept(m.group(1)):
                 where["same_line"] = True
+                where["row"] = k
                 return accept(m.group(1)), None
     if doc.boxed:
         scored = []
@@ -993,6 +1069,32 @@ def _more_value(field: str) -> Callable[[str], bool]:
     return ok
 
 
+def _same_row_rest(doc: Doc, value: str, first: Optional[Line], field: str) -> str:
+    """The rest of a title block value that OCR read as separate pieces on the same baseline
+    ('STAINLESS' + 'STEEL 17-4 PH PER ASTM A564, CONDITION', where the two passes split one printed
+    line; 'HARD ANODIZE PER MIL-A-8625 TYPE' + 'CLASS 1, .002 THK' across a lost word). Only pieces
+    inside the detected title block (REGION_READING), close to the right of the value, that read
+    like the value and are not a label, are added."""
+    if not REGION_READING or first is None or not first.box or first.region != "title_block":
+        return value
+    more = _more_value(field)
+    cur, extra = first, []
+    for _ in range(3):
+        h = max(min(cur.h, first.h), 8.0)
+        right = [ln for ln in doc.lines if ln is not cur and ln.box and ln.page == cur.page
+                 and ln.region == "title_block" and 0 <= ln.box[0] - cur.box[2] <= 2.5 * h
+                 and min(ln.box[3], cur.box[3]) - max(ln.box[1], cur.box[1]) >= 0.5 * min(ln.h, cur.h)]
+        if not right:
+            break
+        nxt = min(right, key=lambda ln: ln.box[0])
+        if _is_drawing_label(nxt.text) or not more(nxt.text) or (nxt.conf is not None and nxt.conf < 50):
+            break
+        extra.append(_strip_junk(clean(nxt.text.replace("|", " "))))
+        cur = nxt
+    extra = [ocr_fix_spec(e) if field in ("material", "finish") else e for e in extra if e]
+    return " ".join([value] + extra) if extra else value
+
+
 def _continue_value(doc: Doc, value: str, first: Optional[Line], row_index: Optional[int], field: str) -> str:
     """Add the lines a title block value wrapped onto. With boxes: lines right under the value,
     starting at its left edge, closer than a line apart. From reading order: the next rows,
@@ -1094,18 +1196,54 @@ def _unboxed_value(value: str, field: str = "") -> str:
     return _strip_junk(" ".join(words)) or clean(value)
 
 
+def _region_found(doc: Doc, label: str) -> bool:
+    """REGION_READING is on and the detector found this region on the file."""
+    return bool(REGION_READING and doc.regions and label in doc.regions)
+
+
+def _region_rows(doc: Doc, label: str) -> List[str]:
+    """The reading-order rows cut down to the cells that are lines inside the region (a row that
+    ran across two regions keeps only its cells in this one)."""
+    keys = {fold(ln.text) for ln in doc.lines if ln.region == label}
+    rows = []
+    for row in doc.rows:
+        cells = [c.strip() for c in row.split("|") if fold(c) and fold(c) in keys]
+        if cells:
+            rows.append(" | ".join(cells))
+    return rows
+
+
+def _export_regions(doc: Doc, found: List[Tuple[str, str]]) -> List[Optional[str]]:
+    """The region each export marking was printed in: the export legend box when the detector
+    found one whose own text shows that marking, else another region whose text shows it, else
+    None (no regions, or a marking read across region borders)."""
+    if doc.regions is None or not found:
+        return [None] * len(found)
+    by_region: Dict[str, List[str]] = {}
+    for ln in doc.lines:
+        if ln.region:
+            by_region.setdefault(ln.region, []).append(ln.text)
+    marks = {reg: {k.split(" ")[0] for k, _ in _find_export("\n".join(texts), doc.ocr)}
+             for reg, texts in by_region.items()}
+    order = sorted(marks, key=lambda reg: (reg != "export_legend", reg))
+    return [next((reg for reg in order if kind.split(" ")[0] in marks[reg]), None) for kind, _ in found]
+
+
 def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
     """Title block and legend values from a drawing's text."""
     out: Dict[str, Any] = {"part_number": None, "rev": None, "title": None, "material": None, "finish": None,
                            "company": None, "revisions": [], "conf": {}}
+    # where each value was read: the Line, or the reading-order row it came from (Doc.region_of)
+    hints: Dict[str, Any] = {}
 
-    def keep(field: str, got: Optional[Tuple[str, Optional[Line]]]) -> None:
+    def keep(field: str, got: Optional[Tuple[str, Optional[Line]]], row: Optional[str] = None) -> None:
         if got and got[0] and doc.ocr and not doc.boxed and field in ("title", "material", "finish"):
             got = (_unboxed_value(got[0], field), got[1])
         if got and got[0]:
             out[field] = got[0]
             ln = got[1]
             out["conf"][field] = ln.conf if ln is not None and ln.conf is not None else doc.conf
+            hints[field] = ln if isinstance(ln, Line) else row
 
     stop = _is_drawing_label
     cut = doc.ocr
@@ -1123,8 +1261,9 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
             got = _labelled(doc, labels, _plain_value, ahead=1, stop=stop, tail_ok=False, where=where)
         if got and not where.get("same_line") and got[0] != "NONE":
             # a long callout wraps inside its cell; the second line belongs to the value
-            got = (_continue_value(doc, got[0], where.get("line"), where.get("row"), field), got[1])
-        keep(field, got)
+            value = _same_row_rest(doc, got[0], where.get("line"), field)
+            got = (_continue_value(doc, value, where.get("line"), where.get("row"), field), got[1])
+        keep(field, got, doc.rows[where["row"]] if isinstance(where.get("row"), int) else None)
 
     # A label the scan lost ('MATERIAL' unreadable) still leaves its value in the title block column.
     column = _title_block_column(doc) if doc.boxed else None
@@ -1152,8 +1291,9 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
     ctx: Dict[str, set] = {}
     hint_keys = {fold(p): p for p in hint_pns}
     block = _title_block_region(doc) if doc.boxed else None
+    read_at: Dict[str, Tuple[float, Any]] = {}  # the line or row that gave each number its biggest bonus
 
-    def cand(pn: str, bonus: float, conf: Optional[float], where: Optional[str] = None) -> None:
+    def cand(pn: str, bonus: float, conf: Optional[float], where: Optional[str] = None, at: Any = None) -> None:
         key = fold(pn)
         scores[key] = scores.get(key, 0.0) + bonus
         spelled.setdefault(key, pn)
@@ -1162,6 +1302,8 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
             ctx[key].add(where)
         if conf is not None and key not in confs:
             confs[key] = conf
+        if at is not None and (key not in read_at or bonus > read_at[key][0]):
+            read_at[key] = (bonus, at)
 
     tb_row = re.compile(r"^\W*(?:[A-E]\s*\|?\s*)?(\S+)\s*\|?\s*(?:[A-Z0-9]{1,2})?\W*$")
     for ln in (doc.lines or []):
@@ -1171,20 +1313,20 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
             if n_words <= 3 and block and ln.box and ln.page == block[0] and ln.box[0] >= block[1] \
                     and ln.box[1] >= block[2]:
                 where = "title block"
-            cand(pn, 1.0 + (0.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), ln.conf, where)
+            cand(pn, 1.0 + (0.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), ln.conf, where, ln)
     for row in doc.rows:
         n_words = len(row.replace("|", " ").split())
         m = tb_row.match(row.replace("|", " | "))
         for pn in _pn_candidates(row, doc.ocr):
             where = "title block row" if m and n_words <= 3 and _pn_candidates(m.group(1), doc.ocr) else None
-            cand(pn, (0.0 if doc.lines else 1.0) + (0.5 if n_words <= 3 else 0.0), None, where)
+            cand(pn, (0.0 if doc.lines else 1.0) + (0.5 if n_words <= 3 else 0.0), None, where, row)
     # With boxes the number is found under its label or not at all: in OCR reading order the lines
     # after DWG NO. can be a note from another column ('INTERPRET DRAWING PER ASME Y14.5-2018').
     got = _labelled(doc, ["DWG NO", "DWG NO.", "DRAWING NO", "DWG", "PART NO", "PART NUMBER", "P/N"],
                     lambda t: (_pn_candidates(t, doc.ocr) or [None])[0], ahead=3, tail_ok=True,
                     reading_order=not doc.boxed)
     if got:
-        cand(got[0], 4.0, got[1].conf if got[1] is not None else None, "DWG NO")
+        cand(got[0], 4.0, got[1].conf if got[1] is not None else None, "DWG NO", got[1])
     # the label and its number inside a longer line: "TITLE BLOCK: ... DWG NO: TIB-0725 REV B."
     for row in doc.rows:
         for m in re.finditer(r"\b(?:[DO0]WG|DRAWING)\s*(?:N[O0]|NUMBER|#)\.?\s*[:#]?\s*|\b(?:PART\s*(?:NO|NUMBER)|P/N)\.?\s*[:#]\s*",
@@ -1192,7 +1334,7 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
             after = row[m.end():].split()
             pns = _pn_candidates(after[0].strip(".,;|"), doc.ocr) if after else []
             if pns:
-                cand(pns[0], 4.0, None, "DWG NO")
+                cand(pns[0], 4.0, None, "DWG NO", row)
     for key in list(scores):
         for hk, spelled_hint in hint_keys.items():
             # the same number, or one is a dash number of the other (drawing BWM-3140, form BWM-3140-08)
@@ -1207,17 +1349,20 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                     and ln.box[1] >= block[2]:
                 for hk, spelled_hint in hint_keys.items():
                     if len(hk) >= 5 and fold(ln.text) == hk:
-                        cand(spelled_hint, 3.0, ln.conf, "named")
+                        cand(spelled_hint, 3.0, ln.conf, "named", ln)
     placed = [k for k in scores if ctx.get(k)]
     if placed:
         best = max(placed, key=lambda k: (scores[k], -len(k)))
         out["part_number"] = spelled[best]
         out["conf"]["part_number"] = confs.get(best, doc.conf)
         out["pn_context"] = sorted(ctx[best])
+        hints["part_number"] = read_at.get(best, (0, None))[1]
 
     # Rev: under the REV label next to the drawing number, or right after the part number on a
     # merged title block row ("A CI-10442 C"), else the newest row of the revision table.
     pn = out["part_number"]
+    block_found = _region_found(doc, "title_block")
+    in_block = lambda ln: block_found and isinstance(ln, Line) and ln.region == "title_block"  # noqa: E731
     rev = None
     if pn:
         key = fold(pn)
@@ -1227,16 +1372,27 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                 if _pn_candidates(tok, doc.ocr) and fold(fix_part_number(tok) if doc.ocr else tok) == key:
                     r = _clean_rev(toks[k + 1])
                     if r and len(toks) - k <= 3:
-                        rev = (r, None)
+                        rev, hints["rev"] = (r, None), row
                     elif k + 2 < len(toks) and re.fullmatch(r"REV\.?", toks[k + 1].upper()):
                         r = _clean_rev(toks[k + 2])  # "DWG NO: TIB-0725 REV B."
-                        rev = (r, None) if r else rev
+                        if r:
+                            rev, hints["rev"] = (r, None), row
         if doc.boxed and not rev:
             for ln in doc.lines:
                 if _label_score(ln.text, "REV", tail_ok=True) >= 0.7 and len(ln.text) <= 12:
                     got = _below(doc, ln, _clean_rev, max_rows=3.5)
+                    if got and in_block(got[1]) and re.fullmatch(r"[A-Z][a-z]", got[1].text.strip()):
+                        # the title block's REV cell read as 'Ce': a lone capital and a speck beside
+                        # it (a lowercase letter is never a rev); the twin 'Cc' is ocr.py's repair
+                        got = (got[1].text.strip()[0], got[1])
                     pn_line = next((p for p in doc.lines if p.box and fold(" ".join(_pn_candidates(p.text, doc.ocr))) == key), None)
                     if got and pn_line and abs(got[1].box[1] - pn_line.box[1]) < 3 * max(pn_line.h, 10):
+                        rev = got
+                        break
+                    if got and in_block(ln) and in_block(got[1]):
+                        # the REV label and its letter are both inside the detected title block, so
+                        # this is the title block's REV cell, not the revision table's REV column,
+                        # even when the drawing number beside it is unreadable ('BWM 3105 ©')
                         rev = got
                         break
         if not rev:
@@ -1246,7 +1402,7 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                 if dwg and 0 < i - dwg[0] <= 3:
                     got = _after(doc.rows, i, _clean_rev, ahead=1)
                     if got:
-                        rev = (got[0], None)
+                        rev, hints["rev"] = (got[0], None), doc.rows[got[1]]
         if doc.boxed and not rev:
             # the REV cell ends the size / drawing number / rev row: the first letter to the right of
             # the number on the same baseline, even when both labels above it are unreadable
@@ -1265,30 +1421,41 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                         break
     # revision table rows: "B ADDED KEYWAY EDGE BREAK NOTE 2025-08-04 TW"
     revs = []
-    for row in doc.rows:
+    rev_rows: Dict[str, str] = {}
+    # REGION_READING: revision table rows only from the detected revision block, so a line like
+    # 'OR USE IT FOR ANY PURPOSE ... 2026-09-02' (a proprietary notice OCR ran into the title
+    # block's date cell) is never taken for revision 'OR'
+    table_rows = _region_rows(doc, "revision_block") if _region_found(doc, "revision_block") else doc.rows
+    for row in table_rows:
         m = re.match(r"^\|?\s*([A-Z]{1,2})\s+(?:\|\s*)?[A-Z].*\b20\d\d-\d\d-\d\d\b", row)
         if m and not re.match(r"^(?:REV|SIZE|DWG|DRAWN)\b", row):
             revs.append(m.group(1))
+            rev_rows.setdefault(m.group(1), row)
     # a long description wraps and pushes its date onto a later line ("B JOURNAL TOL WAS .0005,
     # ADDED RUNOUT" / "CALLOUT" / "2026-05-06 D"): right under the table header, a row that opens
     # with a rev letter and words is a revision too
-    head = next((i for i, row in enumerate(doc.rows) if re.match(r"^\|?\s*REV\.?\s*\|?\s*DESCRIPTION\b", row.upper())),
+    head = next((i for i, row in enumerate(table_rows) if re.match(r"^\|?\s*REV\.?\s*\|?\s*DESCRIPTION\b", row.upper())),
                 None)
     if head is not None:
-        for row in doc.rows[head + 1:head + 13]:
+        for row in table_rows[head + 1:head + 13]:
             m = re.match(r"^\|?\s*([A-Z])\s+(?:\|\s*)?[A-Z]{3,}\b", row)
             if m and not re.match(r"^(?:REV|SIZE|DWG|DRAWN|NOTES)\b", row) and m.group(1) not in revs:
                 revs.append(m.group(1))
+                rev_rows.setdefault(m.group(1), row)
     out["revisions"] = revs
     if rev:
         out["rev"] = rev[0]
         ln = rev[1] if len(rev) > 1 else None
         out["conf"]["rev"] = ln.conf if isinstance(ln, Line) and ln.conf is not None else doc.conf
+        if isinstance(ln, Line):
+            hints["rev"] = ln
     elif revs:
         out["rev"] = max(revs)
         out["conf"]["rev"] = doc.conf
+        hints["rev"] = rev_rows.get(out["rev"])
     if revs and out["rev"] and out["rev"] not in revs and out["rev"].isdigit():
         out["rev"] = max(revs)  # a digit where the revision table has letters is an OCR slip (8 for B)
+        hints["rev"] = rev_rows.get(out["rev"])
 
     # company: the line above TITLE in the title block
     for i, row in enumerate(doc.rows):
@@ -1298,10 +1465,15 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                 out["company"] = prev.title()
             break
     out["export"] = _find_export(doc.text, doc.ocr)
+    out["export_regions"] = _export_regions(doc, out["export"])
     out["cut"] = dict(doc.cut)
     if doc.ocr:
         for field in ("title", "material", "finish"):
             out[field] = _drop_boilerplate(ocr_fix_words(out[field]))
+    # the region each value was printed in (None without regions): a rev letter is only looked for
+    # on the line or row it was read from, never by searching the page for one letter
+    out["regions"] = {f: doc.region_of(out[f], hints.get(f), ("title_block",)) if f != "rev" or hints.get(f)
+                      else None for f in ("part_number", "rev", "title", "material", "finish")}
     return out
 
 
@@ -1663,7 +1835,7 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
     if not anchors:
         return None
     anchors.sort(key=lambda a: a[0])
-    rows = [{"pn": a[1], "cells": {}, "conf": a[2].conf, "qty": [], "qty_conf": None} for a in anchors]
+    rows = [{"pn": a[1], "cells": {}, "conf": a[2].conf, "qty": [], "qty_conf": None, "line": a[2]} for a in anchors]
     for y, x, ln, col, text in sorted(pieces, key=lambda p: (p[0], p[1])):
         cx = (ln.box[0] + ln.box[2]) / 2
 
@@ -1740,7 +1912,8 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
         out.append({"part_number": r["pn"], "rev": rev, "description": desc, "material": material,
                     "finish": finish, "quantities": qty, "qty_complete": complete,
                     # the part number cell's confidence for the row, the quantity cell's for the breaks
-                    "conf": r["conf"], "qty_conf": r["qty_conf"] if r["qty_conf"] is not None else r["conf"]})
+                    "conf": r["conf"], "qty_conf": r["qty_conf"] if r["qty_conf"] is not None else r["conf"],
+                    "line": r["line"]})
     return out
 
 
@@ -2013,8 +2186,11 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
             return fixed
         return None
 
-    got = _labelled(doc, ["RFQ NO", "RFQ NO.", "RFQ NUMBER", "RFQ #", "RFO NO"], rfq_id, ahead=3)
+    where: Dict[str, Any] = {}
+    got = _labelled(doc, ["RFQ NO", "RFQ NO.", "RFQ NUMBER", "RFQ #", "RFO NO"], rfq_id, ahead=3, where=where)
     out["rfq_number"] = got[0] if got else rfq_id(head_text)
+    hints: Dict[str, Any] = {"rfq_number": (got[1] or (doc.rows[where["row"]] if isinstance(where.get("row"), int)
+                                                       else None)) if got else None}
     resp_labels = ["RESPOND BY", "RESPONSE DUE", "QUOTE DUE", "DUE DATE", "BID DUE", "REPLY BY", "RESPOND"]
     first_date = lambda t: _iso_dates(t)[0][1] if _iso_dates(t) else None  # noqa: E731
     header_dates = sorted({d for d, _ in _iso_dates(head_text)})
@@ -2042,6 +2218,7 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
     if got:
         d = _iso_dates(got[0])[0][0]
         out["respond_by"], out["respond_text"] = d.isoformat(), f"RESPOND BY {d.isoformat()}"
+        hints["respond_by"] = got[1]
     elif len(header_dates) >= 2 and not label_seen:
         # DATE and RESPOND BY sit side by side in the header; with the labels unreadable, the
         # respond-by date is the later one. With only one date readable nothing says which it is.
@@ -2074,6 +2251,20 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
         if re.search(r"REQUIRED DELIVERY|DELIVERY\s*:", rq.upper()):
             out["delivery"] = rq
     out["export"] = _find_export(doc.text, doc.ocr)
+    out["export_regions"] = _export_regions(doc, out["export"])
+    # the region each value was printed in (None without regions), for the sources
+    out["regions"] = {"rfq_number": doc.region_of(out["rfq_number"], hints.get("rfq_number"), ("form_header",)),
+                      "respond_by": doc.region_of(out["respond_by"], hints.get("respond_by"), ("form_header",)),
+                      "delivery": doc.region_of(out["delivery"], None, ("requirements",)),
+                      "terms": doc.region_of(out["terms"], None, ("requirements",))}
+    out["requirement_regions"] = [doc.region_of(rq, None, ("requirements",)) for rq in reqs]
+    for row in out["rows"]:
+        line = row.pop("line", None)
+        pn_region = doc.region_of(row.get("part_number"), line, ("line_table",))
+        row["regions"] = {"part_number": pn_region, "rev": pn_region if row.get("rev") else None}
+        for field in ("description", "material", "finish", "quantities"):
+            row["regions"][field] = doc.region_of(row.get(field), None, ("line_table",)) or (
+                pn_region if row.get(field) else None)
     return out
 
 
@@ -2773,6 +2964,12 @@ def _variant_of(a: str, b: str) -> bool:
     return long_.count("-") > short.count("-") and fold(long_.rsplit("-", 1)[0]) == fold(short)
 
 
+def _reg(doc: Doc, field: str) -> Optional[str]:
+    """The region a parsed value was printed in (see parse_drawing and parse_form), or None."""
+    where = doc.parsed.get("regions") if isinstance(doc.parsed, dict) else None
+    return where.get(field) if isinstance(where, dict) else None
+
+
 def _pick(cands: List[Tuple[str, Any, str, Optional[float]]], order: Sequence[str]) -> Optional[Tuple[str, Any, str, Optional[float]]]:
     """cands: (kind, value, source label, OCR conf or None). The first kind in precedence order."""
     for kind in order:
@@ -2862,7 +3059,7 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         rfq_cands.append(("email", em["rfq_number"][0], em["rfq_number"][1]))
     for f in forms:
         if f.parsed.get("rfq_number"):
-            rfq_cands.append(("form", f.parsed["rfq_number"], f.label))
+            rfq_cands.append(("form", f.parsed["rfq_number"], f.src(_reg(f, "rfq_number"))))
     rfq_number = _v()
     if rfq_cands:
         # the typed subject is exact; a form number that matches it up to OCR slips adds nothing
@@ -2875,8 +3072,8 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
     quote_ref = _v(*em["quote_ref"]) if em["quote_ref"] else _v()
 
     respond = _v(text=None)
-    form_resp = next(((f.parsed["respond_by"], f.parsed.get("respond_text"), f.label) for f in forms
-                      if f.parsed.get("respond_by")), None)
+    form_resp = next(((f.parsed["respond_by"], f.parsed.get("respond_text"), f.src(_reg(f, "respond_by")))
+                      for f in forms if f.parsed.get("respond_by")), None)
     if form_resp:
         respond = _v(form_resp[0], form_resp[2], text=form_resp[1])
         if em["respond_by"] and em["respond_by"][0] != form_resp[0]:
@@ -2891,8 +3088,9 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
 
     requirements: List[Dict[str, Any]] = []
     for f in forms:
-        for r in f.parsed.get("requirements") or []:
-            requirements.append({"value": r, "source": f.label})
+        req_regions = f.parsed.get("requirement_regions") or []
+        for k, r in enumerate(f.parsed.get("requirements") or []):
+            requirements.append({"value": r, "source": f.src(req_regions[k] if k < len(req_regions) else None)})
     # an email line that only repeats what the RFQ form already lists adds nothing
     form_words = " ".join(x["value"] for x in requirements)
     for r in em["requirements"]:
@@ -2906,15 +3104,17 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
     else:
         for f in forms:
             if f.parsed.get("delivery"):
-                delivery = _v(f.parsed["delivery"], f.label, date=None)
+                delivery = _v(f.parsed["delivery"], f.src(_reg(f, "delivery")), date=None)
                 break
-    terms = next((_v(f.parsed["terms"], f.label) for f in forms if f.parsed.get("terms")), _v())
+    terms = next((_v(f.parsed["terms"], f.src(_reg(f, "terms"))) for f in forms if f.parsed.get("terms")), _v())
 
     # export control: every place a marking shows up
     marks: List[Tuple[str, str]] = [(k, "email body") for k, _ in em["export"]]
     for d in docs:
-        for k, _ in (d.parsed.get("export") or []):
-            marks.append((k, d.label))
+        where = d.parsed.get("export_regions") or []
+        for n, (k, _) in enumerate(d.parsed.get("export") or []):
+            # the legend box it was printed in, when the detector found one: "..., export legend (OCR 88%)"
+            marks.append((k, d.src(where[n] if n < len(where) else None)))
     export = _v()
     if marks:
         kinds = []
@@ -2974,12 +3174,13 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             ln = hit[0] if hit else new_line(row["part_number"])
             conf = row.get("conf") if f.ocr else None
             qconf = row.get("qty_conf", conf) if f.ocr else None
-            add(ln, "part_number", "form", row["part_number"], f.label, conf)
-            add(ln, "rev", "form", row.get("rev"), f.label, conf)
-            add(ln, "description", "form", row.get("description"), f.label, conf)
-            add(ln, "material", "form", row.get("material"), f.label, conf)
-            add(ln, "finish", "form", row.get("finish"), f.label, conf)
-            add(ln, "quantities", "form", row.get("quantities"), f.label, qconf)
+            where = row.get("regions") or {}
+            add(ln, "part_number", "form", row["part_number"], f.src(where.get("part_number")), conf)
+            add(ln, "rev", "form", row.get("rev"), f.src(where.get("rev")), conf)
+            add(ln, "description", "form", row.get("description"), f.src(where.get("description")), conf)
+            add(ln, "material", "form", row.get("material"), f.src(where.get("material")), conf)
+            add(ln, "finish", "form", row.get("finish"), f.src(where.get("finish")), conf)
+            add(ln, "quantities", "form", row.get("quantities"), f.src(where.get("quantities")), qconf)
             if not row.get("qty_complete", True):
                 ln["_qty_complete"] = False
     # drawings: one line each, or every dash-number line of the form that starts with the drawing number
@@ -2991,13 +3192,15 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         conf = p.get("conf", {})
         for ln in targets:
             variant = ln["_key"] != fold(p["part_number"])
-            add(ln, "part_number", "drawing_variant" if variant else "drawing", p["part_number"], d.label,
-                conf.get("part_number") if d.ocr else None)
-            add(ln, "rev", "drawing", p.get("rev"), d.label, conf.get("rev") if d.ocr else None)
-            add(ln, "description", "drawing_variant" if variant else "drawing", p.get("title"), d.label,
-                conf.get("title") if d.ocr else None)
-            add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material") if d.ocr else None)
-            add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish") if d.ocr else None)
+            add(ln, "part_number", "drawing_variant" if variant else "drawing", p["part_number"],
+                d.src(_reg(d, "part_number")), conf.get("part_number") if d.ocr else None)
+            add(ln, "rev", "drawing", p.get("rev"), d.src(_reg(d, "rev")), conf.get("rev") if d.ocr else None)
+            add(ln, "description", "drawing_variant" if variant else "drawing", p.get("title"),
+                d.src(_reg(d, "title")), conf.get("title") if d.ocr else None)
+            add(ln, "material", "drawing", p.get("material"), d.src(_reg(d, "material")),
+                conf.get("material") if d.ocr else None)
+            add(ln, "finish", "drawing", p.get("finish"), d.src(_reg(d, "finish")),
+                conf.get("finish") if d.ocr else None)
         for field, label in (p.get("cut") or {}).items():
             check.append(f"The {'description' if field == 'title' else field} on {d.name} stops at '{label}' with "
                          f"nothing readable after it; the rest of the callout may be missing")
@@ -3033,10 +3236,10 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         if len(free) == 1 and len(lines) == 1:
             d, ln = unnumbered[0], free[0]
             p, conf = d.parsed, d.parsed.get("conf", {})
-            add(ln, "rev", "drawing", p.get("rev"), d.label, conf.get("rev"))
-            add(ln, "description", "drawing", p.get("title"), d.label, conf.get("title"))
-            add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material"))
-            add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish"))
+            add(ln, "rev", "drawing", p.get("rev"), d.src(_reg(d, "rev")), conf.get("rev"))
+            add(ln, "description", "drawing", p.get("title"), d.src(_reg(d, "title")), conf.get("title"))
+            add(ln, "material", "drawing", p.get("material"), d.src(_reg(d, "material")), conf.get("material"))
+            add(ln, "finish", "drawing", p.get("finish"), d.src(_reg(d, "finish")), conf.get("finish"))
             check.append(f"The drawing number on {d.name} could not be read; its title block was used for line 1")
     # email-wide values reach every line; per-part listings reach their own line
     qty, _ = em["quantities"]
@@ -3160,6 +3363,8 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
     files = []
     for d in docs:
         entry = {"name": d.name, "type": d.kind, "capture": d.capture, "text_from": d.text_from, "chars": len(d.text)}
+        if d.regions is not None:
+            entry["regions"] = [REGION_NAMES[g] for g in d.regions]  # what the detector found on the file
         if d.error:
             entry["error"] = d.error
         files.append(entry)
@@ -3568,6 +3773,47 @@ def print_grade(result: Dict[str, Any], verbose: bool = False) -> Tuple[int, int
     return sum(r["ok"] for r in scored), len(scored)
 
 
+def check_heldout(emails: List[Dict[str, Any]], texts: Dict[str, Dict[str, Dict[str, Any]]], part: str = "all",
+                  effort: str = "best", today: dt.date = SAMPLE_INBOX_DATE, verbose: bool = False) -> Tuple[int, int]:
+    """Field accuracy on the held-out pages: each digital beta PDF (all drawings) rendered through
+    the generator's scan, copier, fax, photo, and screenshot effects (ocr.heldout_items), read with
+    OCR, and put in its email in place of the typed PDF. The printed values are the same, so the
+    email is graded against the same answer key, minus "file capture" (the key says digital). The
+    scan and fax noise is new in every process, so the count moves by a field or two between runs
+    (docs/ocr_settings.md, "Regions"). This runs tesseract: about 3 minutes for all 55 pages."""
+    import ocr as ocr_mod  # evaluation only: the extractor itself never runs OCR
+    truth = json.loads(FIELDS_TRUTH.read_text(encoding="utf-8"))
+    shop = load_shop()
+    by_id = {e.get("id"): e for e in emails}
+    ok = total = 0
+    by_mode: Dict[str, List[int]] = {}
+    wrong: List[str] = []
+    for key, (data, media, tr) in ocr_mod.heldout_items(tuple(ocr_mod.RENDER_TYPES), part).items():
+        _, mode, eid, _name = key.split("/")
+        email = by_id.get(eid)
+        if email is None or eid not in (truth.get("rfqs") or {}):
+            continue
+        per = dict(texts.get(eid) or {})
+        per[tr["spec"]["name"]] = ocr_mod.file_text(data, media, "", effort=effort)
+        rec = extract(email, per, shop, today=today)
+        rows = grade([rec], {"rfqs": {eid: truth["rfqs"][eid]}, "files": truth.get("files") or {}})["rows"]
+        scored = [r for r in rows if r["kind"] != "extra" and r["field"] != "file capture"]
+        good = sum(r["ok"] for r in scored)
+        m = by_mode.setdefault(mode, [0, 0])
+        m[0] += good
+        m[1] += len(scored)
+        ok += good
+        total += len(scored)
+        wrong += [f"{key}: {r['field']}: got {str(r['got'])[:60]!r} want {str(r['want'])[:50]!r}"
+                  for r in scored if not r["ok"]]
+        wrong += [f"{key}: extra {r['field']}: {str(r['got'])[:60]!r}" for r in rows if r["kind"] == "extra"]
+        print(f"{key:58s} {good}/{len(scored)}", flush=True)
+    print("\n" + ", ".join(f"{m} {a}/{b}" for m, (a, b) in sorted(by_mode.items())))
+    for w in wrong if verbose else wrong[:40]:
+        print("  " + w)
+    return ok, total
+
+
 def _frac(rows: List[Dict[str, Any]]) -> str:
     if not rows:
         return "-"
@@ -3585,6 +3831,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--texts", help="precomputed file_text results keyed by path under data/ (for evaluation)")
     ap.add_argument("--check", action="store_true", help="grade against tests/rfq_beta_fields_truth.json")
     ap.add_argument("--verbose", action="store_true", help="with --check, list every wrong field")
+    ap.add_argument("--heldout", nargs="?", const="all", choices=("check", "tune", "all"),
+                    help="with --check: grade OCR'd scan, copier, fax, photo, and screenshot copies of the digital "
+                         "beta PDFs in their emails instead (runs tesseract, about 3 minutes)")
+    ap.add_argument("--effort", default="best", choices=("best", "fast"), help="with --check --heldout: OCR effort")
     args = ap.parse_args(argv)
     today = dt.date.fromisoformat(args.today)
     inbox = json.loads(Path(args.emails).read_text(encoding="utf-8"))
@@ -3592,6 +3842,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     texts = load_texts(emails, Path(args.cache) if args.cache else None, allow_ocr=not args.no_ocr,
                        texts_file=Path(args.texts) if args.texts else None)
     records = extract_all(emails, texts, load_shop(), today=today)
+    if args.check and args.heldout:
+        ok, total = check_heldout(emails, texts, args.heldout, args.effort, today, args.verbose)
+        print(f"\n{ok}/{total} fields correct on the held-out pages ({100 * ok / max(1, total):.1f}%)")
+        return 0
     if args.check:
         truth = json.loads(FIELDS_TRUTH.read_text(encoding="utf-8"))
         ok, total = print_grade(grade(records, truth), verbose=args.verbose)

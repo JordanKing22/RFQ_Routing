@@ -5,14 +5,14 @@ It fine-tunes Ultralytics YOLO11n on the synthetic pages from tools/make_layout_
 then exports ONNX for the runtime, which needs only numpy, onnxruntime and Pillow. Training needs
 torch and ultralytics (a separate virtualenv; the demo does not). See docs/layout_model.md.
 
-    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v2 --train 1200 --val 200 --workers 3
-    python tools/train_layout.py time   --data ../yolo_work/layout_data_v2/data.yaml   # one epoch, prints s/epoch
-    python tools/train_layout.py train  --data ../yolo_work/layout_data_v2/data.yaml --base <best.pt> --epochs 14 --budget-min 45
-    python tools/train_layout.py resume --data ../yolo_work/layout_data_v2/data.yaml   # after an interrupt
-    python tools/train_layout.py eval   --data ../yolo_work/layout_data_v2/data.yaml   # per-class mAP, val and beta
-    python tools/train_layout.py export --data ../yolo_work/layout_data_v2/data.yaml   # models/rfq_layout.onnx + parity
-    python tools/train_layout.py runtime --data ../yolo_work/layout_data_v2/data.yaml  # deployed path: recall, false detections
-    python tools/train_layout.py bench  --data ../yolo_work/layout_data_v2/data.yaml   # runtime speed and memory
+    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v3 --train 1200 --val 200 --workers 3
+    python tools/train_layout.py time   --data ../yolo_work/layout_data_v3/data.yaml   # one epoch, prints s/epoch
+    python tools/train_layout.py train  --data ../yolo_work/layout_data_v3/data.yaml --base <best.pt> --epochs 3 --budget-min 40
+    python tools/train_layout.py resume --data ../yolo_work/layout_data_v3/data.yaml   # after an interrupt
+    python tools/train_layout.py eval   --data ../yolo_work/layout_data_v3/data.yaml   # per-class mAP, val and beta
+    python tools/train_layout.py export --data ../yolo_work/layout_data_v3/data.yaml   # models/rfq_layout.onnx + parity
+    python tools/train_layout.py runtime --data ../yolo_work/layout_data_v3/data.yaml  # deployed path: recall, false detections
+    python tools/train_layout.py bench  --data ../yolo_work/layout_data_v3/data.yaml   # runtime speed and memory
 
 Runs, downloaded weights, and metrics go to --work (default ../yolo_work next to the repository),
 never into the repository. Only the exported ONNX file lands in models/. "runtime" and "bench" need
@@ -400,7 +400,9 @@ rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 import numpy, onnxruntime, PIL.Image
 import layout
 rss_imports = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-t0 = time.perf_counter(); ok = layout.available()["ready"]; t_load = time.perf_counter() - t0
+t0 = time.perf_counter(); info = layout.available(); ok = info["ready"]; t_load = time.perf_counter() - t0
+if not ok:
+    sys.exit(f"layout model not ready ({layout.MODEL_PATH}): {info['error']}")
 rss_loaded = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 pages = [open(p, "rb").read() for p in sys.argv[3:]]
 layout.detect(pages[0])
@@ -458,6 +460,10 @@ def cmd_runtime(args: argparse.Namespace) -> int:
     import make_layout_dataset as mld
     from PIL import Image
     layout.RESIZE = args.resize or layout.RESIZE
+    info = layout.available()
+    if not info["ready"]:  # detect() would quietly return [] and every page would score 0
+        print(f"layout model not ready ({layout.MODEL_PATH}): {info['error']}")
+        return 2
     conf = args.conf
     root = Path(args.data).resolve().parent
     manifest = json.loads((root / "manifest.json").read_text())
@@ -588,6 +594,8 @@ def main() -> int:
         args.weights = str(Path(args.weights).resolve())
     if args.base.endswith(".pt") and Path(args.base).exists():
         args.base = str(Path(args.base).resolve())
+    if os.environ.get("RFQ_LAYOUT_MODEL"):  # layout.py is imported after the chdir below
+        os.environ["RFQ_LAYOUT_MODEL"] = str(Path(os.environ["RFQ_LAYOUT_MODEL"]).resolve())
     os.chdir(work)  # ultralytics downloads the base weights into the working directory
     args.work = str(work)
     commands = {"time": cmd_time, "train": cmd_train, "resume": cmd_resume, "eval": cmd_eval,

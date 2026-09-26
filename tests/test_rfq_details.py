@@ -40,6 +40,7 @@ CSV_OUT = ROOT / "data" / "rfq_beta" / "rfq_details.csv"
 JSON_OUT = ROOT / "data" / "rfq_beta" / "rfq_details.json"
 
 _STATE: dict = {}
+_READING = rfq_details.REGION_READING
 
 
 def beta() -> dict:
@@ -560,7 +561,7 @@ class BetaInboxTests(unittest.TestCase):
                 lines = beta()["by_id"][eid]["lines"]
                 self.assertEqual([value(ln["quantities"]) for ln in lines], qtys)
                 for ln in lines:
-                    self.assertRegex(ln["quantities"]["source"], r"RFQ-26-\d{4}\.pdf \(OCR \d+%\)")
+                    self.assertRegex(ln["quantities"]["source"], r"RFQ-26-\d{4}\.pdf(?:, line table)? \(OCR \d+%\)$")
                 self.assertFalse([c for c in beta()["by_id"][eid]["check"] if "incomplete" in c])
 
     def test_no_bogus_part_lines(self):
@@ -716,6 +717,154 @@ class BetaInboxTests(unittest.TestCase):
         text = rfq_details.to_csv(beta()["records"]) + rfq_details.to_json(beta()["records"])
         self.assertNotIn("\u2014", text)
         self.assertNotIn("\u2013", text)
+
+
+
+# --------------------------------------------------------------------------- #
+# Regions: where on the page a value was printed (layout.py's boxes, tagged on the OCR lines)
+# --------------------------------------------------------------------------- #
+def _regioned(rows, regions):
+    """An OCR result whose text rows hold one or more cells, each cell (text, x, y, region); the
+    lines carry the region tag ocr.py gives them, and the result the detector's regions."""
+    lines, text = [], []
+    for row in rows:
+        parts = []
+        for cell, x, y, region in row:
+            ln = _ocr_line(cell, x, y)
+            if region:
+                ln["region"] = region
+            lines.append(ln)
+            parts.append(cell)
+        text.append("   ".join(parts))
+    return {"method": "ocr", "confidence": 90.0, "lines": lines, "text": "\n".join(text),
+            "regions": [{"page": 1, "label": label, "conf": 0.9, "box": box} for label, box in regions]}
+
+
+def _strip_regions(result):
+    out = json.loads(json.dumps(result))
+    out.pop("regions", None)
+    for ln in out.get("lines") or []:
+        ln.pop("region", None)
+    return out
+
+
+# A drawing whose DWG NO. cell OCR broke ('BWM 3105 ©', no dash) and whose REV letter it lost, with a
+# proprietary notice that ran into the title block's date cell on one text row: the rogue row reads
+# like a revision table row ('OR USE IT ... 2026-09-02'), as on the copier-scanned held-out pages.
+_TB = ("title_block", [1280, 1200, 2120, 1650])
+_ROGUE = [("OR USE IT FOR ANY PURPOSE OTHER THAN QUOTING WITHOUT WRITTEN PERMISSION.", 100, 1610, "proprietary_notice"),
+          ("M. HALE", 1590, 1610, "title_block"), ("2026-09-02", 1750, 1610, "title_block")]
+_BLOCK = [[("TITLE", 1590, 1290, "title_block")], [("PIN, PIVOT, JAW", 1590, 1320, "title_block")],
+          [("MATERIAL", 1590, 1365, "title_block")], [("STAINLESS STEEL 17-4 PH PER ASTM A564", 1590, 1390, "title_block")],
+          [("FINISH", 1590, 1430, "title_block")], [("PASSIVATE PER ASTM A967", 1590, 1455, "title_block")],
+          [("SIZE", 1590, 1500, "title_block"), ("DWG NO.", 1660, 1500, "title_block")],
+          [("A", 1600, 1530, "title_block"), ("BWM 3105 \u00a9", 1660, 1530, "title_block")],
+          [("DRAWN", 1590, 1580, "title_block"), ("DATE", 1750, 1580, "title_block")]]
+
+
+class RegionTests(unittest.TestCase):
+    def tearDown(self):
+        rfq_details.REGION_READING = _READING
+
+    def test_revision_rows_come_from_the_revision_block(self):
+        rows = [[("REVISIONS", 1500, 80, "revision_block")],
+                [("A", 1420, 150, "revision_block"), ("INITIAL RELEASE", 1480, 150, "revision_block"),
+                 ("2026-08-01", 1900, 150, "revision_block"), ("MH", 2050, 150, "revision_block")]] + _BLOCK + [_ROGUE]
+        res = _regioned(rows, [("revision_block", [1400, 60, 2120, 200]), _TB,
+                               ("proprietary_notice", [90, 1600, 1100, 1630])])
+        rfq_details.REGION_READING = True
+        got = rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", res), ["BWM-3105"])
+        self.assertEqual((got["part_number"], got["rev"]), ("BWM-3105", "A"))
+        self.assertEqual(got["regions"]["rev"], "revision_block")
+        # without regions (an old cache entry, a host without the detector) the rogue row wins, as before
+        old = rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", _strip_regions(res)), ["BWM-3105"])
+        self.assertEqual(old["rev"], "OR")
+        rfq_details.REGION_READING = False
+        self.assertEqual(rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", res), ["BWM-3105"])["rev"], "OR")
+
+    def test_rev_cell_inside_the_title_block_needs_no_readable_drawing_number(self):
+        block = [list(r) for r in _BLOCK]
+        block[6].append(("REV", 2010, 1505, "title_block"))
+        block[7].append(("A", 2045, 1532, "title_block"))
+        res = _regioned(block + [_ROGUE], [_TB, ("proprietary_notice", [90, 1600, 1100, 1630])])
+        rfq_details.REGION_READING = True
+        got = rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", res), ["BWM-3105"])
+        self.assertEqual((got["part_number"], got["rev"], got["regions"]["rev"]), ("BWM-3105", "A", "title_block"))
+        self.assertEqual(rfq_details.parse_drawing(rfq_details.Doc("d.pdf", "pdf", _strip_regions(res)),
+                                                   ["BWM-3105"])["rev"], "OR")
+
+    def test_sources_name_the_region_and_keep_the_ocr_confidence_last(self):
+        res = _regioned(_BLOCK + [[("WARNING - THIS DOCUMENT CONTAINS TECHNICAL DATA WHOSE EXPORT IS RESTRICTED BY "
+                                    "THE ARMS EXPORT CONTROL ACT (ITAR)", 100, 60, "export_legend")]],
+                        [_TB, ("export_legend", [90, 50, 1300, 80])])
+        email = {"id": "T3", "subject": "RFQ BWM-3105", "body": "Please quote 10 pcs of BWM-3105.", "from_name": "Pat",
+                 "from_email": "pat@example.com", "attachments": [{"name": "BWM-3105.pdf", "media": "pdf"}]}
+        rec = rfq_details.extract(email, {"BWM-3105.pdf": res}, SHOP, today=TODAY)
+        ln = rec["lines"][0]
+        self.assertEqual(ln["material"]["source"], "BWM-3105.pdf, title block (OCR 90%)")
+        self.assertEqual(rec["export_control"]["value"], "ITAR")
+        self.assertEqual(rec["export_control"]["source"], "BWM-3105.pdf, export legend (OCR 90%)")
+        self.assertEqual(rec["files"][0]["regions"], ["export legend", "title block"])
+        plain = rfq_details.extract(email, {"BWM-3105.pdf": _strip_regions(res)}, SHOP, today=TODAY)
+        self.assertEqual(plain["lines"][0]["material"]["source"], "BWM-3105.pdf (OCR 90%)")
+        self.assertEqual(plain["export_control"]["source"], "BWM-3105.pdf (OCR 90%)")
+        self.assertNotIn("regions", plain["files"][0])
+
+    def test_a_region_tag_the_extractor_does_not_know_is_ignored(self):
+        res = _regioned(_BLOCK, [_TB])
+        res["lines"][0]["region"] = "<script>"
+        res["regions"].append({"label": 7, "box": "x"})
+        doc = rfq_details.Doc("d.pdf", "pdf", res)
+        self.assertIsNone(doc.lines[0].region)
+        self.assertEqual(doc.regions, ["title_block"])
+
+    @needs_scans
+    def test_beta_sources_name_the_regions(self):
+        texts = beta()["texts"]
+        if "regions" not in texts["E61"]["CI-10442_RevC.pdf"]:
+            self.skipTest("the OCR cache was built without the region detector")
+        by_id = beta()["by_id"]
+        self.assertEqual(by_id["E61"]["export_control"]["source"], "CI-10442_RevC.pdf, export legend (OCR 88%)"
+                         if "88%" in by_id["E61"]["export_control"]["source"] else by_id["E61"]["export_control"]["source"])
+        self.assertRegex(by_id["E61"]["export_control"]["source"], r"^CI-10442_RevC\.pdf, export legend \(OCR \d+%\)$")
+        self.assertRegex(by_id["E52"]["export_control"]["source"], r"AGI-3052_RevA\.pdf, export legend \(OCR \d+%\)")
+        self.assertRegex(by_id["E72"]["export_control"]["source"], r"WS-RFQ-26-0388\.pdf, export legend \(OCR \d+%\)")
+        e61 = by_id["E61"]["lines"][0]
+        for field in ("part_number", "material", "finish", "description"):
+            self.assertRegex(e61[field]["source"], r"^CI-10442_RevC\.pdf, title block \(OCR \d+%\)$", field)
+        self.assertRegex(by_id["E32"]["respond_by"]["source"], r"^RFQ-26-0931\.pdf, form header \(OCR \d+%\)$")
+        form_reqs = [r["source"] for r in by_id["E32"]["requirements"] if "RFQ-26-0931" in r["source"]]
+        self.assertTrue(form_reqs)
+        for src in form_reqs:
+            self.assertRegex(src, r"^RFQ-26-0931\.pdf, requirements \(OCR \d+%\)$")
+        # every OCR source still ends in "(OCR NN%)", the part the UI's OCR chip reads (index.html
+        # ocrInfo), and without it the file and region remain (the "found in" text)
+        chip = re.compile(r"(?:^|[(,]\s*)OCR(?:\s*(\d{1,3}(?:\.\d+)?)\s*%)?\s*(?:\)|$)")
+        for rec in beta()["records"]:
+            values = [rec[k] for k in ("rfq_number", "respond_by", "export_control")] + rec["requirements"] + \
+                [v for ln in rec["lines"] for v in ln.values() if isinstance(v, dict)]
+            for v in values:
+                for part in re.split(r"\s*;\s*", v.get("source") or ""):
+                    if "(OCR" in part:
+                        self.assertTrue(chip.search(part).group(1), part)
+                        left = re.sub(r"\s*\((?:OCR[^)]*|text layer|STEP header)\)\s*$", "", part)
+                        self.assertNotIn("(", left, part)
+
+    @needs_scans
+    def test_values_do_not_depend_on_the_regions(self):
+        """Without the regions (a cache built where the detector could not run) every value on the
+        beta inbox is the same; only the sources lose their region."""
+        texts = {eid: {n: _strip_regions(r) for n, r in per.items()} for eid, per in beta()["texts"].items()}
+        plain = rfq_details.extract_all(INBOX, texts, SHOP, today=TODAY)
+
+        def values(recs):
+            out = json.loads(json.dumps(recs))
+            for rec in out:
+                rec.pop("check", None)
+                for f in rec["files"]:
+                    f.pop("regions", None)
+            return re.sub(r'"source": "([^"]*?), [a-z ]+ \(OCR', r'"source": "\1 (OCR', json.dumps(out))
+        self.assertEqual(values(plain), values(beta()["records"]))
 
 
 if __name__ == "__main__":

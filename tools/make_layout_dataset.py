@@ -26,9 +26,9 @@ through the same scan, copier, fax, phone photo and screenshot effects that made
 perspective, screenshot offset). The 30 beta files are never rendered into training: they are the
 honest test set ("beta"), built from the real files on disk with boxes derived from their specs.
 
-    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v2 --train 1200 --val 200 --workers 3
+    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v3 --train 1200 --val 200 --workers 3
                                                   (the shipped model's data: about 4.5 minutes on 3 cores)
-    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v2 --beta-only
+    python tools/make_layout_dataset.py --out ../yolo_work/layout_data_v3 --beta-only
     python tools/make_layout_dataset.py --preview ../yolo_work/preview --count 12
 
 Needs Pillow and the pdftoppm program (poppler) for the beta set. Writes YOLO format:

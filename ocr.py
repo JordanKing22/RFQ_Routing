@@ -61,6 +61,12 @@ OCR_TESSDATA = os.environ.get("RFQ_OCR_TESSDATA", "").strip() or None
 MAX_OCR_PIXELS = 36_000_000
 # Refuse to decode pictures bigger than this at all (a small PNG can claim a huge size).
 MAX_INPUT_PIXELS = 80_000_000
+# And bigger than this once decoded (Pillow keeps RGB, RGBA, and CMYK at 4 bytes a pixel). The
+# clean-up adds about half that again: a 48 megapixel phone photo (192 MB decoded) peaks at
+# 286 MB, which leaves room on a 512 MB host; a 79 megapixel RGBA PNG (316 MB) is refused. A
+# JPEG over this or MAX_INPUT_PIXELS is decoded at a half, a quarter, or an eighth of its size
+# instead, which the JPEG decoder does for free (docs/ocr_settings.md, "Very large pages").
+MAX_INPUT_BYTES = 200_000_000
 # A scan finer than this is rendered down to it: on 600 dpi office scans of the held-out
 # drawings, 300 dpi found 19 of 20 key fields against 17 at 600 or 400 dpi, for less than half
 # the time (docs/ocr_settings.md, "Review").
@@ -76,6 +82,18 @@ SCAN_PICTURE_COVER = 0.6
 # Long side of the page, in inches, used to estimate the resolution of a photo or screenshot
 # (letter and A4 landscape drawings and forms are 11 to 11.7 in).
 PAGE_LONG_SIDE_IN = 11.0
+# Regions: when layout.py's YOLO model can run here (numpy, onnxruntime, Pillow, and
+# models/rfq_layout.onnx), every OCR'd page also goes through the detector, on the very picture
+# tesseract reads, so its boxes and the line boxes share pixels. Each line is tagged with the
+# region its center falls in (title block, export legend, line table, ...) and the regions are
+# saved with the result, so rfq_details can say where a value was printed. It costs about 0.1
+# CPU s a page (about 1 s on a 0.1 CPU host) and changes no text: docs/ocr_settings.md,
+# "Regions". RFQ_OCR_REGIONS=0 turns it off; without the model it is off, and results are
+# exactly what they were before regions.
+OCR_REGIONS = os.environ.get("RFQ_OCR_REGIONS", "1").strip().lower() not in ("0", "false", "no", "off")
+# layout.detect's own default: 48 of 48 regions on the 13 uncopyable files and no false box,
+# found on the OCR raster as well as on the viewer's page image (docs/ocr_settings.md, "Regions").
+REGION_CONF = 0.35
 
 _tool_info: Dict[str, Any] = {}
 _tool_lock = threading.Lock()
@@ -92,8 +110,9 @@ def _tools() -> Dict[str, Any]:
     with _tool_lock:
         if _tool_info:
             return _tool_info
-        # RFQ_TESSERACT points at another build (the settings were checked against a 5.3.0 build,
-        # the version Debian bookworm ships, as well as the 5.3.4 installed here).
+        # RFQ_TESSERACT points at another build (the settings were checked on 5.3.0 and 5.5.0
+        # builds as well as the 5.3.4 installed here; the Docker image, python:3.12-slim on
+        # Debian trixie, installs 5.5.0).
         tess = os.environ.get("RFQ_TESSERACT", "").strip() or shutil.which("tesseract")
         version = None
         params: set = set()
@@ -126,9 +145,10 @@ def _version_tuple(version: Optional[str]) -> Tuple[int, ...]:
         return (0,)
 
 
-# The oldest Tesseract that has each -c variable this module sets. All of them are in 5.3.0,
-# the version Debian bookworm (the Render image) ships; the check keeps an older or stripped
-# build from failing the whole page over one unknown variable.
+# The oldest Tesseract that has each -c variable this module sets. All of them are in 5.3.0
+# (Debian bookworm) and 5.5.0 (Debian trixie, which python:3.12-slim, the Render image, is
+# built on); the check keeps an older or stripped build from failing the whole page over one
+# unknown variable.
 _PARAM_SINCE = {"thresholding_method": (5, 0), "preserve_interword_spaces": (3, 4),
                 "load_system_dawg": (3, 0), "load_freq_dawg": (3, 0), "tessedit_create_tsv": (3, 5)}
 
@@ -144,6 +164,21 @@ def available() -> Dict[str, Any]:
     t = _tools()
     return {"tesseract": bool(t["tesseract"]), "tesseract_version": t["tesseract_version"],
             "pdftoppm": bool(t["pdftoppm"]), "pillow": Image is not None, "ocr": bool(t["tesseract"])}
+
+
+def _layout() -> Any:
+    """layout.py when its region detector can run here, else None. Asked only when a page is
+    about to be OCR'd, so a text-layer PDF never loads numpy and onnxruntime; a missing or broken
+    layout.py only means no regions."""
+    if not OCR_REGIONS or Image is None:
+        return None
+    try:
+        if str(HERE) not in sys.path:
+            sys.path.insert(0, str(HERE))
+        import layout
+        return layout if layout.available().get("ready") else None
+    except Exception:  # noqa: BLE001 - no regions is never a reason to fail a page
+        return None
 
 
 def _env() -> Dict[str, str]:
@@ -194,12 +229,20 @@ def _run(cmd: List[str], deadline: float, what: str, data: Optional[bytes] = Non
 #   threshold     tesseract thresholding_method (0 Otsu, 1 adaptive Otsu, 2 Sauvola)
 #   tess_dpi      tell tesseract the resolution of the picture it gets
 #   pis           -c preserve_interword_spaces=1
-#   nodict        -c load_system_dawg=0 -c load_freq_dawg=0 (no English word lists)
+#   nodict        -c load_system_dawg=0 -c load_freq_dawg=0; with --oem 1 this changes
+#                 nothing (see _tesseract_words), kept so the search log stays readable
 #   repair        uppercase an l that sits in an all-caps line (Helvetica I and l look alike)
 #   orient        when the first reading looks sideways or upside down, ask tesseract's
 #                 orientation detection and read the turned page (on unless set to False)
 #   min_conf      drop words tesseract is less sure of than this (drawing line work read
 #                 as letters), except words with a digit and lone capitals (_keep_word)
+#   regions       a second reading of each detected region named here, cut out and read on
+#                 its own: {"title_block": {"psm": [6], "target_dpi": 600}} (psm, and scale or
+#                 target_dpi for the crop); needs the region detector (layout.py)
+#   region_merge  how that reading joins the page's: "conf" or "fill" as for two passes, or
+#                 "replace" (inside the region the reading with the higher mean confidence wins)
+#                 No recipe uses regions: every crop reading tried cost 12 to 29 % more time for
+#                 no field the extractor gets right (docs/ocr_settings.md, "Regions").
 # The per-source recipes below are the measured winners: docs/ocr_settings.md has every setting
 # tried, the scores, and the time per page. Change a value there and here together, and rerun
 # python ocr.py --evaluate. BASELINE is plain tesseract on a 300 dpi rendering, for comparison.
@@ -246,21 +289,41 @@ SOURCE_TYPES = tuple(RECIPES)
 # --------------------------------------------------------------------------- #
 # Pictures
 # --------------------------------------------------------------------------- #
+def _decoded_bytes(mode: str, size: Tuple[int, int]) -> int:
+    """Memory Pillow uses for a picture: 1 byte a pixel for 1-bit, gray, and palette pictures,
+    2 for 16-bit gray, 4 for everything else (RGB is stored padded to 4)."""
+    per = 1 if mode in ("1", "L", "P") else 2 if mode.startswith("I;16") else 4
+    return size[0] * size[1] * per
+
+
 def _open_image(data: bytes) -> "Image.Image":
     if Image is None:
         raise OcrError("Pillow is not installed")
     try:
         img = Image.open(io.BytesIO(data))
-        if img.size[0] * img.size[1] > MAX_INPUT_PIXELS:
-            raise OcrError(f"the picture is too large to read ({img.size[0]} x {img.size[1]} pixels)")
+        w, h = img.size
+
+        def too_big(size: Tuple[int, int]) -> bool:
+            return size[0] * size[1] > MAX_INPUT_PIXELS or _decoded_bytes(img.mode, size) > MAX_INPUT_BYTES
+        if img.format == "JPEG" and too_big(img.size):
+            k = 2
+            while k < 8 and too_big((w // k, h // k)):
+                k *= 2
+            img.draft(img.mode, (max(1, w // k), max(1, h // k)))
+        if too_big(img.size):
+            raise OcrError(f"the picture is too large to read ({w} x {h} pixels)")
         img.load()
     except OcrError:
         raise
     except Exception as exc:  # noqa: BLE001 - Pillow raises many types for broken files
+        if type(exc).__name__ == "DecompressionBombError":  # Pillow's own size guard
+            raise OcrError("the picture is too large to read")
         raise OcrError(f"the picture could not be read ({type(exc).__name__})")
     try:
-        # A phone stores a sideways photo as is and says in EXIF how to turn it.
-        img = ImageOps.exif_transpose(img)
+        # A phone stores a sideways photo as is and says in EXIF how to turn it. Only then:
+        # exif_transpose returns a full copy even when there is nothing to turn.
+        if img.getexif().get(0x0112, 1) not in (None, 1):
+            img = ImageOps.exif_transpose(img)
     except Exception:  # noqa: BLE001 - a broken EXIF block only means no turning
         pass
     return img
@@ -296,9 +359,12 @@ def _gray(img: "Image.Image") -> "Image.Image":
     if img.mode == "L":
         return img
     if img.mode in ("RGBA", "LA", "P", "PA"):
-        img = img.convert("RGBA")
-        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        img = Image.alpha_composite(bg, img)  # transparent screenshots read as white paper
+        # Transparent screenshots read as white paper. Blended in gray (the gray of the colors
+        # over white, weighted by alpha): three one-byte pictures instead of three RGBA ones.
+        if img.mode in ("P", "PA"):
+            img = img.convert("RGBA")  # a palette may carry its transparency in the palette
+        alpha = img.getchannel("A")
+        return Image.composite(img.convert("L"), Image.new("L", img.size, 255), alpha)
     elif img.mode in ("I", "F") or img.mode.startswith("I;16"):
         # 16-bit gray (some scanners save PNGs that way) and float pictures: Pillow's
         # convert("L") clips them at 255 instead of scaling, which turns the whole page white.
@@ -334,10 +400,19 @@ def _otsu(hist: List[int]) -> int:
     return best_t
 
 
+def _probe(img: "Image.Image", pixels: int = 2_000_000) -> "Image.Image":
+    """A small copy for statistics (color, bit depth), picked pixel by pixel so no new gray
+    levels appear. Converting a 48 megapixel photo whole for them cost 400 MB."""
+    k = int((img.size[0] * img.size[1] / float(pixels)) ** 0.5)
+    if k < 2:
+        return img
+    return img.resize((max(1, img.size[0] // k), max(1, img.size[1] // k)), Image.NEAREST)
+
+
 def _is_bilevel(img: "Image.Image") -> bool:
     if img.mode == "1":
         return True
-    hist = _gray(img).histogram()
+    hist = _gray(img if img.mode == "L" else _probe(img)).histogram()
     total = sum(hist) or 1
     return (sum(hist[:8]) + sum(hist[248:])) / total > 0.995
 
@@ -594,7 +669,7 @@ def classify(img: "Image.Image", ppi: Optional[float] = None, bits: Optional[int
     info: Dict[str, Any] = {"size": list(img.size), "mode": img.mode}
     color = img.mode in _COLOR_MODES
     if color:
-        sat = ImageStat.Stat(img.convert("RGB").convert("HSV").split()[1]).mean[0]
+        sat = ImageStat.Stat(_probe(img).convert("RGB").convert("HSV").getchannel("S")).mean[0]
         color = sat > 12
     info["color"] = bool(color)
     corners = None
@@ -700,8 +775,10 @@ def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str
     if recipe.get("pis") and _supports("preserve_interword_spaces"):
         cmd += ["-c", "preserve_interword_spaces=1"]
     if recipe.get("nodict") and _supports("load_system_dawg") and _supports("load_freq_dawg"):
-        # Part numbers and specs are not dictionary words; without the word lists the model
-        # reads the characters it sees instead of the nearest English word.
+        # Meant to turn off the English word lists. With --oem 1 it does nothing: the LSTM
+        # recognizer loads its own word lists with default settings (LSTMRecognizer::
+        # LoadDictionary, Tesseract 5.3 and 5.5), so the output is byte for byte the same. A
+        # model with lstm-word-dawg removed really reads without it (docs/ocr_settings.md).
         cmd += ["-c", "load_system_dawg=0", "-c", "load_freq_dawg=0"]
     # TSV output (one row per word, with its box and confidence). Set as a variable rather than
     # with the "tsv" config name: that config file lives in the system tessdata folder, and with
@@ -938,9 +1015,82 @@ def _orientation(path: str, recipe: Dict[str, Any], deadline: float) -> Tuple[in
     return (int(rot.group(1)) if rot else 0), (float(conf.group(1)) if conf else 0.0)
 
 
-def _ocr_picture(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any], tmp: str,
-                 deadline: float, tag: str) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
-    g, scale, steps = prepare(img, info, recipe)
+def _detect_regions(pic: "Image.Image") -> Optional[Tuple[List[Dict[str, Any]], float]]:
+    """(regions in the picture's pixels, seconds) from layout.py, or None when the detector
+    cannot run here."""
+    lay = _layout()
+    if lay is None:
+        return None
+    t0 = time.monotonic()
+    return lay.detect(pic, conf=REGION_CONF), time.monotonic() - t0
+
+
+def _region_words(g: "Image.Image", dpi: float, regions: List[Dict[str, Any]], recipe: Dict[str, Any],
+                  tmp: str, deadline: float, tag: str) -> List[List[Dict[str, Any]]]:
+    """A second reading of each region the recipe names under "regions", alone: the crop (with a
+    small margin) is optionally scaled up and read with its own page segmentation modes, and the
+    word boxes are put back into the page picture's pixels."""
+    passes: List[List[Dict[str, Any]]] = []
+    specs = recipe.get("regions") or {}
+    pad = max(4, int(round(dpi * 0.03)))
+    for k, r in enumerate(regions):
+        spec = specs.get(r["label"])
+        if not spec:
+            continue
+        x0, y0, x1, y1 = r["box"]
+        box = (max(0, int(x0) - pad), max(0, int(y0) - pad),
+               min(g.size[0], int(x1 + 0.999) + pad), min(g.size[1], int(y1 + 0.999) + pad))
+        if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+            continue
+        crop = g.crop(box)
+        f = float(spec.get("scale") or 1.0)
+        if spec.get("target_dpi"):
+            f = max(1.0, float(spec["target_dpi"]) / max(dpi, 30.0))
+        if abs(f - 1.0) > 0.01:
+            crop = crop.resize((max(1, int(round(crop.size[0] * f))), max(1, int(round(crop.size[1] * f)))),
+                               Image.LANCZOS)
+        path = os.path.join(tmp, f"{tag}-{r['label']}{k}.tif")
+        crop.save(path, "TIFF", dpi=(dpi * f, dpi * f))
+        sub = dict(recipe, min_conf=spec.get("min_conf", recipe.get("min_conf")))
+        for psm in spec.get("psm") or [6]:
+            words = _tesseract_words(path, psm, dpi * f if recipe.get("tess_dpi") else None, sub, deadline)
+            for w in words:
+                w["box"] = [box[0] + w["box"][0] / f, box[1] + w["box"][1] / f,
+                            box[0] + w["box"][2] / f, box[1] + w["box"][3] / f]
+                w["line"] = (f"{r['label']}{k}:{psm}",) + tuple(w["line"][1:])
+            passes.append(words)
+    return passes
+
+
+def _merge_region(words: List[Dict[str, Any]], extra: List[List[Dict[str, Any]]], mode: str) -> List[Dict[str, Any]]:
+    """Join the region readings to the page reading. "conf" and "fill" work as between two page
+    passes (_merge_passes). "replace": inside the region, the reading with the higher mean
+    confidence wins as a whole."""
+    if mode != "replace":
+        return _merge_passes([words] + extra, mode)
+    out = list(words)
+    for ws in extra:
+        if not ws:
+            continue
+        bx = [min(w["box"][0] for w in ws), min(w["box"][1] for w in ws),
+              max(w["box"][2] for w in ws), max(w["box"][3] for w in ws)]
+
+        def inside(w: Dict[str, Any]) -> bool:
+            cx, cy = (w["box"][0] + w["box"][2]) / 2, (w["box"][1] + w["box"][3]) / 2
+            return bx[0] <= cx <= bx[2] and bx[1] <= cy <= bx[3]
+        old = [w for w in out if inside(w)]
+        mean = lambda ws_: sum(w["conf"] for w in ws_) / len(ws_) if ws_ else 0.0  # noqa: E731
+        if mean(ws) > mean(old):
+            out = [w for w in out if not inside(w)] + ws
+    return out
+
+
+def _ocr_picture(prepared: Tuple["Image.Image", float, Dict[str, Any]], info: Dict[str, Any],
+                 recipe: Dict[str, Any], tmp: str, deadline: float,
+                 tag: str) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any], Any]:
+    """Read one page picture already cleaned by prepare: (picture, scale, steps). Returns the
+    words, the scale, the steps, and (regions, seconds) from the detector or None."""
+    g, scale, steps = prepared
     path = os.path.join(tmp, f"{tag}.tif")
     dpi = float(info.get("dpi") or 300) * scale
     g.save(path, "TIFF", dpi=(dpi, dpi))  # uncompressed: fastest to write and to read
@@ -965,7 +1115,16 @@ def _ocr_picture(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any
             if _sure_words(again) > (0.7 if upright else 1.0) * _sure_words(words):
                 words = again
                 steps["rotated"] = rot
-    return words, scale, steps
+                g = turned
+    # The regions come from the same picture as the words (the turned one, when it was turned),
+    # so a line and the region around it are in the same pixels.
+    # Skipped when the file's time is up: a page without regions is still a page read.
+    found = _detect_regions(g) if time.monotonic() < deadline else None
+    if found and found[0] and recipe.get("regions"):
+        extra = _region_words(g, dpi, found[0], recipe, tmp, deadline, tag)
+        if extra:
+            words = _merge_region(words, extra, str(recipe.get("region_merge") or "conf"))
+    return words, scale, steps, found
 
 
 # --------------------------------------------------------------------------- #
@@ -1146,9 +1305,11 @@ def _pdf_images_main(pages_arg: str = "") -> int:
     return 0
 
 
-def _pdf_text_layer(data: bytes) -> Dict[str, Any]:
+def _pdf_text_layer(data: bytes, deadline: Optional[float] = None) -> Dict[str, Any]:
     """{text, pages, per_page, error}. pypdf (through attachments.py, in a child process) gives the
-    text; pdftotext, when installed, also says which pages have none, for mixed PDFs."""
+    text; pdftotext, when installed, also says which pages have none, for mixed PDFs. deadline
+    (time.monotonic) bounds pdftotext; attachments.py has its own limit for pypdf
+    (RFQ_PDF_TEXT_TIMEOUT)."""
     result: Dict[str, Any] = {"text": "", "pages": None, "per_page": None, "error": None}
     try:
         sys.path.insert(0, str(HERE)) if str(HERE) not in sys.path else None
@@ -1160,7 +1321,10 @@ def _pdf_text_layer(data: bytes) -> Dict[str, Any]:
     tool = _tools()["pdftotext"]
     if tool:
         try:
-            out = subprocess.run([tool, "-q", "-", "-"], input=data, capture_output=True, timeout=30).stdout
+            left = 30.0 if deadline is None else min(30.0, deadline - time.monotonic())
+            if left <= 0:
+                raise subprocess.TimeoutExpired(tool, 0)
+            out = subprocess.run([tool, "-q", "-", "-"], input=data, capture_output=True, timeout=left).stdout
             pages = out.decode("utf-8", "replace").split("\f")
             if pages and not pages[-1].strip():
                 pages = pages[:-1]
@@ -1281,8 +1445,10 @@ def _ocr(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], deadline: 
         items = _page_items(data, media, recipes, tmp, deadline, only_pages)
         if not items:
             raise OcrError("the file has no pages to read")
-        pages, scales, used = [], [], []
-        for i, (pic, info, recipe) in enumerate(items, start=1):
+        pages, scales, used, found = [], [], [], []
+        for i in range(1, len(items) + 1):
+            pic, info, recipe = items[i - 1]
+            items[i - 1] = (None, info, recipe)  # so the source picture can be freed below
             if isinstance(pic, (bytes, bytearray)):
                 ext = {b"P5": ".pgm", b"P4": ".pbm"}.get(bytes(pic[:2]), ".jpg")
                 ext = ".png" if bytes(pic[:4]) == b"\x89PNG" else ext
@@ -1292,11 +1458,17 @@ def _ocr(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], deadline: 
                 dpi = info.get("dpi") if (recipe.get("tess_dpi") or ext == ".pgm") else None
                 words = _merge_passes([_tesseract_words(path, psm, dpi, recipe, deadline)
                                        for psm in recipe.get("psm") or [3]], str(recipe.get("merge") or "fill"))
-                scale, steps = 1.0, {}
+                scale, steps, regions = 1.0, {}, None
             else:
-                words, scale, steps = _ocr_picture(pic, info, recipe, tmp, deadline, f"p{i}")
+                prepared = prepare(pic, info, recipe)
+                # The cleaned picture is all tesseract needs: let the source go before it runs
+                # (a 48 megapixel photo is 192 MB that would otherwise sit beside tesseract).
+                del pic
+                words, scale, steps, regions = _ocr_picture(prepared, info, recipe, tmp, deadline, f"p{i}")
+                del prepared
             pages.append(words)
             scales.append(scale)
+            found.append(regions)
             used.append({"page": i, "source": info.get("type"), "dpi": info.get("source_dpi") or info.get("dpi"),
                          "recipe": recipe_record(recipe), "steps": steps})
     out = _assemble(pages, scales)
@@ -1304,8 +1476,47 @@ def _ocr(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], deadline: 
     out["settings"] = {"engine": f"tesseract {_tools()['tesseract_version']}", "oem": 1, "lang": "eng",
                        "model": str(recipes.get("scan", {}).get("tessdata") or OCR_TESSDATA or "installed"),
                        "pages": used}
+    _attach_regions(out, found, scales)
     out["seconds"] = round(time.monotonic() - started, 2)
     return out
+
+
+def region_at(regions: List[Dict[str, Any]], page: int, bbox: List[float]) -> Optional[str]:
+    """The label of the region the center of bbox falls in, on that page; the smallest one when
+    regions overlap (the most specific). None outside every region."""
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+    cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+    inside = [r for r in regions if r.get("page", 1) == page and r["box"][0] <= cx <= r["box"][2]
+              and r["box"][1] <= cy <= r["box"][3]]
+    if not inside:
+        return None
+    return min(inside, key=lambda r: (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]))["label"]
+
+
+def _attach_regions(out: Dict[str, Any], found: List[Any], scales: List[float]) -> None:
+    """Save the detector's regions with the result, in the same pixels as the line boxes (the
+    page picture at the source resolution), and tag each line with the region it sits in. Adds
+    nothing when the detector did not run, so a result without it is what it always was."""
+    if all(f is None for f in found):
+        return
+    regions: List[Dict[str, Any]] = []
+    seconds = 0.0
+    for pno, (f, scale) in enumerate(zip(found, scales), start=1):
+        if not f:
+            continue
+        seconds += f[1]
+        for d in f[0]:
+            regions.append({"page": pno, "label": d["label"], "conf": round(float(d["conf"]), 3),
+                            "box": [int(round(v / scale)) for v in d["box"]]})
+    for ln in out["lines"]:
+        label = region_at(regions, ln["page"], ln["bbox"])
+        if label:
+            ln["region"] = label
+    out["regions"] = regions
+    lay = _layout()
+    out["settings"]["layout"] = {"model": Path(lay.MODEL_PATH).name if lay else None, "conf": REGION_CONF,
+                                 "seconds": round(seconds, 2)}
 
 
 def recipe_record(recipe: Dict[str, Any]) -> Dict[str, Any]:
@@ -1374,7 +1585,7 @@ def _file_text(data: bytes, media: str, name: str, *, cache: "Optional[OcrCache]
     if media == "pdf":
         if not data.lstrip()[:1024].count(b"%PDF-"):
             return _result("none", error="the file is not a PDF", sha256=sha)
-        layer = _pdf_text_layer(data)
+        layer = _pdf_text_layer(data, started + timeout)
         if _has_text_layer(layer):
             per_page = layer.get("per_page") or []
             scanned = _scanned_pages(data, layer, started + timeout) if allow_ocr and available()["ocr"] else []
@@ -1725,6 +1936,21 @@ def parse_settings(spec: str) -> Dict[str, Any]:
     return out
 
 
+def parse_regions(spec: str) -> Dict[str, Dict[str, Any]]:
+    """"title_block:6:600,line_table:4" -> {"title_block": {"psm": [6], "target_dpi": 600.0},
+    "line_table": {"psm": [4]}}: the recipe's "regions" setting from the command line."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for part in (spec or "").split(","):
+        bits = [b.strip() for b in part.split(":")]
+        if not bits[0]:
+            continue
+        entry: Dict[str, Any] = {"psm": [int(p) for p in (bits[1] if len(bits) > 1 and bits[1] else "6").split("+")]}
+        if len(bits) > 2 and bits[2]:
+            entry["target_dpi"] = float(bits[2])
+        out[bits[0]] = entry
+    return out
+
+
 def settings_text(recipe: Dict[str, Any]) -> str:
     """The inverse of parse_settings, for tables and logs."""
     parts = []
@@ -1735,6 +1961,9 @@ def settings_text(recipe: Dict[str, Any]) -> str:
             v = "+".join(str(p) for p in v)
         elif k == "tessdata":
             v = Path(str(v)).name
+        elif k == "regions" and isinstance(v, dict):
+            v = ";".join(f"{lb}:{'+'.join(str(p) for p in e.get('psm') or [6])}"
+                         + (f":{int(float(e['target_dpi']))}" if e.get("target_dpi") else "") for lb, e in v.items())
         elif v is True:
             v = 1
         elif isinstance(v, float) and v.is_integer():
@@ -2072,8 +2301,12 @@ def build_cache(path: Path = DEFAULT_CACHE, effort: str = "best", files: Optiona
     cache = OcrCache(path)
     cache.entries = {}
     t = _tools()
+    lay = _layout()
     cache.meta = {"tesseract_version": t["tesseract_version"], "effort": effort,
                   "settings": {kind: recipe_record(r) for kind, r in recipes_for(effort).items()},
+                  # the region detector the OCR results were tagged with (None: no regions in them)
+                  "regions": {"model": Path(lay.MODEL_PATH).name, "model_bytes": os.path.getsize(lay.MODEL_PATH),
+                              "conf": REGION_CONF} if lay else None,
                   "made_by": "python ocr.py --build-cache"}
     files = files if files is not None else sorted(p for p in BETA_FILES.rglob("*") if p.is_file())
     failed = 0
@@ -2117,6 +2350,11 @@ def main(argv: List[str]) -> int:
                          "(check: the 5 per kind the search never saw; tune; all)")
     ap.add_argument("--model", default=None,
                     help="for --evaluate: also score best and fast with the eng.traineddata in this folder")
+    ap.add_argument("--regions", default="",
+                    help="for --evaluate: add a second reading of these detected regions to every set, e.g. "
+                         "title_block:6:600,line_table:6:450 (label:psm:target dpi)")
+    ap.add_argument("--region-merge", default="conf", choices=("conf", "fill", "replace"),
+                    help="for --evaluate --regions: how the region reading joins the page's")
     ap.add_argument("--workers", type=int, default=1, help="for --evaluate: files OCR'd side by side")
     ap.add_argument("--effort", default="best", choices=("best", "fast"))
     ap.add_argument("--cache", default=None, help="cache file for FILE mode (default: none)")
@@ -2157,6 +2395,10 @@ def main(argv: List[str]) -> int:
                 named[s] = recipes_for(s)
             else:
                 named[s] = {t: parse_settings(s) for t in SOURCE_TYPES}
+        if args.regions:
+            spec = parse_regions(args.regions)
+            named = {f"{n}+regions": {t: dict(r, regions=spec, region_merge=args.region_merge) for t, r in rs.items()}
+                     for n, rs in named.items()}
         if args.model:
             for s in ("best", "fast"):
                 named[f"{s}+{Path(args.model).name}"] = {t: dict(r, tessdata=args.model)

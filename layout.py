@@ -39,7 +39,9 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("rfq.layout")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.environ.get("RFQ_LAYOUT_MODEL") or os.path.join(HERE, "models", "rfq_layout.onnx")
+# Absolute from the start: the session loads lazily, and a relative RFQ_LAYOUT_MODEL would otherwise be
+# looked up from whatever the working directory is by then.
+MODEL_PATH = os.path.abspath(os.environ.get("RFQ_LAYOUT_MODEL") or os.path.join(HERE, "models", "rfq_layout.onnx"))
 
 CLASSES = ["title_block", "revision_block", "notes", "export_legend", "proprietary_notice",
            "form_header", "line_table", "requirements"]
@@ -172,6 +174,24 @@ def _plain_mode(img: Any) -> Any:
     return img.convert("RGB")  # CMYK, YCbCr, LAB, HSV
 
 
+def _reduced(img: Any, factor: int) -> Any:
+    """The picture box-averaged down by a whole factor, making as few full-size copies as possible.
+    Image.reduce cannot average 1-bit, palette or 16-bit pictures, so those change mode first: 1 bit
+    and palettes to L, RGB or RGBA, and 16 bits to 32-bit I, which is reduced before it is stretched
+    to 8 bits (stretching first held three full-size copies: 530 MB for a 49 MP 16-bit scan). Pillow
+    reduces RGBA and LA through a full-size premultiplied copy; when the alpha is opaque, as it is in
+    most scans and screenshots saved with alpha, the colour channels are reduced one at a time instead."""
+    from PIL import Image
+    if img.mode.startswith("I;16"):
+        img = img.convert("I")
+    elif img.mode in ("1", "P", "PA"):
+        img = _plain_mode(img)
+    if img.mode in ("RGBA", "LA") and img.getextrema()[-1] == (255, 255):
+        bands = [img.getchannel(b).reduce(factor) for b in img.getbands()[:-1]]
+        return bands[0] if len(bands) == 1 else Image.merge("RGB", bands)
+    return img.reduce(factor)
+
+
 def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
     """A PIL RGB image and the factors that take its pixels back to the caller's pixels.
     With draft (the detector's path) a big picture is made small early, since the detector only
@@ -206,10 +226,10 @@ def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
         raise TypeError(f"expected a PIL image or PNG/JPEG bytes, got {type(image).__name__}")
     if img.size[0] < 8 or img.size[1] < 8 or img.size[0] * img.size[1] > MAX_PIXELS:
         raise ValueError(f"unusable picture size {img.size}")
-    img = _plain_mode(img)
     factor = max(img.size) // (IMGSZ * 2) if draft else 1
     if factor >= 2:
-        img = img.reduce(factor)
+        img = _reduced(img, factor)
+    img = _plain_mode(img)
     if img.mode in ("LA", "RGBA"):
         rgba = img.convert("RGBA")
         bg = Image.new("RGB", img.size, (255, 255, 255))  # transparent areas read as paper
@@ -323,7 +343,8 @@ def _pdf_page_points(path: str, page: int) -> Optional[Tuple[float, float]]:
 def render_pdf_page(data: bytes, page: int = 1, dpi: int = 150) -> Any:
     """One PDF page as a PIL image via pdftoppm, or None. A page so large that it would pass
     MAX_PDF_PIXELS at this dpi (a wall-sized sheet, or a hostile MediaBox) renders at a lower dpi,
-    so neither pdftoppm nor Pillow holds more than about 100 MB for it."""
+    so neither pdftoppm nor Pillow holds more than about 100 MB for it. The page size comes from
+    pdfinfo; without it, pdftoppm renders at most the top left 5000 x 5000 pixels of the page."""
     try:
         from PIL import Image
         if not data or b"%PDF" not in bytes(data[:1024]) or shutil.which("pdftoppm") is None:
@@ -335,13 +356,19 @@ def render_pdf_page(data: bytes, page: int = 1, dpi: int = 150) -> Any:
             with open(src, "wb") as fh:
                 fh.write(bytes(data))
             size = _pdf_page_points(src, page)
+            crop: List[str] = []
             if size:
                 px = size[0] * size[1] * (dpi / 72.0) ** 2
                 if px > MAX_PDF_PIXELS:
                     dpi = max(1.0, dpi * (MAX_PDF_PIXELS / px) ** 0.5)
+            else:
+                # No page size (pdfinfo missing or confused): cap the bitmap pdftoppm allocates instead.
+                # It renders only this crop area, so a hostile MediaBox costs at most MAX_PDF_PIXELS.
+                side = str(int(MAX_PDF_PIXELS ** 0.5))
+                crop = ["-x", "0", "-y", "0", "-W", side, "-H", side]
             out = os.path.join(tmp, "page")
-            subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", f"{dpi:.2f}", "-png", "-singlefile",
-                            src, out], check=True, capture_output=True, timeout=PDF_TIMEOUT)
+            subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", f"{dpi:.2f}"] + crop +
+                           ["-png", "-singlefile", src, out], check=True, capture_output=True, timeout=PDF_TIMEOUT)
             with Image.open(out + ".png", formats=("PNG",)) as im:
                 if im.size[0] * im.size[1] > MAX_PIXELS:  # no page size from pdfinfo and still huge
                     return None
