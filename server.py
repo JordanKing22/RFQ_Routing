@@ -39,7 +39,7 @@ import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import attachments as att_mod
@@ -869,8 +869,12 @@ class App:
 
     def rfq_record(self, eid: str) -> Optional[Dict[str, Any]]:
         """The extracted details of one RFQ, or None when the email is not an RFQ."""
+        return self.rfq_record_status(eid)[0]
+
+    def rfq_record_status(self, eid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """(record, error): error says why an email has no record when extraction failed (not a non-RFQ)."""
         if rfq_details is None or eid not in self.emails:
-            return None
+            return None, None
         self.prepare_email(eid)
         with self.cond:
             item = self.items[eid]
@@ -879,17 +883,18 @@ class App:
                         self._email_changed_at.get(eid))
             memo = self._details.get(eid)
             if memo and memo[0] == memo_key:
-                return memo[1]
+                return memo[1], memo[2]
             email = self.emails[eid]
+        error = None
         try:
             record = rfq_details.extract(email, self._texts(email), self.shop, decision) \
                 if rfq_details.is_rfq(email, decision) else None
         except Exception as exc:  # noqa: BLE001 - one odd email must not break the download
             log(f"RFQ details for {eid} failed: {exc!r}")
-            record = None
+            record, error = None, "The details of this email could not be pulled out (the server log has the cause)."
         with self.cond:
-            self._details[eid] = (memo_key, record)
-        return record
+            self._details[eid] = (memo_key, record, error)
+        return record, error
 
     def rfq_records(self) -> List[Dict[str, Any]]:
         with self.cond:
@@ -1037,12 +1042,14 @@ class Handler(BaseHTTPRequestHandler):
                               {"Content-Disposition": self._disposition("inline", "rfq_details.json")})
         match = re.fullmatch(r"/api/rfq_details/([A-Z]\d{1,4})", path)
         if match:
-            record = self.app.rfq_record(match.group(1))
-            return self._json({"ok": True, "record": record} if record else {"ok": False, "record": None})
+            record, error = self.app.rfq_record_status(match.group(1))
+            if record:
+                return self._json({"ok": True, "record": record})
+            return self._json(dict({"ok": False, "record": None}, **({"error": error} if error else {})))
         match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|thumb\.jpg|mesh\.json|text|page\.jpg|regions\.json)", path)
         if match:
             return self._attachment(match.group(1), int(match.group(2)), match.group(3), "download" in query)
-        match = re.fullmatch(r"/api/upload/([0-9a-f]{16})/(file|text)", path)
+        match = re.fullmatch(r"/api/upload/([0-9a-f]{16})/(file|text|page\.jpg|regions\.json)", path)
         if match:
             return self._upload(match.group(1), match.group(2), "download" in query)
         return self._json({"error": "not found"}, 404)
@@ -1060,9 +1067,9 @@ class Handler(BaseHTTPRequestHandler):
         if kind == "file":
             return self._real_file(eid, att, what, download)
         if kind == "upload":
-            if what != "file":
+            if what not in ("file", "page.jpg", "regions.json"):
                 return self._json({"error": "not found"}, 404)
-            return self._upload(att.get("upload_id") or "", "file", download)
+            return self._upload(att.get("upload_id") or "", what, download)
         if kind not in att_mod.SPEC_KINDS:
             return self._json({"error": "This attachment is a file name only."}, 404)
         try:
@@ -1102,13 +1109,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.app.prepare_email(eid)
             with open(path, "rb") as fh:
                 data = fh.read()
-            key, media = att.get("sha256") or hashlib.sha256(data).hexdigest(), att.get("media") or ""
-            if what == "page.jpg":
-                img = att_mod.page_image(data, media, key)
-                if not img:
-                    return self._json({"error": "no page image"}, 404)
-                return self._send(200, img[0], "image/jpeg", {"Cache-Control": "private, max-age=3600"})
-            return self._json(att_mod.page_regions(data, media, key))
+            return self._page(data, att.get("media") or "", att.get("sha256") or hashlib.sha256(data).hexdigest(), what)
         if what == "mesh.json":
             if eid in self.app.emails:
                 self.app.prepare_email(eid)
@@ -1118,10 +1119,21 @@ class Handler(BaseHTTPRequestHandler):
                               {"Cache-Control": "private, max-age=3600"})
         return self._json({"error": "not found"}, 404)
 
+    def _page(self, data: bytes, media: str, key: str, what: str) -> None:
+        """page.jpg (page 1 as a JPEG) or regions.json (what the YOLO detector finds on it)."""
+        if what == "page.jpg":
+            img = att_mod.page_image(data, media, key)
+            if not img:
+                return self._json({"error": "no page image"}, 404)
+            return self._send(200, img[0], "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+        return self._json(att_mod.page_regions(data, media, key))
+
     def _upload(self, uid: str, what: str, download: bool) -> None:
         item = self.app.uploads.get(uid)
         if item is None:
             return self._json({"error": "This uploaded file is no longer in memory."}, 410)
+        if what in ("page.jpg", "regions.json"):
+            return self._page(item["data"], item["media"], item.get("sha256") or hashlib.sha256(item["data"]).hexdigest(), what)
         if what == "text":
             entry = att_mod.jev_entries([att_mod.upload_attachment(item)])[0]
             return self._json({"name": item["name"], "text": entry["content"],

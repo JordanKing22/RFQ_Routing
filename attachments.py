@@ -841,7 +841,7 @@ class UploadStore:
         item: Dict[str, Any] = {
             "id": secrets.token_hex(8), "name": safe_filename(filename, media), "media": media,
             "size": len(data), "data": data, "created": time.time(), "attached": False,
-            "pages": None, "width": None, "height": None, "text": "", "text_error": None,
+            "sha256": hashlib.sha256(data).hexdigest(), "pages": None, "width": None, "height": None, "text": "", "text_error": None,
         }
         if media == "pdf":
             result = extract_pdf_text(data)
@@ -884,7 +884,7 @@ class UploadStore:
 def upload_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
     """The attachment entry stored on the email. The text stays even if the bytes are dropped later."""
     return {"name": item["name"], "kind": "upload", "media": item["media"], "upload_id": item["id"],
-            "size": item["size"], "pages": item["pages"], "width": item["width"], "height": item["height"],
+            "sha256": item.get("sha256"), "size": item["size"], "pages": item["pages"], "width": item["width"], "height": item["height"],
             "text": item["text"][:PDF_TEXT_MAX_CHARS], "text_error": item["text_error"],
             "text_method": item.get("text_method"), "text_conf": item.get("text_conf")}
 
@@ -1091,6 +1091,7 @@ _layout_mod: Any = None
 _pages_lock = threading.Lock()
 _pages: Dict[Tuple[str, int], Tuple[bytes, int, int]] = {}
 _regions: Dict[Tuple[str, int], Dict[str, Any]] = {}
+_page_locks: Dict[Tuple[str, int], threading.Lock] = {}
 PAGE_DPI = 150
 PAGE_MAX_PX = 1800
 PAGE_CACHE_MAX = 48  # page JPEGs run 100 to 400 KB; uploads must not grow this without bound
@@ -1130,9 +1131,26 @@ def layout_ready() -> bool:
 
 def page_image(data: bytes, media: str, key: str, page: int = 1) -> Optional[Tuple[bytes, int, int]]:
     """One page as a JPEG (bytes, width, height): pdftoppm for PDFs, Pillow for photos and screenshots."""
+    ck = (key, page)
     with _pages_lock:
-        if (key, page) in _pages:
-            return _pages[(key, page)]
+        if ck in _pages:
+            return _pages[ck]
+        lock = _page_locks.setdefault(ck, threading.Lock())
+    # The viewer asks for the page and its regions, and several people may open the same file: one
+    # render per page at a time, and whoever waited takes the first one's result from the cache.
+    with lock:
+        with _pages_lock:
+            if ck in _pages:
+                return _pages[ck]
+        out = _render_page(data, media, page)
+        if out:
+            _remember(_pages, ck, out)
+        with _pages_lock:
+            _page_locks.pop(ck, None)
+    return out
+
+
+def _render_page(data: bytes, media: str, page: int) -> Optional[Tuple[bytes, int, int]]:
     out = None
     try:
         if media == "pdf":
@@ -1157,8 +1175,6 @@ def page_image(data: bytes, media: str, key: str, page: int = 1) -> Optional[Tup
                 out = (buf.getvalue(), im.width, im.height)
     except Exception:  # noqa: BLE001 - no page image means no overlay, nothing worse
         out = None
-    if out:
-        _remember(_pages, (key, page), out)
     return out
 
 
@@ -1169,22 +1185,23 @@ def page_regions(data: bytes, media: str, key: str, page: int = 1) -> Dict[str, 
             return _regions[(key, page)]
     result: Dict[str, Any] = {"available": False, "page": page, "regions": []}
     mod = _layout()
-    if mod and layout_ready():
-        img = page_image(data, media, key, page)
-        if img:
-            started = time.time()
-            try:
-                regions = mod.detect(img[0])
-            except Exception:  # noqa: BLE001
-                regions = []
-            result = {"available": True, "page": page, "width": img[1], "height": img[2],
-                      "regions": [{"label": r.get("label"), "conf": round(float(r.get("conf") or 0), 3),
-                                   "box": [round(float(v), 1) for v in (r.get("box") or [])]} for r in regions],
-                      "seconds": round(time.time() - started, 2)}
-    if result["available"]:
-        # "Unavailable" is not remembered: the model can appear (or onnxruntime get installed) while the
-        # server runs, and the next request should then get real regions.
-        _remember(_regions, (key, page), result)
+    if not (mod and layout_ready()):
+        # Not remembered: the model can appear (or onnxruntime get installed) while the server runs.
+        return result
+    img = page_image(data, media, key, page)
+    if not img:
+        return dict(result, error="This page could not be turned into an image.")
+    started = time.time()
+    try:
+        regions = mod.detect(img[0])
+    except Exception as exc:  # noqa: BLE001 - layout.detect should not raise; if it does, say so and retry next time
+        return dict(result, available=True, width=img[1], height=img[2],
+                    error=f"The region detector failed on this page ({type(exc).__name__}).")
+    result = {"available": True, "page": page, "width": img[1], "height": img[2],
+              "regions": [{"label": r.get("label"), "conf": round(float(r.get("conf") or 0), 3),
+                           "box": [round(float(v), 1) for v in (r.get("box") or [])]} for r in regions],
+              "seconds": round(time.time() - started, 2)}
+    _remember(_regions, (key, page), result)
     return result
 
 
@@ -1253,6 +1270,10 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
         if base:
             info["url"] = f"{base}/file"
             info["text_url"] = f"{base}/text"
+            if att.get("sha256") and media in ("pdf", "png", "jpg"):
+                v = att["sha256"][:10]
+                info["page_url"] = f"{base}/page.jpg?v={v}"
+                info["regions_url"] = f"{base}/regions.json?v={v}"
     return info
 
 
