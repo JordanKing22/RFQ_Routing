@@ -671,14 +671,18 @@ def plate_solid(m: Mesh, L: float, W: float, z0: float, z1: float, holes: Sequen
     snap_y = {round(v, 9): v for v in ys_l}
     extra: Dict[Tuple[str, float], List[float]] = {}  # ('x'|'y', line) -> coordinates of extra points on it
 
-    def line_key(axis: str, v: float) -> Tuple[str, float]:
+    def grid_val(axis: str, v: float) -> float:
+        """The grid line a coordinate lies on, exactly as the grid holds it."""
         snap = snap_x if axis == "x" else snap_y
         hit = snap.get(round(v, 9))
         if hit is None:
             grid = xs_l if axis == "x" else ys_l
             hit = min(grid, key=lambda g: abs(g - v))
             snap[round(v, 9)] = hit
-        return (axis, round(hit, 9))
+        return hit
+
+    def line_key(axis: str, v: float) -> Tuple[str, float]:
+        return (axis, round(grid_val(axis, v), 9))
 
     def edge_pts(z: float, axis: str, line: float, a: float, b: float) -> List[float]:
         """Extra points strictly between a and b on a grid line, in order from a to b (same at every level)."""
@@ -706,7 +710,9 @@ def plate_solid(m: Mesh, L: float, W: float, z0: float, z1: float, holes: Sequen
         extra[key] = [v for i, v in enumerate(vals) if i == 0 or v - vals[i - 1] > tol * 40]
     for t in tiles:
         cx, cy, hh = t["cx"], t["cy"], t["h"]
-        x0, x1, y0, y1 = cx - hh, cx + hh, cy - hh, cy + hh
+        # the tile's sides as the grid holds them: two holes in line can put a side a rounding error apart,
+        # and a vertex that far from the cells' own would not weld to it (an open seam around the tile)
+        x0, x1, y0, y1 = grid_val("x", cx - hh), grid_val("x", cx + hh), grid_val("y", cy - hh), grid_val("y", cy + hh)
         pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
         pts += [(x, y0) for x in xs_l if x0 + tol < x < x1 - tol] + [(x, y1) for x in xs_l if x0 + tol < x < x1 - tol]
         pts += [(x0, y) for y in ys_l if y0 + tol < y < y1 - tol] + [(x1, y) for y in ys_l if y0 + tol < y < y1 - tol]
@@ -734,19 +740,22 @@ def plate_solid(m: Mesh, L: float, W: float, z0: float, z1: float, holes: Sequen
         pts += [(xa, y, z) for y in edge_pts(z, "x", xa, yb, ya)]
         return pts
 
-    def owner(mx: float, my: float) -> Tuple[str, Any]:
-        for t in tiles:
-            if abs(mx - t["cx"]) < t["h"] - tol and abs(my - t["cy"]) < t["h"] - tol:
+    def owner(mx: float, my: float, row_tiles: Sequence[Dict[str, Any]], row_pk: Sequence[Any]) -> Tuple[str, Any]:
+        for t in row_tiles:
+            if abs(mx - t["cx"]) < t["h"] - tol:
                 return "tile", t
-        for p in pk:
-            if p[0] + tol < mx < p[2] - tol and p[1] + tol < my < p[3] - tol:
+        for p in row_pk:
+            if p[0] + tol < mx < p[2] - tol:
                 return "pocket", p
         return "top", None
 
     nx = len(xs_l) - 1
     for j in range(len(ys_l) - 1):
         my = (ys_l[j] + ys_l[j + 1]) / 2
-        kinds = [owner((xs_l[i] + xs_l[i + 1]) / 2, my) for i in range(nx)]
+        # only the tiles and pockets this row crosses (a big hole pattern has hundreds of tiles)
+        row_tiles = [t for t in tiles if abs(my - t["cy"]) < t["h"] - tol]
+        row_pk = [p for p in pk if p[1] + tol < my < p[3] - tol]
+        kinds = [owner((xs_l[i] + xs_l[i + 1]) / 2, my, row_tiles, row_pk) for i in range(nx)]
         # faces facing up: the top surface and pocket floors, merged along the row
         i = 0
         while i < nx:
@@ -849,8 +858,9 @@ def _subsample_holes(holes: List[Dict[str, float]], limit: int) -> List[Dict[str
     """Keep a regular subset of a big hole pattern (every k-th row and column), so the grid stays small."""
     if len(holes) <= limit:
         return holes
-    xs = sorted({round(h["cx"], 6) for h in holes})
-    ys = sorted({round(h["cy"], 6) for h in holes})
+    keyed = [(round(h["cx"], 6), round(h["cy"], 6), h) for h in holes]
+    xs = sorted({kx for kx, _, _ in keyed})
+    ys = sorted({ky for _, ky, _ in keyed})
     for k in range(2, 40):
         kx = xs[::k] if len(xs) > 2 else xs
         ky = ys[::k] if len(ys) > 2 else ys
@@ -858,7 +868,8 @@ def _subsample_holes(holes: List[Dict[str, float]], limit: int) -> List[Dict[str
             kx = kx + [xs[-1]]
         if ys[-1] not in ky:
             ky = ky + [ys[-1]]
-        sel = [h for h in holes if round(h["cx"], 6) in set(kx) and round(h["cy"], 6) in set(ky)]
+        sx, sy = set(kx), set(ky)  # built once per pass, not once per hole
+        sel = [h for hx, hy, h in keyed if hx in sx and hy in sy]
         if 0 < len(sel) <= limit:
             return sel
     step = len(holes) / float(limit)
@@ -2262,8 +2273,10 @@ def _prismatic_mesh(p: Part, m: Mesh) -> None:
                      and e + h["r"] * 1.1 < h["cy"] < W - e - h["r"] * 1.1]
         lip_cuts = [(max(a - e, 0.0), max(b - e, 0.0), min(c - e, lw), min(d - e, lh), lip) for a, b, c, d, _ in thru
                     if min(c - e, lw) - max(a - e, 0.0) > 0 and min(d - e, lh) - max(b - e, 0.0) > 0]
-        if _COARSE[0]:
-            lip_holes = []  # seen from above (thumbnails, the sheet's isometric) the holes in the lip do not show
+        if _COARSE[0] or len(lip_holes) > 48:
+            # seen from above (thumbnails, the sheet's isometric) the holes in the lip do not show, and a huge
+            # pattern would double an already heavy mesh
+            lip_holes = []
         if lip_holes or lip_cuts:
             plate_solid(m, lw, lh, 0.0, lip, lip_holes, lip_cuts, xf=lambda x, y, z: (x + e, y + e, z))
         else:
@@ -2385,19 +2398,26 @@ def _build_round(p: Part) -> None:
         for i in take(lambda c: c["tags"] & {"land", "shoulder", "od"} or ("pilot" in c["tags"])):
             c = cs[i]
             if "pilot" in c["tags"] or "PISTON" in c["T"]:
-                s = _find(segs, "end_l") if _find(segs, "end_l")["kind"] == "plain" else _find(segs, "journal_l")
+                s = _find(segs, "end_l") if _find(segs, "end_l")["kind"] == "plain" else \
+                    (_find(segs, "journal_l") or _find(segs, "body"))
                 if c["length"]:
                     _resize(segs, segs.index(s), _clamp(c["length"], L * .05, L * .3))
             else:
                 s = _find(segs, "body")
             if c["dias"]:
                 s["r"] = s["r1"] = _clamp(c["dias"][0] / 2, R * .45, R)
-                if re.search(r"SHANK|REDUCED", c["T"]) and not any("journal" in cc["tags"] for cc in cs):
-                    # a reduced shank runs between the ends: there are no separate journals on this part
+                if s["name"] == "body" and re.search(r"SHANK|REDUCED", c["T"]) \
+                        and not any("journal" in cc["tags"] for cc in cs):
+                    # a reduced shank runs between the ends: there are no separate journals on this part, the
+                    # body takes their length (so relief grooves land next to the threads, where they belong)
                     for name in ("journal_l", "journal_r"):
                         j = _find(segs, name)
                         if j and j["kind"] == "plain":
-                            j["r"] = j["r1"] = s["r"]
+                            if name == "journal_l":
+                                s["x0"] = j["x0"]
+                            else:
+                                s["x1"] = j["x1"]
+                            segs.remove(j)
             p.anchors[i] = ("side", (s["x0"] + s["x1"]) / 2, s["r"], 0.0)
             used.add(i)
         for i in take(lambda c: "hex" in c["tags"]):
@@ -3694,6 +3714,10 @@ def _build_other(p: Part) -> None:
     p.sw = (W * .22, W * .78)
     p.sup = [(L * .12, L * .22), (L * .78, L * .88)]
     p.sup_top = min(p.zc + (p.sw[1] - p.sw[0]) / 2, H * .98)
+    # the supports' round tops stay under the stated height (flattened when the part is wide and low), and
+    # the shaft fits inside them and inside the pulley
+    p.arch = max(p.sup_top - p.zc, 1e-9)
+    p.rs = min(p.rs, p.arch * .7, p.rp * .6)
     p.pul = (L * .47, L * .57)
     p.bolts = [(x, y) for x0, x1 in p.sup for x in ((x0 + x1) / 2,) for y in (W * .12, W * .88)]
     p.base_holes = [(L * .05, W * .12), (L * .95, W * .12), (L * .95, W * .88), (L * .05, W * .88)]
@@ -3807,7 +3831,7 @@ def _other_mesh(p: Part, m: Mesh) -> None:
     out = [(y0, p.tb), (y1, p.tb), (y1, p.zc)]
     for k in range(1, 12):
         a = math.pi * k / 12
-        out.append((W / 2 + rr * math.cos(a), p.zc + rr * math.sin(a)))
+        out.append((W / 2 + rr * math.cos(a), p.zc + p.arch * math.sin(a)))
     out.append((y0, p.zc))
     for x0, x1 in p.sup:
         m.holed_prism(out, (W / 2, p.zc, p.rs * 1.04), x0, x1, 24, xf=lambda a, b, c: (c, a, b))
@@ -4374,6 +4398,17 @@ def _labels_column(page: Page, p: Part, views: Dict[str, View], blk: Block, item
                 e["y"] = min(e["y"], y - e["h"])
                 y = e["y"] - gap
 
+    def drop_start(e: Dict[str, Any]) -> Pt:
+        """Where a leader leaves the underside of its label: inclined about 15 degrees off vertical where the
+        text allows (a vertical leader can lie right on a wall of the view it points into)."""
+        sy = e["y"] + e["h"] - 0.5
+        lo, hi = x + 3, x + e["w"] - 3
+        lean = max(6.0, (e["cy"] - sy) * 0.27)
+        sx = e["cx"] + lean
+        if sx > hi:
+            sx = e["cx"] - lean if e["cx"] - lean >= lo else hi
+        return min(max(sx, lo), hi), sy
+
     def geom(e: Dict[str, Any], mode: str):
         """Text box and leader polyline of a label whose target is under the block. mode 'L': text on the
         left edge, leader dropping from under the text; 'R': text on the right edge, leader from its left end."""
@@ -4382,8 +4417,7 @@ def _labels_column(page: Page, p: Part, views: Dict[str, View], blk: Block, item
             tip = _tip(views, e["anc"], (bx - 6.5, by)) or (bx, by)
             return (x, e["y"], x + 13.0, e["y"] + 15.0), [(bx - 6.5, by), tip]
         if mode == "L":
-            sx = min(max(e["cx"], x + 3), x + e["w"] - 3)
-            sy = e["y"] + e["h"] - 0.5
+            sx, sy = drop_start(e)
             tip = _tip(views, e["anc"], (sx, sy)) or (sx, sy)
             return (x, e["y"], x + e["w"], e["y"] + e["h"]), [(sx, sy), tip]
         x0 = xr - e["w"]
@@ -4494,8 +4528,7 @@ def _labels_column(page: Page, p: Part, views: Dict[str, View], blk: Block, item
             _ko_line(page, kx, sy, tip[0], tip[1])
             _arrow(page, tip[0], tip[1], tip[0] - kx, tip[1] - sy)
         else:
-            sx = min(max(e["cx"], x + 3), x + e["w"] - 3)
-            sy = e["y"] + e["h"] - 0.5
+            sx, sy = drop_start(e)
             tip = _tip(views, e["anc"], (sx, sy))
             if tip:
                 _ko_line(page, sx, sy, tip[0], tip[1])
@@ -5851,7 +5884,7 @@ def _asm_right(page: Page, T: Xf, p: Part) -> None:
     page.circle(cx, cy, p.rp * T.s, MED)
     y0, y1 = p.sw
     rr = (y1 - y0) / 2
-    pts = [(y0, p.tb), (y1, p.tb), (y1, p.zc)] + [(W / 2 + rr * math.cos(math.pi * k / 16), p.zc + rr * math.sin(math.pi * k / 16))
+    pts = [(y0, p.tb), (y1, p.tb), (y1, p.zc)] + [(W / 2 + rr * math.cos(math.pi * k / 16), p.zc + p.arch * math.sin(math.pi * k / 16))
                                                   for k in range(1, 16)] + [(y0, p.zc)]
     page.polygon([T.p(u, v) for u, v in pts], THICK, BLACK, WHITE)
     page.circle(cx, cy, p.rs * T.s, THICK)
