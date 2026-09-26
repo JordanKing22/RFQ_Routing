@@ -3681,7 +3681,9 @@ def _build_other(p: Part) -> None:
             r = web * .07
             p.sm_holes = [(L * .15, p.flat_w / 2, r, -1), (L * .85, p.flat_w / 2, r, -1)]
         hx = max(p.sm_holes, key=lambda h: h[0])
-        targets = {"hole": ("flat", hx[0], hx[1], hx[2]), "bend": ("right", t + p.ri, t + p.ri, 0.0),
+        # the bend: the inside of the far bend, which lies under the label column (a leader to the near bend
+        # would drop straight down its wall)
+        targets = {"hole": ("flat", hx[0], hx[1], hx[2]), "bend": ("right", W - t - p.ri * .293, t + p.ri * .293, 0.0),
                    "flange": ("right", W - t / 2, H, 0.0), "flat": ("flat", L * .5, p.flat_w, 0.0)}
         _pick(p, targets, [({"hole"}, "hole"), ({"bend", "radius"}, "bend"), ({"flange"}, "flange")], ["flat", "bend", "flange"])
         return
@@ -3706,16 +3708,16 @@ def _build_other(p: Part) -> None:
         _pick(p, targets, [({"bore"}, "bore"), ({"hole", "thread"}, "hole"), ({"radius"}, "fillet"), ({"angle"}, "draft"),
                            ({"rib"}, "rib")], ["top", "fillet", "draft"])
         return
-    # assembly
+    # assembly: the pulley reaches the stated height and clears the base plate
     p.tb = H * .16
-    p.zc = p.tb + (H - p.tb) * .46
-    p.rp = min((H - p.zc) * .92, W * .44)
+    p.zc = p.tb + (H - p.tb) * .52
+    p.rp = min(H - p.zc, W * .44)
     p.rs = max(p.rp * .2, W * .04)
     p.sw = (W * .22, W * .78)
     p.sup = [(L * .12, L * .22), (L * .78, L * .88)]
-    p.sup_top = min(p.zc + (p.sw[1] - p.sw[0]) / 2, H * .98)
-    # the supports' round tops stay under the stated height (flattened when the part is wide and low), and
-    # the shaft fits inside them and inside the pulley
+    # the supports' round tops stay under the stated height (flattened when the part is wide and low), or
+    # reach it when a narrow pulley does not; the shaft fits inside them and inside the pulley
+    p.sup_top = H if p.zc + p.rp < H * .999 else min(p.zc + (p.sw[1] - p.sw[0]) / 2, H)
     p.arch = max(p.sup_top - p.zc, 1e-9)
     p.rs = min(p.rs, p.arch * .7, p.rp * .6)
     p.pul = (L * .47, L * .57)
@@ -4399,15 +4401,13 @@ def _labels_column(page: Page, p: Part, views: Dict[str, View], blk: Block, item
                 y = e["y"] - gap
 
     def drop_start(e: Dict[str, Any]) -> Pt:
-        """Where a leader leaves the underside of its label: inclined about 15 degrees off vertical where the
-        text allows (a vertical leader can lie right on a wall of the view it points into)."""
+        """Where a leader leaves the underside of its label: inclined up to about 15 degrees off vertical, as far
+        as the text reaches to the right (a vertical leader can lie right on a wall of the view it points into;
+        leaning the other way would cut through the labels stacked below)."""
         sy = e["y"] + e["h"] - 0.5
         lo, hi = x + 3, x + e["w"] - 3
         lean = max(6.0, (e["cy"] - sy) * 0.27)
-        sx = e["cx"] + lean
-        if sx > hi:
-            sx = e["cx"] - lean if e["cx"] - lean >= lo else hi
-        return min(max(sx, lo), hi), sy
+        return min(max(e["cx"] + lean, lo), max(hi, lo)), sy
 
     def geom(e: Dict[str, Any], mode: str):
         """Text box and leader polyline of a label whose target is under the block. mode 'L': text on the
