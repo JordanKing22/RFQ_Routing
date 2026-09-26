@@ -925,7 +925,8 @@ class App:
             "uploads": {"max_files": att_mod.MAX_UPLOADS_PER_EMAIL, "max_bytes": att_mod.MAX_UPLOAD_BYTES,
                         "types": sorted(att_mod.UPLOAD_TYPES), "pdf_text": att_mod.pypdf_available(),
                         "ocr": att_mod.ocr_ready()},
-            "features": {"rfq_details": rfq_details is not None, "ocr": att_mod.ocr_ready()},
+            "features": {"rfq_details": rfq_details is not None, "ocr": att_mod.ocr_ready(),
+                         "layout": att_mod.layout_ready()},
             "state": self.snapshot(),
         }
 
@@ -1038,7 +1039,7 @@ class Handler(BaseHTTPRequestHandler):
         if match:
             record = self.app.rfq_record(match.group(1))
             return self._json({"ok": True, "record": record} if record else {"ok": False, "record": None})
-        match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|thumb\.jpg|mesh\.json|text)", path)
+        match = re.fullmatch(r"/api/att/([A-Z]\d{1,4})/(\d{1,3})/(file|thumb\.svg|thumb\.jpg|mesh\.json|text|page\.jpg|regions\.json)", path)
         if match:
             return self._attachment(match.group(1), int(match.group(2)), match.group(3), "download" in query)
         match = re.fullmatch(r"/api/upload/([0-9a-f]{16})/(file|text)", path)
@@ -1096,6 +1097,18 @@ class Handler(BaseHTTPRequestHandler):
             if not thumb:
                 return self._json({"error": "no preview"}, 404)
             return self._send(200, thumb[0], thumb[1], {"Cache-Control": "private, max-age=3600"})
+        if what in ("page.jpg", "regions.json"):
+            if eid in self.app.emails:
+                self.app.prepare_email(eid)
+            with open(path, "rb") as fh:
+                data = fh.read()
+            key, media = att.get("sha256") or hashlib.sha256(data).hexdigest(), att.get("media") or ""
+            if what == "page.jpg":
+                img = att_mod.page_image(data, media, key)
+                if not img:
+                    return self._json({"error": "no page image"}, 404)
+                return self._send(200, img[0], "image/jpeg", {"Cache-Control": "private, max-age=3600"})
+            return self._json(att_mod.page_regions(data, media, key))
         if what == "mesh.json":
             if eid in self.app.emails:
                 self.app.prepare_email(eid)

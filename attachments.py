@@ -1085,6 +1085,110 @@ def file_thumb(att: Dict[str, Any], data_dir: Any) -> Optional[Tuple[bytes, str]
 
 
 # --------------------------------------------------------------------------- #
+# Page images and YOLO regions (the viewer's "detected regions" overlay)
+# --------------------------------------------------------------------------- #
+_layout_mod: Any = None
+_pages_lock = threading.Lock()
+_pages: Dict[Tuple[str, int], Tuple[bytes, int, int]] = {}
+_regions: Dict[Tuple[str, int], Dict[str, Any]] = {}
+PAGE_DPI = 150
+PAGE_MAX_PX = 1800
+PAGE_CACHE_MAX = 48  # page JPEGs run 100 to 400 KB; uploads must not grow this without bound
+
+
+def _remember(cache: Dict[Tuple[str, int], Any], key: Tuple[str, int], value: Any) -> None:
+    """Store under _pages_lock, dropping the oldest entries past PAGE_CACHE_MAX (dicts keep insertion order)."""
+    with _pages_lock:
+        cache.pop(key, None)
+        cache[key] = value
+        while len(cache) > PAGE_CACHE_MAX:
+            cache.pop(next(iter(cache)))
+
+
+def _layout() -> Any:
+    """layout.py (the YOLO region detector), imported lazily; None where it cannot run."""
+    global _layout_mod
+    if _layout_mod is None:
+        try:
+            import layout as mod
+            _layout_mod = mod
+        except Exception:  # noqa: BLE001
+            _layout_mod = False
+    return _layout_mod or None
+
+
+def layout_ready() -> bool:
+    mod = _layout()
+    if not mod:
+        return False
+    try:
+        info = mod.available()
+        return bool(info.get("ready", info.get("model")))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def page_image(data: bytes, media: str, key: str, page: int = 1) -> Optional[Tuple[bytes, int, int]]:
+    """One page as a JPEG (bytes, width, height): pdftoppm for PDFs, Pillow for photos and screenshots."""
+    with _pages_lock:
+        if (key, page) in _pages:
+            return _pages[(key, page)]
+    out = None
+    try:
+        if media == "pdf":
+            import shutil
+            if shutil.which("pdftoppm"):
+                proc = subprocess.run(["pdftoppm", "-f", str(page), "-l", str(page), "-r", str(PAGE_DPI),
+                                       "-scale-to", str(PAGE_MAX_PX), "-jpeg", "-jpegopt", "quality=85", "-"],
+                                      input=data, capture_output=True, timeout=60)
+                if proc.returncode == 0 and proc.stdout.startswith(b"\xff\xd8"):
+                    w, h = image_size(proc.stdout, "jpg")
+                    if w and h:
+                        out = (proc.stdout, w, h)
+        elif media in ("png", "jpg"):
+            from PIL import Image
+            with Image.open(io.BytesIO(data)) as im:
+                if im.width * im.height > 80_000_000:
+                    return None
+                im = im.convert("RGB")
+                im.thumbnail((PAGE_MAX_PX, PAGE_MAX_PX))
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=85)
+                out = (buf.getvalue(), im.width, im.height)
+    except Exception:  # noqa: BLE001 - no page image means no overlay, nothing worse
+        out = None
+    if out:
+        _remember(_pages, (key, page), out)
+    return out
+
+
+def page_regions(data: bytes, media: str, key: str, page: int = 1) -> Dict[str, Any]:
+    """The regions YOLO finds on one page, in the page image's pixels."""
+    with _pages_lock:
+        if (key, page) in _regions:
+            return _regions[(key, page)]
+    result: Dict[str, Any] = {"available": False, "page": page, "regions": []}
+    mod = _layout()
+    if mod and layout_ready():
+        img = page_image(data, media, key, page)
+        if img:
+            started = time.time()
+            try:
+                regions = mod.detect(img[0])
+            except Exception:  # noqa: BLE001
+                regions = []
+            result = {"available": True, "page": page, "width": img[1], "height": img[2],
+                      "regions": [{"label": r.get("label"), "conf": round(float(r.get("conf") or 0), 3),
+                                   "box": [round(float(v), 1) for v in (r.get("box") or [])]} for r in regions],
+                      "seconds": round(time.time() - started, 2)}
+    if result["available"]:
+        # "Unavailable" is not remembered: the model can appear (or onnxruntime get installed) while the
+        # server runs, and the next request should then get real regions.
+        _remember(_regions, (key, page), result)
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # What the browser gets about an attachment (never the full spec or text)
 # --------------------------------------------------------------------------- #
 def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -> Dict[str, Any]:
@@ -1123,6 +1227,9 @@ def describe(att: Dict[str, Any], base: Optional[str], available: bool = True) -
                     available=bool(available and att.get("available", True)), text_from=text_from_label(att),
                     scanned=att.get("text_method") == "ocr", text_error=att.get("text_error"))
         info["thumb"] = f"{base}/thumb.{'svg' if media == 'step' else 'jpg'}?v={v}"
+        if media in ("pdf", "png", "jpg"):
+            info["page_url"] = f"{base}/page.jpg?v={v}"
+            info["regions_url"] = f"{base}/regions.json?v={v}"
         doc = att.get("doc_type") or classify("", media)
         how = {"jpg": "photo", "png": "screenshot"}.get(media or "", "scan") if info["scanned"] else ""
         info["label"] = f"{doc} ({how}, {info['text_from']})" if how and doc not in ("Photo", "Image") else \

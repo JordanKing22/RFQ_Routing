@@ -218,9 +218,16 @@ def label_title_block(ix: PageIndex) -> List[Box]:
                 cells.append(r)
     if len(cells) < 3:
         return []
+    core = union(cells)
+    # The tolerance block sits beside the cells, level with them. A drawing note can also start with
+    # "UNLESS OTHERWISE SPECIFIED:" (cast or welded parts), and that one must not stretch the box
+    # across the notes, so only text whose own rectangle touches the cells and shares their rows counts.
     for _, _, b in ix.starting("UNLESS OTHERWISE SPECIFIED"):
-        r = ix.enclosing_rect(b)
-        cells.append(r or b)
+        r = ix.enclosing_rect(b) or b
+        level = r[1] < core[3] - 2 and r[3] > core[1] + 2
+        beside = r[2] >= core[0] - 3 and r[0] <= core[2] + 3
+        if level and beside:
+            cells.append(r)
     box = union(cells)
     outer = ix.enclosing_rect(box, 0.3)  # the heavy frame around all the cells, when it exists
     return [union([box, outer]) if outer else box]

@@ -55,13 +55,16 @@ svg.i.lg { width: 20px; height: 20px; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--ink); display: grid; place-items: center; flex: none; }
 .brand-name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; white-space: nowrap; }
-.brand-sep { width: 1px; height: 22px; background: var(--line-2); }
-.shop { display: flex; flex-direction: column; min-width: 0; }
-.shop b { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.brand-sep { width: 1px; height: 22px; background: var(--line-2); flex: none; }
+.shop { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.shop b { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shop span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.demo-pill { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px; }
+.demo-pill { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px; }
 .spacer { flex: 1; }
-.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 5px 12px 5px 10px; white-space: nowrap; }
+/* When the bar gets tight, the shop lines and the Jev pill both shorten with an ellipsis (the pill's
+   full text is in its tooltip), so nothing overlaps. */
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 5px 12px 5px 10px; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+#connText { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.ok { background: var(--good); }
 .dot.warn { background: var(--amber); }
@@ -278,6 +281,84 @@ svg.i.lg { width: 20px; height: 20px; }
 .status-box { display: flex; gap: 10px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-size: 13px; }
 .err-box { padding: 12px 14px; border: 1px solid #f0b9b9; background: #fdf0f0; border-radius: var(--radius); font-size: 13px; }
 
+/* ---------- RFQ details (drawer) ---------- */
+/* OCR marks: teal, a color no lane or flag uses, so "read by OCR" never reads as a warning or a route. */
+.ocr-chip { display: inline-flex; align-items: center; margin-left: 5px; padding: 1px 4px; border-radius: 4px; font-size: 9.5px; font-weight: 700; letter-spacing: .03em; line-height: 12px; vertical-align: 1px; white-space: nowrap; background: #e3f3f4; border: 1px solid #b5dfe2; color: #0b5e66; cursor: help; }
+.ocr-chip.low { background: #fff5d9; border-color: #f1d690; color: #6f4b00; }
+.sec-title .rd-dl { display: inline-flex; align-items: center; gap: 5px; color: var(--blue-strong); font-weight: 600; font-size: 12px; text-decoration: none; white-space: nowrap; }
+.sec-title .rd-dl:hover { text-decoration: underline; }
+.sec-title .rd-dl:focus-visible, .rd-srcbtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+.sec-title .spin { width: 11px; height: 11px; border-width: 1.5px; }
+.rd-srcbtn { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.rd-srcbtn:hover { background: #f3f2ee; }
+.rd-srcbtn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.rd { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 12px 14px 13px; min-width: 0; }
+.rd-kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 12.5px; line-height: 1.45; }
+.rd-kv dt { color: var(--muted); }
+.rd-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* Badges follow their value after a plain space, so a badge that wraps starts flush with the value. */
+.rd-kv .badge { font-size: 10.5px; padding: 2px 5px; vertical-align: 1px; }
+.rd-v[title] { cursor: help; border-radius: 3px; }
+.rd-v[title]:hover { background: #ecebe5; box-shadow: 0 0 0 2px #ecebe5; }
+.rd-miss { color: var(--muted); }
+.rd-q { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+.rd-sub2 { color: var(--muted); }
+.rd:not(.src-on) .rd-src { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rd.src-on .rd-src { display: block; font-size: 11px; line-height: 1.35; color: #5c6f72; margin-top: 1px; }
+.rd-list { list-style: none; margin: 0; padding: 0; }
+.rd-list li { position: relative; padding-left: 11px; }
+.rd-list li + li { margin-top: 3px; }
+.rd-list li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--line-2); }
+.rd-rest { margin-top: 3px; }
+.rd-check .rd-rest { margin-top: 4px; }
+.rd-morebtn { display: inline-block; margin-top: 4px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--blue-strong); cursor: pointer; }
+.rd-morebtn:hover { text-decoration: underline; }
+.rd-morebtn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 3px; }
+.rd-sub { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--ink); }
+.rd-sub .rd-n { font-weight: 500; color: var(--muted); }
+.rd-sub .rd-hint { margin-left: auto; font-weight: 500; font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
+/* The part table scrolls sideways inside its own box, never the drawer or the page; the part number
+   column stays put, and soft shadows at the edges say there is more to either side. */
+.rd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; scrollbar-color: #cfccc4 transparent;
+  background: linear-gradient(to left, var(--surface) 30%, rgba(255,255,255,0)) right center / 32px 100% no-repeat local,
+              radial-gradient(farthest-side at 100% 50%, rgba(22,24,28,.16), rgba(22,24,28,0)) right center / 12px 100% no-repeat scroll,
+              var(--surface); }
+.rd-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; line-height: 1.4; }
+.rd-table thead th { text-align: left; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 9px; background: var(--surface-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.rd-table tbody th, .rd-table td { text-align: left; font-weight: 400; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink); }
+.rd-table tbody tr:last-child > * { border-bottom: 0; }
+.rd-table .pn { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: inset -1px 0 0 var(--line); font-weight: 600; }
+.rd-table .pn .rd-v { white-space: nowrap; }
+/* Source lines wrap in every cell (the part number and quantities stay on one line) and are never bold,
+   so with Sources on the sticky part number column stays narrow instead of covering the table. */
+.rd-table .rd-src { white-space: normal; font-weight: 400; }
+.rd-table thead th.pn { background: var(--surface-2); z-index: 2; }
+.rd-table tbody th.pn { font-weight: 600; }
+.rd-scroll:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+#rfqSec .sec-title .aside { display: inline-flex; align-items: center; gap: 10px; }
+.rd-table .pn .ocr-chip { display: flex; width: max-content; margin: 3px 0 0; }
+.rd-table .rev { min-width: 48px; }
+.rd-table .w { min-width: 150px; }
+.rd-table .num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rd-table td.num .ocr-chip { display: flex; width: max-content; margin: 3px 0 0; }
+.rd-table .rd-miss { font-size: 11.5px; }
+.rd-flags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 12px; }
+.rd-flags .lab { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.rd-check { list-style: none; margin: 10px 0 0; padding: 8px 10px; border: 1px solid #f1d690; background: #fff9e8; border-radius: 8px; font-size: 12px; color: #5a3d00; }
+.rd-check ul { list-style: none; margin: 0; padding: 0; }
+.rd-check li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; overflow-wrap: anywhere; }
+.rd-check li + li { margin-top: 4px; }
+.rd-check svg { margin-top: 2px; color: #9a6a00; }
+.rd-check .rd-morebtn { color: #6f4b00; margin-left: 20px; }
+.rd-check-head { font-weight: 700; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: #6f4b00; margin-bottom: 5px; }
+.rd-files { margin-top: 10px; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.rd-files b { font-weight: 600; color: var(--ink-2); }
+.rd-none { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--radius); font-size: 12.5px; color: var(--ink-2); }
+.rd-none svg { margin-top: 2px; color: var(--muted); }
+.rd-err { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rd-err .btn { margin-left: auto; }
+.rd-stale { font-size: 12px; color: var(--critical); margin: 0 0 8px; }
+
 /* ---------- attachment tiles ---------- */
 .att-head { display: flex; align-items: baseline; gap: 10px; margin-top: 14px; font-size: 12px; flex-wrap: wrap; }
 .att-count { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink); font-size: 13px; }
@@ -324,6 +405,7 @@ button.ftile:hover .fprev::after { opacity: 1; }
 .fmeta { font-size: 11px; line-height: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .flegend { position: absolute; top: 6px; right: 6px; z-index: 2; font-size: 10px; padding: 3px 5px; gap: 3px; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .flegend svg.i.sm { width: 10px; height: 10px; }
+.focr { position: absolute; left: 6px; top: 6px; z-index: 2; font-size: 9.5px; font-weight: 700; letter-spacing: .05em; line-height: 1.2; color: #fff; background: #0e6f78; border-radius: 4px; padding: 2px 5px; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .ftile-wrap.removable .flegend { right: 20px; }
 .ftile.nofile { border-style: dashed; background: var(--surface-2); box-shadow: none; }
 .ftile.nofile .ffoot { background: transparent; border-top-style: dashed; }
@@ -344,6 +426,8 @@ button.ftile:hover .fprev::after { opacity: 1; }
 .set-row .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .set-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .set-line .btn { margin-left: auto; }
+.set-line .set-btns { margin-left: auto; display: flex; gap: 6px; }
+.set-line .set-btns .btn { margin-left: 0; }
 .range { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .range input[type=range] { flex: 1; accent-color: var(--ink); }
 .range .rv { font-variant-numeric: tabular-nums; font-weight: 700; width: 44px; text-align: right; }
@@ -428,6 +512,31 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
 .vp-warn { font-size: 12px; color: #6f4b00; background: #fff5d9; border: 1px solid #f1d690; border-radius: 6px; padding: 7px 9px; margin-top: 10px; }
 .jtext { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.6 var(--mono); background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0 0; color: var(--ink); }
 .vp-loading { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.vp-ocr { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.45; color: #0b4f56; background: #e3f3f4; border: 1px solid #b5dfe2; border-radius: 6px; padding: 8px 10px; margin-top: 10px; }
+.vp-ocr svg { margin-top: 2px; }
+.vp-ocr.low { color: #5a3d00; background: #fff5d9; border-color: #f1d690; }
+/* Detected regions: page 1 as an image, with the layout model's boxes on top. Boxes are placed in
+   percent of the page, so they follow the image whenever its box is resized. */
+.vreg { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.vreg-view { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.vreg-page { position: relative; flex: none; visibility: hidden; background: #fff; border-radius: 4px; box-shadow: 0 10px 40px rgba(0,0,0,.45); }
+.vreg-page.ready { visibility: visible; }
+.vreg-page img { display: block; width: 100%; height: 100%; border-radius: 4px; }
+.vreg-box { position: absolute; border: 2px solid var(--c); background: var(--bg); border-radius: 2px; pointer-events: none; }
+.vreg-chip { position: absolute; left: -2px; bottom: 100%; margin-bottom: 1px; padding: 1px 6px; border-radius: 3px; background: var(--c); color: #fff; font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.vreg-chip b { font-weight: 700; opacity: .85; margin-left: 3px; font-variant-numeric: tabular-nums; }
+.vreg-box.chip-in .vreg-chip { bottom: auto; top: -2px; margin: 0; }
+.vreg-box.chip-r .vreg-chip { left: auto; right: -2px; }
+.vreg-load { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: rgba(255,255,255,.75); font-size: 13px; }
+.vreg-legend { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; min-height: 40px; padding: 8px 12px; font-size: 12px; color: rgba(255,255,255,.85); background: #25282e; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; }
+.vreg-key { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.vreg-sw { width: 12px; height: 12px; border-radius: 3px; border: 2px solid var(--c); background: var(--bg); flex: none; }
+.vreg-key .n { color: rgba(255,255,255,.55); font-variant-numeric: tabular-nums; }
+.vreg-meta { margin-left: auto; color: rgba(255,255,255,.55); white-space: nowrap; }
+.vreg-note { display: flex; align-items: flex-start; gap: 8px; line-height: 1.45; }
+.vreg-note svg { margin-top: 2px; flex: none; }
+.vreg-note.warn svg { color: var(--amber); }
+.vreg-legend code { background: rgba(255,255,255,.12); color: #fff; }
 .vmsg { margin: auto; max-width: 460px; text-align: center; background: var(--surface); color: var(--ink); border-radius: 12px; padding: 24px 22px; box-shadow: var(--shadow-lg); }
 .vmsg .vmsg-i { width: 42px; height: 42px; border-radius: 10px; margin: 0 auto 10px; display: grid; place-items: center; background: #f3f2ee; color: var(--ink-2); }
 .vmsg h3 { margin: 0 0 6px; font-size: 16px; }
@@ -447,6 +556,8 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   footer { padding: 0 24px 10px; }
 }
 @media (max-width: 1180px) { .lanes.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lanes.three { grid-template-columns: repeat(3, minmax(0, 1fr)); } .conn .long { display: none; } }
+/* The download button goes icon-only before the brand and the Jev pill would have to squeeze. */
+@media (max-width: 1320px) { #detailsBtn { width: 36px; padding: 0; justify-content: center; } #detailsBtn .label { display: none; } }
 @media (min-width: 981px) and (max-width: 1180px) { .group.est { flex-grow: 2; min-height: 440px; } }
 @media (max-width: 980px) {
   .main { grid-template-columns: minmax(0, 1fr); }
@@ -471,6 +582,10 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .vstage.model .v3d { flex: none; height: 48vh; }
   .vpanel { width: auto; flex: none; }
   .vpanel-body { overflow: visible; }
+  .vreg-legend { gap: 4px 12px; padding: 7px 10px; font-size: 11.5px; }
+  .vreg-chip { font-size: 9.5px; line-height: 13px; padding: 0 4px; }
+  .vreg-box { border-width: 1.5px; }
+  .vreg-meta { margin-left: 0; }
 }
 @media (max-width: 640px) {
   .top, .stats, .main, footer { padding-left: 16px; padding-right: 16px; }
@@ -490,6 +605,9 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   .mfoot .note { flex-basis: 100%; }
   .mfoot .note:empty { display: none; }
   .group-head span { display: none; }
+  .rd { padding: 10px 11px 11px; }
+  .rd-kv { grid-template-columns: 90px minmax(0, 1fr); gap: 6px 10px; }
+  .rd-table .w { min-width: 136px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
@@ -510,6 +628,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
   <div class="actions">
     <button class="btn primary" id="routeBtn"></button>
     <button class="btn" id="pasteBtn"><svg class="i"><use href="#i-paste"/></svg><span class="label">Paste an RFQ</span></button>
+    <a class="btn" id="detailsBtn" href="/api/rfq_details.csv" download="rfq_details.csv" hidden title="Download the details of every RFQ as one CSV file, one row per part line" aria-label="Download RFQ details (CSV)"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg><span class="label">RFQ details</span></a>
     <button class="btn ghost" id="resetBtn" title="Clear the board. Saved Jev results replay instantly."><svg class="i"><use href="#i-reset"/></svg><span class="label">Reset</span></button>
     <button class="btn ghost icon" id="settingsBtn" title="Settings and rules" aria-label="Settings and rules"><svg class="i"><use href="#i-sliders"/></svg></button>
   </div>
@@ -585,6 +704,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
         <span id="vPos" aria-live="polite"></span>
         <button class="vbtn icon" id="vNext" type="button" aria-label="Next file"><svg class="i"><use href="#i-chev-right"/></svg></button>
       </div>
+      <button class="vbtn" id="vRegionsBtn" type="button" aria-pressed="false" hidden title="Show the regions the layout model finds on page 1: title block, revisions, notes, legends, form tables"><svg class="i"><use href="#i-scan"/></svg><span class="label">Detected regions</span></button>
       <button class="vbtn" id="vPanelBtn" type="button" aria-pressed="true" aria-controls="vPanel" title="What Jev reads from this file"><svg class="i"><use href="#i-panel"/></svg><span class="label">Jev text</span></button>
       <a class="vbtn" id="vOpen" target="_blank" rel="noopener" title="Open in a new tab"><svg class="i"><use href="#i-external"/></svg><span class="label">Open</span></a>
       <a class="vbtn" id="vDownload" title="Download"><svg class="i"><use href="#i-download"/></svg><span class="label">Download</span></a>
@@ -635,6 +755,7 @@ footer { padding: 0 24px 28px; font-size: 12px; color: var(--muted); display: fl
     <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
     <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
     <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="5" rx="1"/><path d="M7 16h6"/></symbol>
   </defs>
 </svg>
 
@@ -729,6 +850,10 @@ function loadBoot(boot) {
   S.boot = boot;
   boot.customers = boot.customers || {};
   boot.uploads = boot.uploads || { max_files: 5, max_bytes: 10485760, types: ["application/pdf", "image/png", "image/jpeg"], pdf_text: false };
+  boot.features = boot.features || {};
+  $("#detailsBtn").hidden = !boot.features.rfq_details;
+  RD.map.clear();  // records belong to the server that made them
+  VW.texts.clear(); VW.regionsCache.clear();  // and so do file texts and detected regions
   S.lanes = {}; for (const lane of boot.lanes) S.lanes[lane.id] = lane;
   S.emails = {}; for (const e of boot.emails) S.emails[e.id] = e;
   $("#product").textContent = boot.brand.product || "RFQ Router";
@@ -739,7 +864,7 @@ function loadBoot(boot) {
   $("#footer").innerHTML = `<span><b>Jev</b> (TypeSafe AI) makes the judgment calls. Plain code applies the routing rules.</span><span>${esc(boot.shop.disclaimer || "")}</span><span>Built by ${esc(boot.brand.by || "")}</span>`;
   $("#pPdfNote").hidden = !!boot.uploads.pdf_text;
   const mb = Math.round(boot.uploads.max_bytes / 1048576);
-  $("#pDropText").innerHTML = `<b>Drop files here</b> or add them. PDF, PNG, or JPG, up to ${boot.uploads.max_files} files, ${mb} MB each.`;
+  $("#pDropText").innerHTML = `<b>Drop files here</b> or add them. PDF, PNG, or JPG, up to ${boot.uploads.max_files} files, ${mb} MB each.${boot.uploads.ocr ? " Scans and photos are read with OCR." : ""}`;
   buildPasteExamples();
   buildBoard();
   $("#inboxList").textContent = ""; S.dom.rows.clear();
@@ -827,10 +952,14 @@ function bindEvents() {
     if (e.animationName === "glow" && e.target.classList.contains("card")) e.target.classList.remove("fresh", "moved");
   });
   $("#drawer").addEventListener("click", (e) => {
+    if (e.target.closest("#rdSrc")) { toggleSources(); return; }
+    const more = e.target.closest("[data-more-key]");
+    if (more) { toggleMore(more.dataset.moreKey); return; }
+    if (e.target.closest("[data-rfq-retry]")) { if (S.selected) ensureRfq(S.selected, true); return; }
     const t = e.target.closest("[data-att]");
     if (!t || !S.selected) return;
     const email = S.emails[S.selected];
-    if (email) openViewer(email.attachments || [], Number(t.dataset.att), t, (i) => `#drawer [data-att="${i}"]`);
+    if (email) openViewer(email.attachments || [], Number(t.dataset.att), t, (i) => `#drawer [data-att="${i}"]`, S.selected);
   });
   // A preview image that fails to load (for example an upload the server dropped) gets a quiet placeholder.
   document.addEventListener("error", (e) => {
@@ -907,6 +1036,7 @@ function applyState(st) {
     ids = Object.keys(st.items || {});
   }
   if (st.emails) for (const e of st.emails) S.emails[e.id] = e;
+  if (st.emails && VW.emailId && st.emails.some((e) => e.id === VW.emailId)) refreshViewerFiles();
   if (S.state.order.some((id) => !S.emails[id])) fetchMissingEmails();
   S.clockOffset = st.worker.now * 1000 - Date.now();
 
@@ -1191,11 +1321,13 @@ function laneShell(lane) {
 function buildBoard() {
   const est = S.boot.lanes.filter((l) => l.group === "estimating");
   const other = S.boot.lanes.filter((l) => l.group !== "estimating");
-  const n = S.boot.questions.length;
+  const n = S.boot.questions.length, F = S.boot.features || {};
+  const ocrLine = F.ocr || F.rfq_details ? " Scans, faxes, and photos have no text layer, so they are read with OCR first." : "";
+  const csvLine = F.rfq_details ? " The details of every RFQ go into one CSV." : "";
   $("#board").innerHTML = `<div class="how" id="how">
-      <div class="step"><div class="num">1</div><h4>One Jev call per email</h4><p>The email and the text of its attachments (drawing notes, title blocks, RFQ forms) go to Jev with ${n} questions at once: what it is, which estimator, ITAR or CUI, urgency, and what is missing.</p></div>
+      <div class="step"><div class="num">1</div><h4>One Jev call per email</h4><p>The email and the text of its attachments (drawing notes, title blocks, RFQ forms) go to Jev with ${n} questions at once: what it is, which estimator, ITAR or CUI, urgency, and what is missing.${ocrLine}</p></div>
       <div class="step"><div class="num">2</div><h4>Typed answers with probabilities</h4><p>Jev returns choices, yes/no probabilities, and scores in a few hundred milliseconds. No text to parse, nothing to hallucinate.</p></div>
-      <div class="step"><div class="num">3</div><h4>Your rules route it</h4><p>Code checks ITAR first, sends low-confidence mail to a person, sets priority and quote dates, and drafts the reply from a template.</p></div>
+      <div class="step"><div class="num">3</div><h4>Your rules route it</h4><p>Code checks ITAR first, sends low-confidence mail to a person, sets priority and quote dates, and drafts the reply from a template.${csvLine}</p></div>
     </div>
     <div class="group est"><div class="group-head"><h3>Estimating</h3><span>Jev picks the estimator. Export control is checked first.</span></div>
       <div class="lanes four">${est.map(laneShell).join("")}</div></div>
@@ -1294,6 +1426,11 @@ function select(id) {
   const prev = S.selected;
   S.selected = id;
   markSelected(prev, id);
+  // Opening the drawer asks the server again (other files may have been read since); the record
+  // already here stays on screen until the answer comes back.
+  const ent = RD.map.get(id);
+  if (ent && ent.pending == null) ent.key = null;
+  if (RD.openFor !== id) { RD.open.clear(); RD.openFor = id; }
   openDrawer("email");
 }
 
@@ -1387,8 +1524,9 @@ function metaLine(att, long) {
   else if (att.kind === "model") parts.push(long ? `3D model, STEP ${(att.model && att.model.schema) || "AP214"}` : "3D model");
   else parts.push(att.label || "File");
   if (att.size) parts.push(fmtBytes(att.size));
-  if (att.pages) parts.push(plural(att.pages, "page"));
-  if (att.kind === "upload" && att.width && att.height) parts.push(`${att.width} × ${att.height}`);
+  const image = fileType(att) === "image";
+  if (att.pages && !image) parts.push(plural(att.pages, "page"));
+  if (image && att.width && att.height) parts.push(`${att.width} × ${att.height}`);
   return parts.join(" · ");
 }
 
@@ -1427,10 +1565,13 @@ function tileHtml(att, opts) {
   const legendLabel = legendKey ? LEGENDS[legendKey] : opts.marked ? "Export marking" : "";
   const legend = legendLabel ? `<span class="badge restricted flegend" title="${legendKey ? `${legendLabel} legend on this file` : "Export-control marking in this file"}">${ic("lock", "sm")}${esc(legendLabel)}</span>` : "";
   const mark = opts.marked ? `<span class="fmark">${ic("lock", "sm")}Marking found here</span>` : "";
+  // A scan, photo, or screenshot has no text layer: its text came from OCR.
+  const ocrConf = att.scanned ? ocrInfo(att.text_from) : null;
+  const ocr = att.scanned && !opts.state ? `<span class="focr" title="${esc(`No text layer: the text was read with OCR${ocrConf && ocrConf.conf != null ? `, ${ocrConf.conf}% confidence` : ""}`)}">OCR</span>` : "";
   const openable = opts.idx != null && !opts.state;
   const cls = `ftile${att.kind === "name_only" ? " nofile" : ""}${opts.state === "error" ? " err" : ""}`;
-  const aria = `${openable ? "Open " : ""}${att.name}, ${meta}${legendLabel ? `, ${legendLabel}` : ""}${opts.marked ? ", export-control marking found in this file" : ""}`;
-  const inner = `${previewHtml(att, opts).replace(/<\/span>$/, `${mark}</span>`)}${legend}
+  const aria = `${openable ? "Open " : ""}${att.name}, ${meta}${legendLabel ? `, ${legendLabel}` : ""}${ocr ? ", text read with OCR" : ""}${opts.marked ? ", export-control marking found in this file" : ""}`;
+  const inner = `${previewHtml(att, opts).replace(/<\/span>$/, `${mark}</span>`)}${ocr}${legend}
       <span class="ffoot"><span class="ficon ${t}">${ic(TYPE_ICON[t])}</span><span class="ftext"><span class="fname">${esc(att.name)}</span><span class="fmeta">${esc(meta)}</span></span></span>`;
   const tile = openable
     ? `<button type="button" class="${cls}" data-att="${opts.idx}" title="${esc(att.name)}" aria-label="${esc(aria)}">${inner}</button>`
@@ -1446,6 +1587,7 @@ function attachmentsHtml(e, d) {
   const withFile = atts.filter((a) => a.kind !== "name_only").length;
   const tiles = atts.map((a, i) => tileHtml(a, { idx: i, key: "a" + i, marked: marked.has(a.name) })).join("");
   let hint = withFile ? "Jev reads the text of each file" : "Jev sees the file names only";
+  if (atts.some((a) => a.scanned)) hint += ", read with OCR for scans and photos";
   if (withFile && withFile < atts.length) hint += "; for a name-only file, just the name";
   let note = "";
   if (d && marked.size) {
@@ -1465,10 +1607,16 @@ function renderEmailDrawer(force) {
   if (!e) return;
   const it = S.state.items[id] || { status: "idle" };
   const shown = it.status === "done" && it.decision && S.revealed.has(id);
-  const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.decision && it.decision.export_marked, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey, it.error && it.error.message]);
+  ensureRfq(id);  // fetches only when the decision or the files changed; the section updates itself
+  // The files are part of the version: the server reads them in the background (OCR can take a few
+  // seconds), and each tile's label and OCR badge change when it has.
+  const files = (e.attachments || []).map((a) => [a.label, a.text_from, a.legend, a.thumb].join("|"));
+  const version = JSON.stringify([id, it.status, shown, it.decision && it.decision.lane, it.decision && it.decision.export_marked, it.jev && it.jev.saved_at, S.state.thresholds, S.showKey, it.error && it.error.message, files]);
   if (!force && S.drawerVersion === version) return;
   const oldBody = $("#drawer .dbody");
-  const keepScroll = S.drawerVersion && JSON.parse(S.drawerVersion)[0] === id && oldBody ? oldBody.scrollTop : 0;
+  const sameEmail = !!(S.drawerVersion && JSON.parse(S.drawerVersion)[0] === id && oldBody);
+  const keepScroll = sameEmail ? oldBody.scrollTop : 0;
+  const oldTable = sameEmail ? $("#rfqSec .rd-scroll") : null, tableLeft = oldTable ? oldTable.scrollLeft : 0;
   // The drawer is rebuilt when the email's state changes: keep focus on the same control.
   const active = document.activeElement, inDrawer = active && $("#drawer").contains(active);
   const focusAtt = inDrawer && active.dataset ? active.dataset.att : undefined, focusId = inDrawer ? active.id : "";
@@ -1512,10 +1660,15 @@ function renderEmailDrawer(force) {
     </dl>
     <button class="btn small" id="rerun" style="margin-top:10px">${ic("refresh", "sm")}Ask Jev again (live call)</button></div>` : "";
   const email = `<div class="sec"><div class="sec-title">Email</div><div class="email-body">${esc(e.body)}</div>${attachmentsHtml(e, d)}</div>`;
+  const detailsHtml = rfqEnabled() ? rfqInnerSafe(id) : null;
+  const details = detailsHtml != null ? `<section class="sec" id="rfqSec" aria-label="RFQ details">${detailsHtml}</section>` : "";
   $("#drawer").innerHTML = `<div class="dhead"><div style="flex:1;min-width:0"><h2>${esc(e.subject || "(no subject)")}</h2>
       <div class="meta">${esc(e.from_name || "Unknown sender")} &lt;${esc(e.from_email)}&gt; · ${esc(e.received || "")}${e.live ? " · pasted live" : ""}</div></div>
       <button class="btn ghost icon" id="closeDrawer" aria-label="Close">${ic("x")}</button></div>
-    <div class="dbody thin-scroll">${top}${email}${after}${meta}</div>`;
+    <div class="dbody thin-scroll">${top}${details}${email}${after}${meta}</div>`;
+  if (detailsHtml != null) $("#rfqSec")._html = detailsHtml;
+  if (tableLeft) { const sc = $("#rfqSec .rd-scroll"); if (sc) sc.scrollLeft = tableLeft; }
+  rdHint();
   $("#closeDrawer").onclick = closeOverlays;
   const ta = $("#draftText");
   if (ta) { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 4) + "px"; }
@@ -1529,6 +1682,257 @@ function renderEmailDrawer(force) {
   if (rerun) rerun.onclick = async () => { rerun.disabled = true; try { const r = await api("/api/run", { ids: [id], use_cache: false, front: true }); applyState(r.state); } catch (err) { toast(err.message); } renderEmailDrawer(true); };
   const one = $("#routeOne");
   if (one) one.onclick = async () => { one.disabled = true; try { const r = await api("/api/run", { ids: [id], use_cache: S.useCache, front: true }); applyState(r.state); } catch (err) { toast(err.message); } renderEmailDrawer(true); };
+}
+
+/* ---------------------------------------------------------------- RFQ details */
+/* What rfq_details.py pulled out of one RFQ. Every value comes as {value, source}; the source says
+   where it was found ("email body", "subject", "RFQ-26-0931.pdf (OCR 88%)"), and shows on hover.
+   One entry per email: the record on screen, the key it was fetched for, and any fetch in flight. */
+const RD = { map: new Map(), showSrc: false, open: new Set(), openFor: null };  // open: "N more" lists expanded
+try { RD.showSrc = localStorage.getItem("rfq.showSources") === "1"; } catch (e) { /* storage blocked */ }
+
+function rfqEnabled() { return !!(S.boot && S.boot.features && S.boot.features.rfq_details); }
+
+// The record changes when Jev's decision does (is_rfq, and the routing columns) and when the server
+// finishes reading a file (its text feeds every other field).
+function rfqKey(id) {
+  const it = S.state.items[id] || {}, e = S.emails[id] || {};
+  const d = it.status === "done" && it.decision ? it.decision : null;
+  return JSON.stringify([d ? [d.is_rfq, d.lane, d.lane_name, d.owner, d.priority, d.due] : null,
+    (e.attachments || []).map((a) => a.text_from || a.label || "")]);
+}
+
+function ensureRfq(id, force) {
+  if (!rfqEnabled() || !id || !S.emails[id] || !S.state) return;
+  const key = rfqKey(id);
+  let ent = RD.map.get(id);
+  if (!ent) { ent = { key: null, status: "loading", record: null, error: "", pending: null, seq: 0 }; RD.map.set(id, ent); }
+  if (!force && (ent.pending === key || (ent.pending == null && ent.key === key))) return;
+  const seq = ++ent.seq;
+  ent.pending = key;
+  if (ent.status === "error" && !ent.record) ent.status = "loading";
+  fetch(`/api/rfq_details/${encodeURIComponent(id)}`).then(async (res) => {
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data) throw new Error((data && typeof data.error === "string" && data.error) || `${res.status} ${res.statusText}`.trim() || "Request failed");
+    return data;
+  }).then((data) => {
+    if (seq !== ent.seq) return;  // a newer request replaced this one
+    ent.record = data.ok && data.record ? data.record : null;
+    ent.status = ent.record ? "ok" : "none";
+    ent.error = "";
+  }).catch((err) => {
+    if (seq !== ent.seq) return;
+    ent.status = "error"; ent.error = err.message || "Request failed";
+  }).finally(() => {
+    if (seq !== ent.seq) return;
+    ent.pending = null; ent.key = key;
+    updateRfqSection(id);
+  });
+  updateRfqSection(id);
+}
+
+function updateRfqSection(id) {
+  if (S.drawer !== "email" || S.selected !== id) return;
+  const sec = $("#rfqSec");
+  if (!sec) return;
+  const html = rfqInnerSafe(id);
+  if (sec._html === html) return;
+  const sc = sec.querySelector(".rd-scroll"), left = sc ? sc.scrollLeft : 0;
+  // Every control in the section has an id, so focus comes back to the same one after the repaint;
+  // a control that is gone (Try again, once the record loads) hands focus to Download all.
+  const active = document.activeElement, focusId = active && sec.contains(active) ? active.id : "";
+  sec.innerHTML = html; sec._html = html; rdHint();
+  const sc2 = sec.querySelector(".rd-scroll"); if (sc2 && left) sc2.scrollLeft = left;
+  if (focusId) { const el = (sec.querySelector(`#${CSS.escape(focusId)}`)) || $("#rdDl"); if (el) el.focus({ preventScroll: true }); }
+}
+
+function rfqInnerSafe(id) {
+  try { return rfqInner(id); } catch (err) {
+    // A record in a shape this page does not know must not leave the previous email's details up.
+    console.warn("RFQ details could not be shown", err);
+    return `<div class="sec-title">RFQ details</div><div class="err-box">These RFQ details came back in a form this page cannot show (${esc(err.message)}). The CSV download still has them.</div>`;
+  }
+}
+
+// "3 more" under a list: the button stays in place (reading "Show fewer" when open), so keyboard
+// focus never lands on something that just disappeared, and the choice survives a refresh.
+function toggleMore(key) {
+  const sec = $("#rfqSec"), btn = $(`#rdMore-${key}`), rest = $(`#rdRest-${key}`);
+  if (!sec || !btn || !rest) return;
+  const open = !RD.open.has(key);
+  if (open) RD.open.add(key); else RD.open.delete(key);
+  rest.hidden = !open;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  btn.textContent = open ? "Show fewer" : btn.dataset.more;
+  sec._html = rfqInnerSafe(S.selected);
+}
+function moreHtml(key, rest, item, cls) {
+  if (!rest.length) return "";
+  const open = RD.open.has(key), label = `${rest.length} more`;
+  return `<ul class="${cls ? cls + " " : ""}rd-rest" id="rdRest-${key}"${open ? "" : " hidden"}>${rest.map(item).join("")}</ul>`
+    + `<button type="button" class="rd-morebtn" id="rdMore-${key}" data-more="${esc(label)}" data-more-key="${key}" aria-expanded="${open}" aria-controls="rdRest-${key}">${open ? "Show fewer" : esc(label)}</button>`;
+}
+
+// "Scroll sideways" shows only while the part table is wider than its box and not scrolled to its end.
+function rdHint() {
+  const sc = $("#rfqSec .rd-scroll"), hint = $("#rfqSec .rd-hint");
+  if (!sc || !hint) return;
+  const upd = () => { hint.hidden = sc.scrollWidth - sc.clientWidth - sc.scrollLeft < 4; };
+  upd();
+  if (!sc._hinted) { sc._hinted = true; sc.addEventListener("scroll", upd, { passive: true }); }
+}
+window.addEventListener("resize", () => { if (S.drawer === "email") rdHint(); });
+
+function toggleSources() {
+  RD.showSrc = !RD.showSrc;
+  try { localStorage.setItem("rfq.showSources", RD.showSrc ? "1" : "0"); } catch (e) { /* storage blocked */ }
+  const rd = $("#rfqSec .rd"), b = $("#rdSrc");
+  if (rd) rd.classList.toggle("src-on", RD.showSrc);
+  if (b) b.setAttribute("aria-pressed", RD.showSrc ? "true" : "false");
+  const sec = $("#rfqSec"); if (sec) sec._html = rfqInnerSafe(S.selected);
+  rdHint();  // the source lines change the table's width
+}
+
+// "RFQ-26-0931.pdf (OCR 88%)" or "OCR 88%" -> {conf: 88}; "(OCR)" -> {conf: null}; anything else -> null.
+// Only the part that says how a file was read counts, so a file named "OCR scan.pdf" is not an OCR source.
+function ocrInfo(source) {
+  for (const part of String(source || "").split(/\s*;\s*/)) {
+    const m = /(?:^|[(,]\s*)OCR(?:\s*(\d{1,3}(?:\.\d+)?)\s*%)?\s*(?:\)|$)/.exec(part.trim());
+    if (m) return { conf: m[1] != null ? Math.round(parseFloat(m[1])) : null };
+  }
+  return null;
+}
+
+const LOW_OCR = 70;  // below this, Tesseract's own confidence says to check the value against the file
+function ocrChip(source) {
+  const o = ocrInfo(source);
+  if (!o) return "";
+  const low = o.conf != null && o.conf < LOW_OCR;
+  const tip = `Read with Tesseract OCR${o.conf != null ? ` at ${o.conf}% confidence` : ""} from ${source}.${low ? " Low confidence: check this against the file." : ""}`;
+  return `<span class="ocr-chip${low ? " low" : ""}" title="${esc(tip)}">OCR${o.conf != null ? ` ${o.conf}%` : ""}</span>`;
+}
+
+// A source for reading aloud or showing under a value: "From the email body and FR-3101.pdf".
+function srcPhrase(source) {
+  const named = { "email body": "the email body", subject: "the subject", "email signature": "the email signature", "email header": "the email header", "from line": "the From line" };
+  const parts = String(source || "").split(/\s*;\s*/).filter(Boolean).map((p) => named[p.toLowerCase()] || p);
+  return parts.length ? "From " + parts.join(" and ") : "";
+}
+
+function fmtDate(iso, short) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return String(iso || "");
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return String(iso);  // "2026-02-31"
+  const opts = short ? { weekday: "short", month: "short", day: "numeric" } : { weekday: "short", month: "short", day: "numeric", year: "numeric" };
+  return isNaN(d) ? String(iso) : d.toLocaleDateString("en-US", opts);
+}
+
+const hasValue = (v) => v != null && v !== "" && !(Array.isArray(v) && !v.length);
+// Records come from another module: a list may arrive as one value, a field as a bare value.
+const arr = (x) => (Array.isArray(x) ? x : x == null || x === "" ? [] : [x]);
+const fld = (x) => (x && typeof x === "object" && !Array.isArray(x) ? x : { value: x, source: null });
+const fmtNum = (n) => (typeof n === "number" && isFinite(n) ? n.toLocaleString("en-US") : String(n));
+
+/* One extracted value: the value (fmt returns escaped HTML), its source on hover, an OCR chip when OCR
+   read it, and the source as text (visible with "Sources" on, read by screen readers always). */
+function rdVal(field, fmt, empty = "Not found", after) {
+  const f = field && typeof field === "object" && !Array.isArray(field) ? field : { value: field, source: null };
+  if (!hasValue(f.value)) return `<span class="rd-miss">${esc(empty)}</span>`;
+  const src = f.source ? String(f.source) : "";
+  const html = fmt ? fmt(f.value, f) : esc(Array.isArray(f.value) ? f.value.join(", ") : f.value);
+  return `<span class="rd-v"${src ? ` title="${esc("Source: " + src)}"` : ""}>${html}</span>${ocrChip(src)}${after ? after(f.value, f) : ""}${src ? `<span class="rd-src">${esc(srcPhrase(src))}</span>` : ""}`;
+}
+
+function rdList(items, key, emptyText) {
+  const list = arr(items).filter((x) => x && hasValue(typeof x === "object" ? x.value : x));
+  if (!list.length) return `<span class="rd-miss">${esc(emptyText)}</span>`;
+  const li = (x) => `<li>${rdVal(x)}</li>`;
+  return `<ul class="rd-list">${list.slice(0, 3).map(li).join("")}</ul>${moreHtml(key, list.slice(3), li, "rd-list")}`;
+}
+
+const QTY = (v) => esc((Array.isArray(v) ? v : [v]).map(fmtNum).join(" / "));
+const RD_COLS = [
+  ["part_number", "Part number", "pn"], ["rev", "Rev", "rev"], ["description", "Description", "w"], ["material", "Material", "w"],
+  ["finish", "Finish", "w"], ["size", "Size", "w", true], ["quantities", "Quantities", "num", false, QTY], ["annual_usage", "Annual usage", "num", false, (v) => esc(fmtNum(v))],
+];
+
+function rdTable(lines) {
+  // Size is rarely given, so its column shows only when a line has one.
+  const cols = RD_COLS.filter(([k, , , optional]) => !optional || lines.some((ln) => ln && ln[k] && hasValue(ln[k].value)));
+  const head = cols.map(([, label, cls]) => `<th scope="col" class="${cls}">${label}</th>`).join("");
+  const rows = lines.map((ln) => `<tr>${cols.map(([k, , cls, , fmt], i) => {
+    const cell = rdVal((ln || {})[k], fmt, "n/a");
+    return i === 0 ? `<th scope="row" class="${cls}">${cell}</th>` : `<td class="${cls}">${cell}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<div class="rd-scroll" id="rdTable" tabindex="0" role="region" aria-label="Part lines, scrolls sideways"><table class="rd-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function rfqInner(id) {
+  const ent = RD.map.get(id), e = S.emails[id] || {};
+  const busy = ent && ent.pending != null && ent.status !== "loading" ? `<span class="spin" aria-hidden="true" title="Checking for changes"></span>` : "";
+  const dl = `<a class="rd-dl" id="rdDl" href="/api/rfq_details.csv" download="rfq_details.csv" title="Every RFQ in the inbox, one row per part line">${ic("download", "sm")}Download all (CSV)</a>`;
+  const title = (extra) => `<div class="sec-title">RFQ details${busy}<span class="aside">${extra}</span></div>`;
+  if (!ent || (ent.status === "loading" && !ent.record)) {
+    return title(dl) + `<div class="status-box" role="status"><span class="spin"></span>Reading the RFQ details</div>`;
+  }
+  if (ent.status === "error" && !ent.record) {
+    return title(dl) + `<div class="err-box rd-err" role="alert"><span>Could not load the RFQ details (${esc(ent.error)}).</span><button type="button" class="btn small" id="rdRetry" data-rfq-retry>${ic("refresh", "sm")}Try again</button></div>`;
+  }
+  if (ent.status === "none") {
+    const it = S.state.items[id] || {}, d = it.status === "done" ? it.decision : null;
+    const et = d && it.jev && it.jev.answers ? it.jev.answers.email_type : null;
+    const kind = et && et.choice ? optionLabel("email_type", et.choice) : "";
+    const why = d ? `Jev says this is not a request for quote${kind ? ` (${esc(kind)})` : ""}` : "This does not look like a request for quote, and Jev has not routed it yet";
+    return title(dl) + `<div class="rd-none">${ic("info", "sm")}<span>${why}, so there are no part details to pull out and it is not in the consolidated file.</span></div>`;
+  }
+  const r = ent.record || {};
+  const stale = ent.status === "error" ? `<div class="rd-stale" role="alert">Could not refresh (${esc(ent.error)}). Showing the last details. <button type="button" class="btn small ghost" id="rdRetry" data-rfq-retry>Try again</button></div>` : "";
+  const srcBtn = `<button type="button" class="rd-srcbtn" id="rdSrc" aria-pressed="${RD.showSrc ? "true" : "false"}" title="Show where each value was found">Sources</button>`;
+
+  const tier = r.customer_tier ? ` <span class="badge tier">${esc(r.customer_tier)}-tier customer</span>` : r.customer ? ` <span class="badge prospect">${ic("spark", "sm")}New prospect</span>` : "";
+  const customer = hasValue(r.customer) ? rdVal({ value: r.customer, source: r.customer_source || null }, null, "Not found", () => tier) : `<span class="rd-miss">Not found</span>`;
+  const contact = hasValue(r.contact) || hasValue(r.contact_email)
+    ? rdVal({ value: r.contact || r.contact_email, source: "email header" }, null, "Not found", () => (r.contact && r.contact_email ? ` <span class="rd-sub2">${esc(r.contact_email)}</span>` : "")) : `<span class="rd-miss">Not found</span>`;
+  const request = hasValue(r.request) ? esc(String(r.request).replace(/^./, (c) => c.toUpperCase())) : `<span class="rd-miss">Not found</span>`;
+  // The words the date came from, unless they only repeat it ("RESPOND BY 2026-10-09").
+  const quoted = (text, value) => (hasValue(text) && !String(text).includes(String(value)) ? `<span class="rd-q">"${esc(text)}"</span>` : "");
+  const respond = rdVal(r.respond_by, (v) => esc(fmtDate(v)), "Not found", (v, f) => quoted(f.text, v));
+  const dv = fld(r.delivery), tv = fld(r.terms);
+  const delivery = hasValue(dv.value)
+    ? (dv.date ? rdVal(dv, (v, f) => esc(fmtDate(f.date)), "Not found", (v, f) => quoted(v, f.date)) : rdVal(dv)) : "";
+  const terms = hasValue(tv.value) ? rdVal(tv) : "";
+  const ex = fld(r.export_control);
+  const where = String(ex.source || "").split(/\s*;\s*/).filter(Boolean)
+    .map((p) => esc(p.replace(/\s*\((?:OCR[^)]*|text layer|STEP header)\)\s*$/i, "")).replace(/^(email body|subject|email signature)$/i, "the $1")).join(" and ");
+  const exportHtml = hasValue(ex.value)
+    ? `<span class="rd-v" title="${esc("Source: " + (ex.source || "unknown"))}"><span class="badge restricted">${ic("lock", "sm")}${esc(ex.value)}</span>${where ? ` found in ${where}` : ""}</span>${ocrChip(ex.source)}${ex.source ? `<span class="rd-src">${esc(srcPhrase(ex.source))}</span>` : ""}`
+    : `<span class="rd-miss" title="No ITAR, EAR, or CUI marking in the email or its files">None found</span>`;
+  const ro = r.routing && typeof r.routing === "object" ? r.routing : null;
+  const routing = ro && (ro.lane || ro.estimator)
+    ? [ro.lane, ro.estimator, ro.priority, ro.quote_by ? `quote by ${fmtDate(ro.quote_by, true)}` : ""].filter(Boolean).map((x) => `<span style="white-space:nowrap">${esc(x)}</span>`).join(" · ")
+    : `<span class="rd-miss">Not routed yet. The CSV fills this in once Jev routes the email.</span>`;
+  const rows = [
+    ["Customer", customer], ["Contact", contact], ["RFQ number", rdVal(r.rfq_number)], ["Quote ref", rdVal(r.quote_ref, null, "None")],
+    ["Request", request], ["Respond by", respond], delivery ? ["Delivery", delivery] : null, terms ? ["Terms", terms] : null,
+    ["Export control", exportHtml], ["Requirements", rdList(r.requirements, "req", "None stated")], ["Routed to", routing],
+  ].filter(Boolean);
+
+  const lines = arr(r.lines).filter((ln) => ln && typeof ln === "object");
+  const table = lines.length ? rdTable(lines) : `<div class="rd-miss" style="font-size:12.5px">No part lines found.</div>`;
+  const missing = arr(r.missing).filter(Boolean);
+  const flags = missing.length ? `<div class="rd-flags"><span class="lab">Missing</span>${missing.map((m) => `<span class="badge warning">${ic("alert", "sm")}${esc(String(m).replace(/^./, (c) => c.toUpperCase()))}</span>`).join("")}</div>` : "";
+  const checks = arr(r.check).filter(Boolean);
+  const checkLi = (c) => `<li>${ic("alert", "sm")}<span>${esc(c)}</span></li>`;
+  const checkHtml = checks.length ? `<div class="rd-check" role="note"><div class="rd-check-head">Check</div><ul>${checks.slice(0, 3).map(checkLi).join("")}</ul>${moreHtml("check", checks.slice(3), checkLi, "")}</div>` : "";
+  const files = arr(r.files).filter((f) => f && typeof f === "object" && f.name);
+  const filesHtml = files.length ? `<div class="rd-files"><b>Read from</b> ${files.map((f) => esc(`${f.name} (${[f.type, f.capture && f.capture !== "digital" ? f.capture : "", f.text_from].filter(Boolean).join(", ")})`)).join(", ")}</div>` : "";
+
+  return title(`${srcBtn}${dl}`) + `${stale}<div class="rd${RD.showSrc ? " src-on" : ""}">
+      <dl class="rd-kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+      <div class="rd-sub">Part lines<span class="rd-n">${lines.length}</span>${lines.length ? `<span class="rd-hint" hidden>Scroll sideways for more ${ic("chev-right", "sm")}</span>` : ""}</div>
+      ${table}${flags}${checkHtml}${filesHtml}
+    </div>`;
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -1585,6 +1989,11 @@ function renderSettings() {
           <div class="help">ITAR / CUI likelihood that sends an email to the restricted queue. Kept low on purpose: a miss costs far more than a false alarm.</div>
           <div class="range"><input type="range" id="itarBar" min="0.1" max="0.9" step="0.05" value="${th.export_control_restrict}"><span class="rv" id="itarBarV">${pct(th.export_control_restrict)}</span></div></div>
       </div>
+      ${rfqEnabled() ? `<div class="sec"><div class="sec-title">RFQ details</div>
+        <div class="set-row"><div class="set-line"><span class="set-label">Consolidated RFQ details</span>
+            <span class="set-btns"><a class="btn small" id="settingsCsv" href="/api/rfq_details.csv" download="rfq_details.csv">${ic("download", "sm")}CSV</a><a class="btn small ghost" id="settingsJson" href="/api/rfq_details.json" target="_blank" rel="noopener" title="Every record as JSON, with the place each value was found">${ic("external", "sm")}JSON</a></span></div>
+          <div class="help">One file for every RFQ in the inbox, one row per part line: customer, RFQ number, respond-by date, part number, rev, material, finish, quantity breaks, export control, missing info, and the route, pulled from the email and its files (scans and photos read with OCR); the JSON also says where each value was found.</div></div>
+      </div>` : ""}
       <div class="sec"><div class="sec-title">Demo options</div>
         <div class="set-row"><label class="switch"><input type="checkbox" id="useCache" ${S.useCache ? "checked" : ""}>Replay saved Jev results when available</label>
           <div class="help"><span id="cacheCount">${S.state.stats.cache_size}</span> saved results. Replays are instant and free. Turn this off to make every email a fresh live call.</div></div>
@@ -1601,7 +2010,7 @@ function renderSettings() {
         <div id="testLine">${testLineHtml()}</div>
       </div>
       <div class="sec"><div class="sec-title">What Jev is asked about every email</div>
-        <div class="note" style="margin:0 0 4px">Jev reads the email and the text of its attachments: drawing notes and title blocks, export-control legends, and the quantities on RFQ forms.</div>
+        <div class="note" style="margin:0 0 4px">Jev reads the email and the text of its attachments: drawing notes and title blocks, export-control legends, and the quantities on RFQ forms.${(S.boot.features || {}).ocr ? " Scans, faxes, and photos have no text layer, so their text is read with Tesseract OCR first." : ""}</div>
         <div class="qlist">${S.boot.questions.map((q) => `<div class="qi"><div class="qn">${esc(q.label)} <span class="qt" style="font-size:10px;color:var(--muted);text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:1px 5px">${esc(q.type)}</span></div>
           <div class="qins">${esc(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}</div>
           ${q.criteria ? `<details><summary>Criteria</summary><ul>${Array.isArray(q.criteria) ? q.criteria.map((c, i) => `<li><b>${i}</b>: ${esc(c)}</li>`).join("") : Object.entries(q.criteria).map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join("")}</ul></details>` : ""}</div>`).join("")}</div>
@@ -1842,8 +2251,9 @@ async function submitPaste(ev) {
 }
 
 /* ---------------------------------------------------------------- file viewer */
-const VW = { list: [], idx: 0, returnEl: null, selFor: null, model: null, token: 0, texts: new Map(), meshes: new Map(), panelOpen: true };
-try { VW.panelOpen = localStorage.getItem("rfq.jevPanel") !== "0"; } catch (e) { /* storage blocked */ }
+const VW = { list: [], idx: 0, returnEl: null, selFor: null, model: null, token: 0, stageToken: 0, texts: new Map(), meshes: new Map(),
+  regionsCache: new Map(), panelOpen: true, regionsOn: false, reg: null, regRO: null, emailId: null };
+try { VW.panelOpen = localStorage.getItem("rfq.jevPanel") !== "0"; VW.regionsOn = localStorage.getItem("rfq.regions") === "1"; } catch (e) { /* storage blocked */ }
 
 function bindViewer() {
   $("#vClose").addEventListener("click", closeViewer);
@@ -1857,11 +2267,20 @@ function bindViewer() {
   };
   $("#vPanelBtn").addEventListener("click", () => toggle(!VW.panelOpen));
   $("#vPanelClose").addEventListener("click", () => { toggle(false); $("#vPanelBtn").focus(); });
+  $("#vRegionsBtn").addEventListener("click", () => {
+    VW.regionsOn = !VW.regionsOn;
+    try { localStorage.setItem("rfq.regions", VW.regionsOn ? "1" : "0"); } catch (e) { /* storage blocked */ }
+    const att = VW.list[VW.idx];
+    $("#vRegionsBtn").setAttribute("aria-pressed", VW.regionsOn && att && canRegions(att) ? "true" : "false");
+    if (att) renderStage(att);
+  });
+  if (!window.ResizeObserver) window.addEventListener("resize", layoutRegions);
 }
 
-function openViewer(list, idx, returnEl, selFor) {
+function openViewer(list, idx, returnEl, selFor, emailId) {
   if (!list || !list.length || !(idx >= 0 && idx < list.length)) return;
   VW.list = list.slice(); VW.idx = idx; VW.returnEl = returnEl || document.activeElement; VW.selFor = selFor || null;
+  VW.emailId = emailId || null;
   $("#viewer").hidden = false;
   document.body.classList.add("viewing");
   renderViewer();
@@ -1870,8 +2289,8 @@ function openViewer(list, idx, returnEl, selFor) {
 
 function closeViewer() {
   if ($("#viewer").hidden) return;
-  VW.token++;
-  destroyModel();
+  VW.token++; VW.stageToken++; VW.emailId = null;
+  destroyModel(); dropRegions();
   $("#vStage").innerHTML = ""; $("#vPanelBody").innerHTML = "";
   $("#viewer").hidden = true;
   document.body.classList.remove("viewing");
@@ -1895,8 +2314,17 @@ function vmsg(title, text, icon) {
 const GONE_TEXT = "Uploaded files are kept in memory only, and the server no longer has this one (it restarted, or it needed the room). Jev already read its text when the email was routed.";
 
 function renderViewer() {
-  const att = VW.list[VW.idx], t = fileType(att), token = ++VW.token;
-  destroyModel();
+  const att = VW.list[VW.idx], token = ++VW.token;
+  renderViewerHead(att);
+  renderStage(att);
+  renderJevPanel(att, token);
+}
+
+/* The top bar of the viewer for one file. When the file changes under a focused control that then
+   hides (Detected regions or Open on a STEP file), focus moves to Next file, or Close, instead of
+   dropping to the page behind the viewer. */
+function renderViewerHead(att) {
+  const t = fileType(att), had = document.activeElement, inViewer = had && $("#viewer").contains(had);
   const icon = $("#vIcon"); icon.className = "ficon " + t; icon.innerHTML = ic(TYPE_ICON[t]);
   $("#vName").textContent = att.name; $("#vName").title = att.name;
   const legend = LEGENDS[att.legend] ? ` · ${LEGENDS[att.legend]} legend` : "";
@@ -1910,11 +2338,42 @@ function renderViewer() {
   if (!op.hidden) op.href = att.url; else op.removeAttribute("href");
   $("#vPanel").classList.toggle("collapsed", !VW.panelOpen);
   $("#vPanelBtn").setAttribute("aria-pressed", VW.panelOpen ? "true" : "false");
+  const rb = $("#vRegionsBtn"), regions = canRegions(att);
+  rb.hidden = !regions;
+  rb.setAttribute("aria-pressed", VW.regionsOn && regions ? "true" : "false");
+  if (inViewer && (had.hidden || !had.getClientRects().length)) {
+    const next = $("#vNext");
+    (next.getClientRects().length ? next : $("#vClose")).focus();
+  }
+}
 
+/* The server reads files in the background (OCR can take a while on a small host). When it finishes
+   one of the files open in the viewer, the label, the OCR note, and the regions button follow; the
+   stage is redrawn only when what it shows changes, so a PDF or a turned 3D model keeps its place. */
+function refreshViewerFiles() {
+  if ($("#viewer").hidden || !VW.emailId) return;
+  const e = S.emails[VW.emailId], old = VW.list[VW.idx];
+  if (!e || !old || !Array.isArray(e.attachments) || e.attachments.length !== VW.list.length) return;
+  const att = e.attachments[VW.idx];
+  if (!att || att.name !== old.name) return;
+  VW.list = e.attachments.slice();
+  const sig = (a) => [a.label, a.text_from, a.legend, a.size, a.pages, a.width, a.height, a.title].join("|");
+  if (sig(att) === sig(old) && att.url === old.url && canRegions(att) === canRegions(old)) return;
+  renderViewerHead(att);
+  if (att.url !== old.url || canRegions(att) !== canRegions(old)) renderStage(att);
+  if (att.text_from !== old.text_from) renderJevPanel(att, ++VW.token);
+}
+
+/* The big area of the viewer: the file itself, or page 1 with the detected regions on it. It is
+   redrawn on its own when "Detected regions" is switched, so the text panel keeps its place. */
+function renderStage(att) {
+  const t = fileType(att), token = ++VW.stageToken;
+  destroyModel(); dropRegions();
+  const file = hasFile(att), dl = $("#vDownload"), op = $("#vOpen");
   const stage = $("#vStage");
   stage.className = "vstage";
   const gone = () => {  // the server dropped this upload after the page learned about it
-    if (token !== VW.token) return;
+    if (token !== VW.stageToken) return;
     stage.innerHTML = vmsg("This file is no longer in memory", GONE_TEXT, "alert");
     dl.hidden = true; op.hidden = true;
   };
@@ -1922,12 +2381,14 @@ function renderViewer() {
     stage.innerHTML = vmsg("Name only, no file", "The sender listed this file name, but the file itself did not come with the email. Jev sees only the name.", "file");
   } else if (!file) {
     stage.innerHTML = vmsg("This file is no longer in memory", GONE_TEXT, "alert");
+  } else if (VW.regionsOn && canRegions(att)) {
+    renderRegions(att, stage, token);
   } else if (t === "pdf") {
-    const show = () => { if (token === VW.token) stage.innerHTML = `<iframe class="vpdf" src="${esc(att.url)}" title="${esc(att.name)}"></iframe>`; };
+    const show = () => { if (token === VW.stageToken) stage.innerHTML = `<iframe class="vpdf" src="${esc(att.url)}" title="${esc(att.name)}"></iframe>`; };
     if (att.kind === "upload") {
       stage.innerHTML = `<div class="vmsg"><span class="spin"></span></div>`;
       fetch(att.url, { method: "HEAD" }).then((r) => {
-        if (token !== VW.token) return;
+        if (token !== VW.stageToken) return;
         if (r.status === 410 || r.status === 404) gone(); else show();
       }).catch(show);
     } else show();
@@ -1936,7 +2397,7 @@ function renderViewer() {
     const img = stage.querySelector("img");
     img.onerror = () => {
       if (att.kind === "upload") gone();
-      else if (token === VW.token) stage.innerHTML = vmsg("The image could not be loaded", "Try the Download button instead.", "alert");
+      else if (token === VW.stageToken) stage.innerHTML = vmsg("The image could not be loaded", "Try the Download button instead.", "alert");
     };
     img.src = att.url;
   } else if (att.kind === "model" && att.mesh) {
@@ -1946,19 +2407,131 @@ function renderViewer() {
         <div class="v3d-tools"><button type="button" class="btn small" id="vReset">${ic("reset", "sm")}Reset view</button></div>
         <div class="v3d-hint">Drag to rotate · scroll or pinch to zoom · double-click to reset</div></div>${propsHtml(att)}`;
     loadMesh(att.mesh).then((mesh) => {
-      if (token !== VW.token) return;
+      if (token !== VW.stageToken) return;
       const load = stage.querySelector(".v3d-load"); if (load) load.remove();
       VW.model = makeModelView(stage.querySelector("canvas"), mesh);
       $("#vReset").onclick = () => VW.model && VW.model.reset();
     }).catch(() => {
-      if (token !== VW.token) return;
+      if (token !== VW.stageToken) return;
       const box = stage.querySelector(".v3d");
       box.innerHTML = `${att.thumb ? `<img src="${esc(att.thumb)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;mix-blend-mode:multiply">` : ""}<div class="v3d-hint">The 3D preview could not be loaded. The Download button gets the STEP file.</div>`;
     });
   } else {
     stage.innerHTML = vmsg("No preview for this file", "Use the Download button to open it.", "file");
   }
-  renderJevPanel(att, token);
+}
+
+/* ---- detected regions (layout model) ---- */
+// Plain-word names and one color per class (all dark enough for white chip text).
+const REGION_CLASSES = {
+  title_block: ["Title block", "#2a78d6"], revision_block: ["Revisions", "#7a4fd0"], notes: ["Notes", "#0b7d5c"],
+  export_legend: ["Export legend", "#d03b3b"], proprietary_notice: ["Proprietary notice", "#a85a00"],
+  form_header: ["Form header", "#0b7a90"], line_table: ["Line items", "#c0307a"], requirements: ["Requirements", "#5f6b12"],
+};
+function regionClass(label) {
+  // Own keys only: a label like "constructor" would otherwise find Object.prototype's.
+  if (Object.prototype.hasOwnProperty.call(REGION_CLASSES, label)) return REGION_CLASSES[label];
+  const words = String(label || "region").replace(/_/g, " ");
+  return [words.charAt(0).toUpperCase() + words.slice(1), "#5b5f68"];
+}
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+
+function canRegions(att) {
+  const t = fileType(att), F = (S.boot && S.boot.features) || {};
+  // Without the layout model the button would only lead to "not available", and a saved "on" would
+  // swap every PDF for a static page image, so the viewer offers regions only when the server has it.
+  return !!(att && att.page_url && att.regions_url && hasFile(att) && (t === "pdf" || t === "image") && F.layout !== false);
+}
+
+function dropRegions() {
+  if (VW.regRO) { VW.regRO.disconnect(); VW.regRO = null; }
+  VW.reg = null;
+}
+
+function renderRegions(att, stage, token) {
+  stage.innerHTML = `<div class="vreg">
+      <div class="vreg-view">
+        <div class="vreg-page"><img alt="${esc(`Page 1 of ${att.name}`)}"><div class="vreg-boxes" aria-hidden="true"></div></div>
+        <div class="vreg-load"><span class="spin"></span>Loading page 1</div>
+      </div>
+      <div class="vreg-legend" aria-live="polite"><span class="vreg-note"><span class="spin"></span>Finding regions on page 1</span></div>
+    </div>`;
+  const view = stage.querySelector(".vreg-view"), page = stage.querySelector(".vreg-page"), img = page.querySelector("img");
+  const R = VW.reg = { view, page, w: 0, h: 0 };
+  img.onload = () => {
+    if (token !== VW.stageToken) return;
+    R.w = img.naturalWidth; R.h = img.naturalHeight;
+    const load = view.querySelector(".vreg-load"); if (load) load.remove();
+    layoutRegions();
+    page.classList.add("ready");
+  };
+  img.onerror = () => {
+    if (token !== VW.stageToken) return;
+    dropRegions();
+    stage.innerHTML = vmsg("The page image could not be made", "This server could not draw page 1 of this file. Turn off Detected regions to see the file itself.", "alert");
+  };
+  img.src = att.page_url;
+  if (window.ResizeObserver) { VW.regRO = new ResizeObserver(layoutRegions); VW.regRO.observe(view); }
+  const live = () => token === VW.stageToken && VW.reg === R;  // not replaced by another file or an error
+  getJson(att.regions_url, VW.regionsCache).then((res) => {
+    if (!live()) return;
+    if (!res || typeof res.available !== "boolean") throw new Error("the server sent an unexpected answer");
+    drawRegions(res, stage);
+  }).catch((err) => {
+    if (!live()) return;
+    VW.regionsCache.delete(att.regions_url);
+    const legend = stage.querySelector(".vreg-legend");
+    if (legend) legend.innerHTML = `<span class="vreg-note warn">${ic("alert", "sm")}<span>Could not load the detected regions (${esc(err.message || "request failed")}). The page is shown without them.</span></span>`;
+  });
+}
+
+function drawRegions(res, stage) {
+  const legend = stage.querySelector(".vreg-legend"), boxes = stage.querySelector(".vreg-boxes");
+  if (!res.available) {
+    legend.innerHTML = `<span class="vreg-note">${ic("info", "sm")}<span>The layout detector is not available on this server (its model, <code>models/rfq_layout.onnx</code>, is not installed), so no regions are drawn. This is page 1 as the detector would see it.</span></span>`;
+    return;
+  }
+  const W = Number(res.width) || (VW.reg && VW.reg.w) || 0, H = Number(res.height) || (VW.reg && VW.reg.h) || 0;
+  const regions = (Array.isArray(res.regions) ? res.regions : []).filter((r) => r && Array.isArray(r.box) && r.box.length === 4 && r.box.every((v) => isFinite(v)));
+  if (!W || !H || !regions.length) {
+    legend.innerHTML = `<span class="vreg-note">${ic("info", "sm")}<span>The layout model found no regions on page 1.</span></span>`;
+    return;
+  }
+  const f = (v, d) => clamp(Number(v) / d, 0, 1);
+  const found = new Map();
+  boxes.innerHTML = regions.map((r) => {
+    const [name, color] = regionClass(r.label);
+    const x0 = f(Math.min(r.box[0], r.box[2]), W), y0 = f(Math.min(r.box[1], r.box[3]), H);
+    const x1 = f(Math.max(r.box[0], r.box[2]), W), y1 = f(Math.max(r.box[1], r.box[3]), H);
+    const conf = r.conf != null && isFinite(r.conf) ? Math.round(r.conf * 100) : null;
+    found.set(r.label, { name, color, n: ((found.get(r.label) || {}).n || 0) + 1 });
+    return `<div class="vreg-box" data-x="${x0}" data-y="${y0}" style="left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;height:${(y1 - y0) * 100}%;--c:${color};--bg:${rgba(color, 0.1)}"><span class="vreg-chip">${esc(name)}${conf != null ? `<b>${conf}%</b>` : ""}</span></div>`;
+  }).join("");
+  // The legend follows the model's class order, so the same class always sits in the same place.
+  const order = Object.keys(REGION_CLASSES);
+  const keys = [...found.entries()].sort((a, b) => ((order.indexOf(a[0]) + 99) % 99) - ((order.indexOf(b[0]) + 99) % 99));
+  const said = regions.map((r) => `${regionClass(r.label)[0]}${r.conf != null ? ` ${Math.round(r.conf * 100)}%` : ""}`).join(", ");
+  legend.innerHTML = keys.map(([, k]) => `<span class="vreg-key"><span class="vreg-sw" style="--c:${k.color};--bg:${rgba(k.color, 0.18)}"></span>${esc(k.name)}${k.n > 1 ? ` <span class="n">${k.n}</span>` : ""}</span>`).join("")
+    + `<span class="vreg-meta">Layout model, page 1${res.seconds != null && isFinite(res.seconds) ? `, ${Number(res.seconds).toFixed(1)} s` : ""}</span>`
+    + `<span class="sr-only">Detected regions: ${esc(said)}.</span>`;
+  layoutRegions();
+}
+
+/* Size the page to fit the stage (the boxes are in percent, so they follow), then keep each label
+   chip on the page: inside its box near the top edge, and anchored right near the right edge. */
+function layoutRegions() {
+  const R = VW.reg;
+  if (!R || !R.view.isConnected || !R.w || !R.h) return;
+  const W = R.view.clientWidth, H = R.view.clientHeight;
+  if (!W || !H) return;
+  const s = Math.min(W / R.w, H / R.h);
+  const w = Math.max(1, Math.floor(R.w * s)), h = Math.max(1, Math.floor(R.h * s));
+  R.page.style.width = w + "px"; R.page.style.height = h + "px";
+  for (const box of R.page.querySelectorAll(".vreg-box")) {
+    const chip = box.firstElementChild;
+    box.classList.toggle("chip-in", Number(box.dataset.y) * h < chip.offsetHeight + 2);
+    box.classList.toggle("chip-r", Number(box.dataset.x) * w + chip.offsetWidth > w);
+  }
 }
 
 function propsHtml(att) {
@@ -1983,6 +2556,21 @@ function getJson(url, cache) {
 }
 const loadMesh = (url) => getJson(url, VW.meshes);
 
+/* Where the text came from. A scan, photo, or screenshot has no text layer, so Tesseract read it:
+   say so, with its confidence, because OCR text can hold misreadings that the email never had. */
+function textFromNote(att) {
+  const tf = String(att.text_from || ""), o = /^OCR/i.test(tf) ? ocrInfo(tf) : null;
+  if (o) {
+    const what = att.media === "jpg" ? "This file is a photo with no text layer"
+      : att.media === "png" ? "This file is an image (a screenshot) with no text layer" : "This file has no text layer (a scan)";
+    const low = o.conf != null && o.conf < LOW_OCR;
+    return `<div class="vp-ocr${low ? " low" : ""}">${ic("scan", "sm")}<span>${what}, so its text was read with Tesseract OCR${o.conf != null ? `, confidence ${o.conf}%` : ""}. Jev reads this OCR text.${low ? " At this confidence some words may be misread: check part numbers and dates against the file." : ""}</span></div>`;
+  }
+  if (tf === "text layer") return `<p class="vp-note">Read from the PDF's text layer, so no OCR was needed.</p>`;
+  if (tf === "STEP header") return `<p class="vp-note">Read from the STEP file's header: part number, title, units, and the CAD system that wrote it.</p>`;
+  return "";
+}
+
 function renderJevPanel(att, token) {
   const body = $("#vPanelBody");
   if (!att.text_url) {
@@ -1997,7 +2585,7 @@ function renderJevPanel(att, token) {
     if (att.kind === "upload" && att.media === "pdf" && S.boot.uploads && !S.boot.uploads.pdf_text) warn = `<div class="vp-warn">This server cannot read PDF text (pypdf is not installed), so Jev sees only this file's name.</div>`;
     else if (att.kind === "upload" && att.text_error) warn = `<div class="vp-warn">The text of this PDF could not be read (${esc(att.text_error)}). Jev sees the file name and this note.</div>`;
     body.innerHTML = `<p class="vp-note">Jev gets this text with the email body, in the same single call, labeled with the file name <b>${esc(r.name || att.name)}</b>.</p>
-      ${warn}<pre class="jtext">${esc(r.text)}</pre>
+      ${textFromNote(att)}${warn}<pre class="jtext">${esc(r.text)}</pre>
       ${r.truncated ? `<p class="vp-note" style="margin-top:8px">Shortened for Jev: it reads the first ${trunc.toLocaleString()} of ${Number(r.full_chars || 0).toLocaleString()} characters. Each email has a fixed text budget for its attachments.</p>` : ""}`;
   }).catch((e) => {
     if (token !== VW.token) return;

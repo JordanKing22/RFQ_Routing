@@ -11,6 +11,10 @@ STEP header); this module never runs tesseract itself. It reads four kinds of so
     RFQ forms       RFQ number, respond-by date, one table row per part, quote requirements
     drawings        the title block (part number, rev, title, material, finish) and legends
     STEP models     part number, title, and revision from the header
+A file's kind comes from what is printed on it, not its name or format: a phone photo or a
+screenshot whose text carries title block markers is a drawing. A part number is only taken from a
+place that holds one (the DWG NO. cell, a P/N label, an RFQ form row, the email, a STEP header),
+so a date or a note on a drawing never becomes a part line.
 When sources disagree the RFQ form wins for quantities and dates, the drawing title block wins for
 part number, rev, material, finish, and description, and the email counts when it is the only
 source. Every disagreement is written to "check" so a person can look. OCR text is noisy, so labels
@@ -30,7 +34,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
@@ -120,6 +124,8 @@ def ocr_fix_spec(text: str) -> str:
                   lambda m: f"{m.group(1)}-T{m.group(2).replace('O', '0').replace('I', '1').replace('l', '1')}", text)
     text = re.sub(r"\bTYPE\s+([IlL1|]{1,3})\b", lambda m: "TYPE " + "I" * len(m.group(1)), text)
     text = re.sub(r"\bCLASS\s+[lI|]\b", "CLASS 1", text)
+    text = re.sub(r"(?<=[A-Z])!(?=[\s,.]|$)", "I", text)  # AIS! 4140 -> AISI 4140
+    text = re.sub(r"\bDATUM([A-Z])\b", r"DATUM \1", text)  # the space before a datum letter is thin
     text = re.sub(r"\b(ASTM|AMS|MIL)\s*[-]?\s*", lambda m: m.group(0), text)
     return text
 
@@ -148,6 +154,12 @@ def _content(text: str) -> set:
     return {t for t in _tokens(text) if t not in _STOP}
 
 
+def _covered(a: str, b: str) -> bool:
+    """Every content word of a (at least three of them) appears in b."""
+    ta = _content(a)
+    return len(ta) >= 3 and ta <= _content(b)
+
+
 def overlap(a: str, b: str) -> float:
     """Share of the shorter phrase's content words found in the other one."""
     ta, tb = _content(a), _content(b)
@@ -161,9 +173,12 @@ def overlap(a: str, b: str) -> float:
 # --------------------------------------------------------------------------- #
 # Part numbers look like QA-41127, HPV-2045, BWM-3140-08, TO-5520. The lookbehind keeps spec
 # numbers out (MIL-A-8625 must not give "A-8625", BWM-QS-0412 must not give "QS-0412").
-PN_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?)(?![A-Za-z0-9-])")
+# A letter group may sit between prefix and number (BWM-T-0415, BFW-SS-5812).
+PN_BODY = r"[A-Z][A-Z0-9]{0,4}(?:-[A-Z]{1,3})?-\d{2,6}(?:-[A-Z0-9]{1,4})?"
+PN_RE = re.compile(r"(?<![A-Za-z0-9-])(" + PN_BODY + r")(?![A-Za-z0-9-])")
 # The same with OCR slack: digits allowed in the prefix, look-alike letters in the digits.
-PN_OCR_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9|]{1,5}-[0-9OIlSBZ|]{2,6}(?:-[A-Za-z0-9]{1,4})?)(?![A-Za-z0-9-])")
+PN_OCR_RE = re.compile(r"(?<![A-Za-z0-9-])([A-Za-z0-9|]{1,5}(?:-[A-Za-z]{1,3})?-[0-9OIlSBZ|]{2,6}(?:-[A-Za-z0-9]{1,4})?)"
+                       r"(?![A-Za-z0-9-])")
 # Standards that are written like part numbers. "SP", "MS", and "AN" stay out of this list: they are
 # real part number prefixes too, and the standards that use them are written with a space.
 SPEC_PREFIXES = {"MIL", "AMS", "ASTM", "SAE", "NAS", "ISO", "DFARS", "NIST", "UNC", "UNF", "UNS", "ANSI", "ASME",
@@ -438,43 +453,57 @@ class Doc:
         return "none"
 
 
+FORM_MARKERS = [r"REQUEST\s*F[O0]R\s*QU[O0]TAT", r"\bRF[QO0]\s*N[O0]", r"RESP[O0]ND\s*BY", r"QU[O0]TE\s+REQUIREMENTS",
+                r"QUANTITIES", r"UNIT\s*PRICE", r"LEAD\s*TIME", r"SUPPLIER\s+RESP[O0]NSE", r"TO\s+SUPPLIER"]
+# Words printed on nearly every engineering drawing: the border and tolerance block phrases, and
+# the title block cell labels (matched as whole lines, loosely, because OCR bends them).
+DRAWING_PHRASES = [r"REVISIONS", r"THIRD\s+ANGLE", r"UNLESS\s+OTHERWISE\s+SPECIFIED", r"TOLERANCES",
+                   r"D[O0]\s+N[O0]T\s+SCALE", r"\b[DO0]{1,2}WG\.?\s*N[O0]",
+                   r"(?:ISOMETRIC|FRONT|TOP|SIDE|BOTTOM|REAR)\s+VIEW|SECTION\s+[A-Z]-[A-Z]\b|DETAIL\s+[A-Z]\b",
+                   r"INTERPRET\s+(?:DRAWING\s+)?PER\s+ASME", r"BREAK\s+(?:ALL\s+)?SHARP\s+EDGES"]
+DRAWING_CELLS = ["TITLE", "MATERIAL", "FINISH", "SIZE", "SCALE", "SHEET", "DRAWN", "REV", "NOTES", "DWG NO"]
+
+
+def _capture(doc: Doc) -> str:
+    """How an OCR'd file was made (scan, fax, photo, screenshot), from what ocr.py measured."""
+    if not doc.ocr:
+        return "digital"
+    sources = " ".join(str(p.get("source", "")) for p in doc.settings.get("pages") or [] if isinstance(p, dict))
+    sources = (sources + " " + json.dumps(doc.settings)).lower()
+    if "photo" in sources:
+        return "photo"
+    if "screen" in sources:
+        return "screenshot"
+    if "fax" in sources or "bilevel" in sources or "1-bit" in sources:
+        return "fax"
+    if doc.media == "jpg":
+        return "photo"
+    if doc.media == "png":
+        return "screenshot"
+    return "scan"
+
+
 def classify(doc: Doc) -> Tuple[str, str]:
-    """(file type, how it was captured), from the text and the way it was read, not the name."""
+    """(file type, how it was captured), from what is printed on the file, not its name or format.
+    A phone photo or a screenshot whose text carries title block markers is a drawing."""
     up = doc.text.upper()
-    capture = "digital"
-    if doc.ocr:
-        settings = json.dumps(doc.settings).lower()
-        if doc.media == "jpg":
-            capture = "photo"
-        elif doc.media == "png":
-            capture = "screenshot"
-        elif "fax" in settings or "bilevel" in settings or "1-bit" in settings:
-            capture = "fax"
-        else:
-            capture = "scan"
-        if "photo" in settings and doc.media != "pdf":
-            capture = "photo"
-        elif ("screen" in settings or "viewer" in up[:300]) and doc.media == "png":
-            capture = "screenshot"
+    capture = _capture(doc)
     if doc.method == "step-header" or "ISO-10303" in up[:200] or re.search(r"^PART NUMBER:", up, re.M):
         return "3D model", "digital"
-    form_hits = sum(bool(re.search(p, up)) for p in (
-        r"REQUEST\s*F[O0]R\s*QU[O0]TAT", r"\bRF[QO0]\s*N[O0]", r"RESP[O0]ND\s*BY", r"QU[O0]TE\s+REQUIREMENTS",
-        r"QUANTITIES", r"UNIT\s*PRICE", r"LEAD\s*TIME", r"SUPPLIER\s+RESP[O0]NSE", r"TO\s+SUPPLIER"))
-    drawing_hits = sum(bool(re.search(p, up)) for p in (
-        r"^\s*TITLE\s*$", r"\b[DO0]WG\.?\s*N[O0]", r"^\s*MATERIAL\s*$", r"^\s*FINISH\s*$", r"REVISIONS",
-        r"THIRD\s+ANGLE", r"UNLESS\s+OTHERWISE\s+SPECIFIED", r"TOLERANCES", r"D[O0]\s+N[O0]T\s+SCALE",
-        r"^\s*NOTES:", r"\bSCALE\b", r"\bSHEET\b", r"ISOMETRIC\s+VIEW"))
-    if form_hits >= 3 and form_hits >= drawing_hits - 2:
+    form_hits = sum(bool(re.search(p, up)) for p in FORM_MARKERS)
+    cells = [c.strip() for ln in (doc.lines or []) for c in ln.text.split("|")] + \
+            [c.strip() for row in doc.rows for c in row.split("|")]
+    cell_hits = sum(any(_label_score(c, lb, tail_ok=False) >= 0.9 for c in cells) for lb in DRAWING_CELLS)
+    drawing_hits = sum(bool(re.search(p, up)) for p in DRAWING_PHRASES) + cell_hits
+    if form_hits >= 3 and form_hits >= drawing_hits - 3:
         return "RFQ form", capture
     if drawing_hits >= 4:
         return "drawing", capture
     if form_hits >= 2:
         return "RFQ form", capture
-    if capture in ("photo", "screenshot"):
-        return capture, capture
-    if doc.media in ("jpg", "png"):
-        return ("photo" if doc.media == "jpg" else "screenshot"), capture
+    if doc.media in ("jpg", "png") or capture in ("photo", "screenshot"):
+        kind = capture if capture in ("photo", "screenshot") else ("photo" if doc.media == "jpg" else "screenshot")
+        return kind, capture
     return "other", capture
 
 
@@ -538,19 +567,25 @@ def _after(rows: List[str], i: int, accept: Callable[[str], Optional[str]], ahea
 
 
 def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[str]], ahead: int = 3,
-              stop: Optional[Callable[[str], bool]] = None, tail_ok: bool = True) -> Optional[Tuple[str, Optional[Line]]]:
+              stop: Optional[Callable[[str], bool]] = None, tail_ok: bool = True,
+              where: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, Optional[Line]]]:
     """Find a value by its label: on the same line ('MATERIAL: X'), under it (boxes), or after
-    it in reading order. Whole-line labels are tried before merged-line tails."""
+    it in reading order. Whole-line labels are tried before merged-line tails. `where`, when
+    given, is filled with how the value was found ("line" under a label, or reading-order "row"),
+    so a caller can follow a value that wrapped onto the next line."""
+    where = where if where is not None else {}
     for lb in labels:  # same line: "MATERIAL: ALUMINUM 6061-T6"
         pat = re.compile(r"(?:^|\|\s*)" + r"\s*".join(re.escape(w) for w in lb.split()) + r"\s*[:.]\s*(.+)$",
                          re.IGNORECASE)
         for ln in (doc.lines or []):
             m = pat.search(ln.text)
             if m and accept(m.group(1)):
+                where["same_line"] = True
                 return accept(m.group(1)), ln
         for row in doc.rows:
             m = pat.search(row)
             if m and accept(m.group(1)):
+                where["same_line"] = True
                 return accept(m.group(1)), None
     if doc.boxed:
         scored = []
@@ -561,6 +596,7 @@ def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[
         for _, _, ln in sorted(scored, key=lambda x: (x[0], x[1])):
             got = _below(doc, ln, accept, stop=stop)
             if got:
+                where["line"] = got[1]
                 return got
     scored_rows = []
     for i, row in enumerate(doc.rows):
@@ -571,6 +607,7 @@ def _labelled(doc: Doc, labels: Sequence[str], accept: Callable[[str], Optional[
     for _, i in sorted(scored_rows):
         got = _after(doc.rows, i, accept, ahead, stop)
         if got:
+            where["row"] = got[1]
             return got[0], None
     return None
 
@@ -611,20 +648,36 @@ def _is_drawing_label(text: str) -> bool:
     return any(_label_score(c, lb, tail_ok=False) >= 0.9 for c in text.split("|") for lb in DRAWING_LABELS)
 
 
+def _looks_like_date(token: str) -> bool:
+    """'2025-06-17', 'Z0Z5-O6-17', '2026-10': a date, even with OCR look-alikes in the digits."""
+    m = re.fullmatch(r"([0-9OQDIlSBZ|]{4})-([0-9OQDIlSBZ|]{2})(?:-([0-9OQDIlSBZ|]{2}))?", clean(token))
+    if not m:
+        return False
+    y, mo = (int("".join(_TO_DIGIT.get(c, c) for c in g.upper())) for g in m.groups()[:2])
+    d = int("".join(_TO_DIGIT.get(c, c) for c in m.group(3).upper())) if m.group(3) else 1
+    return 1900 <= y <= 2099 and 1 <= mo <= 12 and 1 <= d <= 31
+
+
 def _pn_candidates(text: str, ocr: bool) -> List[str]:
     pat = PN_OCR_RE if ocr else PN_RE
     out = []
     for m in pat.finditer(text):
         tok = m.group(1)
+        raw_prefix = tok.split("-")[0]
+        # The look-alike repair below turns digits into letters, so a date has to be caught first:
+        # "2025-06-17" in a title block would otherwise come out as the part number "ZOZS-06-17".
+        # For the same reason the prefix needs one character that was printed as a letter.
+        if _looks_like_date(tok) or (ocr and not re.search(r"[A-Za-z]", raw_prefix.replace("l", ""))):
+            continue
         fixed = fix_part_number(tok) if ocr else tok.upper()
         prefix = fixed.split("-")[0]
-        if prefix in SPEC_PREFIXES or not re.search(r"[A-Z]", prefix) or re.fullmatch(r"RF[QO0]", prefix):
+        if prefix in SPEC_PREFIXES or not re.search(r"[A-Z]", prefix) or re.search(r"(?:^|-)RF[QO0P](?:-|$)", fixed):
             continue
         if re.fullmatch(r"\d{4}", fixed.split("-")[1]) and re.fullmatch(r"[1-7]\d{3}", fixed.split("-")[1]) and prefix in ("AL", "T"):
             continue
         if re.fullmatch(r"Q\d{0,2}", prefix) or re.fullmatch(r"20\d\d-\d\d(-\d\d)?", fixed):
             continue
-        if not re.fullmatch(r"[A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?", fixed):
+        if not re.fullmatch(PN_BODY, fixed):
             continue
         out.append(fixed)
     return out
@@ -645,17 +698,21 @@ def _clean_rev(text: str) -> Optional[str]:
     return None
 
 
-def _material_value(text: str) -> Optional[str]:
+def _material_value(text: str, cut: bool = True) -> Optional[str]:
+    """A material callout. cut: the line may hold a neighbouring note too (OCR joins them), so keep
+    the sentence with the material and what follows; a text layer line is the value as printed."""
     t = ocr_fix_spec(clean(text))
     if _is_drawing_label(t) and not MATERIAL_STRONG.search(t):
         return None
     if not (MATERIAL_STRONG.search(t) or MATERIAL_WORD.search(t)):
         return None
+    if not cut and "|" not in t:
+        return _strip_junk(t) or None
     seg = _tail_segment(t, re.compile(MATERIAL_STRONG.pattern + "|" + MATERIAL_WORD.pattern, re.IGNORECASE))
     return seg or None
 
 
-def _finish_value(text: str) -> Optional[str]:
+def _finish_value(text: str, cut: bool = True) -> Optional[str]:
     t = ocr_fix_spec(clean(text))
     if re.fullmatch(r"(?:\|\s*)?NONE\.?(?:\s*\|)?", t.strip(), re.IGNORECASE):
         return "NONE"
@@ -663,7 +720,19 @@ def _finish_value(text: str) -> Optional[str]:
         return None
     if not FINISH_RE.search(t):
         return None
+    if not cut and "|" not in t:
+        return _strip_junk(t) or None  # "NONE. FINAL POLISH AND PASSIVATION BY ALDERCREST" stays whole
     return _tail_segment(t, FINISH_RE) or None
+
+
+def _plain_value(text: str) -> Optional[str]:
+    """Any title block value from a text layer: words, not a label, a date, or a lone number."""
+    t = _strip_junk(clean(text.replace("|", " ")))
+    if len(re.findall(r"[A-Za-z]", t)) < 3 or _is_drawing_label(t) or _looks_like_date(t.split()[0]):
+        return None
+    if len(t.split()) == 1 and _pn_candidates(t, False):
+        return None
+    return t
 
 
 def _title_value(text: str) -> Optional[str]:
@@ -680,6 +749,133 @@ def _title_value(text: str) -> Optional[str]:
     return t or None
 
 
+TITLE_BLOCK_LABELS = ["TITLE", "MATERIAL", "FINISH", "DWG NO", "DWG NO.", "SIZE", "DRAWN"]
+
+
+def _title_block_labels(doc: Doc) -> List[Tuple[str, Line]]:
+    """The title block labels OCR could read, as (label, line), on the page that has the most."""
+    found = []
+    for ln in doc.lines:
+        if not ln.box:
+            continue
+        for lb in TITLE_BLOCK_LABELS:
+            if _label_score(ln.text, lb, tail_ok=False) >= 0.9:
+                found.append((lb.rstrip("."), ln))
+                break
+    if not found:
+        return []
+    pages: Dict[int, int] = {}
+    for _, ln in found:
+        pages[ln.page] = pages.get(ln.page, 0) + 1
+    page = max(pages, key=lambda p: pages[p])
+    return [(lb, ln) for lb, ln in found if ln.page == page]
+
+
+def _title_block_region(doc: Doc) -> Optional[Tuple[int, float, float]]:
+    """(page, left, top) of the title block: the box around its labels, with some slack. A number
+    inside it that stands alone is the drawing number even when its DWG NO. label is unreadable."""
+    labels = _title_block_labels(doc)
+    if len(labels) < 2:
+        return None
+    h = sorted(ln.h for _, ln in labels)[len(labels) // 2] or 10.0
+    left = min(ln.box[0] for _, ln in labels) - 3 * h
+    top = min(ln.box[1] for _, ln in labels) - 3 * h
+    return labels[0][1].page, left, top
+
+
+def _title_block_column(doc: Doc) -> Optional[Dict[str, Any]]:
+    """The left edge of the TITLE / MATERIAL / FINISH cells, from whichever of those labels were read."""
+    labels = [(lb, ln) for lb, ln in _title_block_labels(doc) if lb in ("TITLE", "MATERIAL", "FINISH")]
+    if not labels:
+        return None
+    xs = sorted(ln.box[0] for _, ln in labels)
+    h = sorted(ln.h for _, ln in labels)[len(labels) // 2] or 10.0
+    return {"page": labels[0][1].page, "x": xs[len(xs) // 2], "h": max(h, 8.0),
+            "top": min(ln.box[1] for _, ln in labels), "labels": labels}
+
+
+def _column_value(doc: Doc, column: Dict[str, Any], field: str, accept: Callable[[str], Optional[str]],
+                  used: set) -> Optional[Tuple[str, Line]]:
+    """A title block value whose label OCR lost: the first line in the TITLE / MATERIAL / FINISH
+    column that reads like the field and does not sit under a label for some other field."""
+    x, h = column["x"], column["h"]
+    col = sorted((ln for ln in doc.lines if ln.box and ln.page == column["page"] and abs(ln.box[0] - x) <= 2.5 * h
+                  and ln.box[1] >= column["top"] - h), key=lambda ln: ln.box[1])
+    for k, ln in enumerate(col):
+        val = accept(ln.text)
+        if not val or val in used or _is_drawing_label(ln.text):
+            continue
+        above = next((p for p in reversed(col[:k]) if p.box[3] <= ln.box[1] + 0.3 * h), None)
+        if above is not None and _is_drawing_label(above.text) and \
+                _label_score(above.text, field.upper(), tail_ok=False) < 0.9:
+            continue  # the value of the label above it, which is not this field
+        return val, ln
+    return None
+
+
+def _more_value(field: str) -> Callable[[str], bool]:
+    """Whether a line can be the second line of a title block value that wrapped in its cell:
+    'BLACK ANODIZE PER MIL-A-8625 TYPE II CLASS 2. MASK' / 'PADS, BORES, AND DATUM A'."""
+    def ok(text: str) -> bool:
+        t = clean(text.replace("|", " ")).strip()
+        letters = re.findall(r"[A-Za-z]", t)
+        # a short spec word counts ('H1025', 'THK'); OCR crumbs and lowercase noise do not
+        if not letters or len(re.findall(r"[A-Za-z0-9]", t)) < 3 or sum(c.islower() for c in letters) > len(letters) * 0.3:
+            return False
+        if _is_drawing_label(t) or _looks_like_date(t.split()[0]) or re.fullmatch(r"[A-Z0-9]{1,2}", t):
+            return False
+        if len(t.split()) <= 2 and _pn_candidates(t, True):
+            return False  # the drawing number, not a wrapped value
+        if field == "material" and (FINISH_RE.search(t) or re.match(r"NONE\b", t)):
+            return False
+        if field == "finish" and MATERIAL_STRONG.search(t) and not FINISH_RE.search(t):
+            return False
+        if field == "title" and (MATERIAL_STRONG.search(t) or FINISH_RE.search(t)):
+            return False
+        return True
+    return ok
+
+
+def _continue_value(doc: Doc, value: str, first: Optional[Line], row_index: Optional[int], field: str) -> str:
+    """Add the lines a title block value wrapped onto. With boxes: lines right under the value,
+    starting at its left edge, closer than a line apart. From reading order: the next rows,
+    up to the next label."""
+    more = _more_value(field)
+    extra: List[str] = []
+    src = first.text if first is not None else doc.rows[row_index] if row_index is not None else ""
+    if len(clean(src.replace("|", " "))) > len(value) + 12:
+        return value  # the value shares its line with another column's text; what is below is not its
+    if first is not None and first.box:
+        cur = first
+        for _ in range(3):
+            nxt = None
+            for ln in doc.lines:
+                if ln is cur or not ln.box or ln.page != cur.page:
+                    continue
+                # the text height, not the box: a speck read as a word makes a box taller
+                h = max(min(cur.h, ln.h), 6.0)
+                below = (ln.box[1] + ln.box[3]) / 2 > (cur.box[1] + cur.box[3]) / 2 + 0.5 * h
+                gap = ln.box[1] - cur.box[3]
+                if below and gap <= 1.0 * h and abs(ln.box[0] - first.box[0]) <= 1.5 * h \
+                        and (nxt is None or ln.box[1] < nxt.box[1]):
+                    nxt = ln
+            if nxt is None or (nxt.conf is not None and nxt.conf < 50) or not more(nxt.text):
+                break
+            extra.append(_strip_junk(clean(nxt.text.replace("|", " "))))
+            cur = nxt
+    elif row_index is not None:
+        for j in range(row_index + 1, min(len(doc.rows), row_index + 3)):
+            if not more(doc.rows[j]):
+                break
+            extra.append(_strip_junk(clean(doc.rows[j].replace("|", " "))))
+    extra = [ocr_fix_spec(e) if field in ("material", "finish") else e for e in extra if e]
+    if not extra:
+        return value
+    if clean(src).rstrip().endswith(":") and not value.endswith(":"):
+        value += ":"  # "MARKERS:" lost its colon when the single-line value was trimmed
+    return " ".join([value] + extra)
+
+
 def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
     """Title block and legend values from a drawing's text."""
     out: Dict[str, Any] = {"part_number": None, "rev": None, "title": None, "material": None, "finish": None,
@@ -692,49 +888,105 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
             out["conf"][field] = ln.conf if ln is not None and ln.conf is not None else doc.conf
 
     stop = _is_drawing_label
-    keep("title", _labelled(doc, ["TITLE"], _title_value, ahead=2, stop=stop))
-    keep("material", _labelled(doc, ["MATERIAL", "MATL", "MATERIAL SPEC"], _material_value, ahead=3, stop=stop))
-    keep("finish", _labelled(doc, ["FINISH", "FINISH SPEC"], _finish_value, ahead=3, stop=stop))
+    cut = doc.ocr
+    for field, labels, accept, ahead in (("title", ["TITLE"], _title_value, 2),
+                                         ("material", ["MATERIAL", "MATL", "MATERIAL SPEC"],
+                                          lambda t: _material_value(t, cut), 3),
+                                         ("finish", ["FINISH", "FINISH SPEC"], lambda t: _finish_value(t, cut), 3)):
+        where: Dict[str, Any] = {}
+        got = _labelled(doc, labels, accept, ahead=ahead, stop=stop, where=where)
+        if not got and not doc.ocr and field != "title":
+            # A typed title block says what it says: 'SEE PARTS LIST', '1045 INDUCTION HARDENED ...
+            # BAR', 'AS MACHINED' are the values even though they read like no known material or finish.
+            # OCR text keeps the stricter test, where the line under a label can be noise.
+            where = {}
+            got = _labelled(doc, labels, _plain_value, ahead=1, stop=stop, tail_ok=False, where=where)
+        if got and not where.get("same_line") and got[0] != "NONE":
+            # a long callout wraps inside its cell; the second line belongs to the value
+            got = (_continue_value(doc, got[0], where.get("line"), where.get("row"), field), got[1])
+        keep(field, got)
 
-    # Part number: every candidate scores; the one under the DWG NO. label, alone on its line,
-    # or named in the email wins. A part number inside a note (an unplated variant) loses.
+    # A label the scan lost ('MATERIAL' unreadable) still leaves its value in the title block column.
+    column = _title_block_column(doc) if doc.boxed else None
+    if column:
+        used = {out.get("title"), out.get("finish"), out.get("material")}
+        for field, accept in (("material", _material_value), ("finish", _finish_value)):
+            if not out[field]:
+                got = _column_value(doc, column, field, accept, used)
+                if got:
+                    got = (_continue_value(doc, got[0], got[1], None, field), got[1])
+                    keep(field, got)
+                    used.add(got[0])
+
+    # Part number: only from a place where a part number is printed. That is the DWG NO. cell (the
+    # value under or after the label), a P/N label, the size / number / rev row a title block reads
+    # as, a short line inside the title block, or a number the email, RFQ form, or model names. A
+    # number anywhere else on the sheet (a date, a note, a view callout) never becomes a part line.
     scores: Dict[str, float] = {}
     spelled: Dict[str, str] = {}
     confs: Dict[str, Optional[float]] = {}
+    ctx: Dict[str, set] = {}
     hint_keys = {fold(p): p for p in hint_pns}
+    block = _title_block_region(doc) if doc.boxed else None
 
-    def cand(text: str, bonus: float, conf: Optional[float]) -> None:
-        for pn in _pn_candidates(text, doc.ocr):
-            key = fold(pn)
-            scores[key] = scores.get(key, 0.0) + bonus
-            spelled.setdefault(key, pn)
-            if conf is not None:
-                confs[key] = conf
+    def cand(pn: str, bonus: float, conf: Optional[float], where: Optional[str] = None) -> None:
+        key = fold(pn)
+        scores[key] = scores.get(key, 0.0) + bonus
+        spelled.setdefault(key, pn)
+        ctx.setdefault(key, set())
+        if where:
+            ctx[key].add(where)
+        if conf is not None and key not in confs:
+            confs[key] = conf
 
+    tb_row = re.compile(r"^\W*(?:[A-E]\s*\|?\s*)?(\S+)\s*\|?\s*(?:[A-Z0-9]{1,2})?\W*$")
     for ln in (doc.lines or []):
         n_words = len(ln.text.split())
-        cand(ln.text, 1.0 + (1.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), ln.conf)
-    if not doc.lines:
-        for row in doc.rows:
-            n_words = len(row.split())
-            cand(row, 1.0 + (1.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), None)
-    got = _labelled(doc, ["DWG NO", "DWG NO.", "DRAWING NO", "DWG", "PART NO", "P/N"],
+        for pn in _pn_candidates(ln.text, doc.ocr):
+            where = None
+            if n_words <= 3 and block and ln.box and ln.page == block[0] and ln.box[0] >= block[1] \
+                    and ln.box[1] >= block[2]:
+                where = "title block"
+            cand(pn, 1.0 + (0.5 if n_words <= 3 else 0.0) - (1.5 if n_words > 8 else 0.0), ln.conf, where)
+    for row in doc.rows:
+        n_words = len(row.replace("|", " ").split())
+        m = tb_row.match(row.replace("|", " | "))
+        for pn in _pn_candidates(row, doc.ocr):
+            where = "title block row" if m and n_words <= 3 and _pn_candidates(m.group(1), doc.ocr) else None
+            cand(pn, (0.0 if doc.lines else 1.0) + (0.5 if n_words <= 3 else 0.0), None, where)
+    got = _labelled(doc, ["DWG NO", "DWG NO.", "DRAWING NO", "DWG", "PART NO", "PART NUMBER", "P/N"],
                     lambda t: (_pn_candidates(t, doc.ocr) or [None])[0], ahead=3, tail_ok=True)
     if got:
-        key = fold(got[0])
-        scores[key] = scores.get(key, 0.0) + 4.0
-        spelled.setdefault(key, got[0])
-        if got[1] is not None and got[1].conf is not None:
-            confs[key] = got[1].conf
+        cand(got[0], 4.0, got[1].conf if got[1] is not None else None, "DWG NO")
+    # the label and its number inside a longer line: "TITLE BLOCK: ... DWG NO: TIB-0725 REV B."
+    for row in doc.rows:
+        for m in re.finditer(r"\b(?:[DO0]WG|DRAWING)\s*(?:N[O0]|NUMBER|#)\.?\s*[:#]?\s*|\b(?:PART\s*(?:NO|NUMBER)|P/N)\.?\s*[:#]\s*",
+                             row, re.IGNORECASE):
+            after = row[m.end():].split()
+            pns = _pn_candidates(after[0].strip(".,;|"), doc.ocr) if after else []
+            if pns:
+                cand(pns[0], 4.0, None, "DWG NO")
     for key in list(scores):
-        for hk in hint_keys:
-            if key == hk or key.startswith(hk) or hk.startswith(key):
+        for hk, spelled_hint in hint_keys.items():
+            # the same number, or one is a dash number of the other (drawing BWM-3140, form BWM-3140-08)
+            if key == hk or _variant_of(spelled[key], spelled_hint):
                 scores[key] += 2.5
-    if scores:
-        best = max(scores, key=lambda k: (scores[k], -len(k)))
-        if scores[best] >= 2.0:
-            out["part_number"] = spelled[best]
-            out["conf"]["part_number"] = confs.get(best, doc.conf)
+                ctx[key].add("named")
+    if block and not any(ctx.get(k) for k in scores):
+        # OCR broke the number's dash ('HPV. 2045'); a short title block line that folds to a number
+        # another source names is that number
+        for ln in doc.lines:
+            if ln.box and len(ln.text.split()) <= 3 and ln.page == block[0] and ln.box[0] >= block[1] \
+                    and ln.box[1] >= block[2]:
+                for hk, spelled_hint in hint_keys.items():
+                    if len(hk) >= 5 and fold(ln.text) == hk:
+                        cand(spelled_hint, 3.0, ln.conf, "named")
+    placed = [k for k in scores if ctx.get(k)]
+    if placed:
+        best = max(placed, key=lambda k: (scores[k], -len(k)))
+        out["part_number"] = spelled[best]
+        out["conf"]["part_number"] = confs.get(best, doc.conf)
+        out["pn_context"] = sorted(ctx[best])
 
     # Rev: under the REV label next to the drawing number, or right after the part number on a
     # merged title block row ("A CI-10442 C"), else the newest row of the revision table.
@@ -749,6 +1001,9 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                     r = _clean_rev(toks[k + 1])
                     if r and len(toks) - k <= 3:
                         rev = (r, None)
+                    elif k + 2 < len(toks) and re.fullmatch(r"REV\.?", toks[k + 1].upper()):
+                        r = _clean_rev(toks[k + 2])  # "DWG NO: TIB-0725 REV B."
+                        rev = (r, None) if r else rev
         if doc.boxed and not rev:
             for ln in doc.lines:
                 if _label_score(ln.text, "REV", tail_ok=True) >= 0.7 and len(ln.text) <= 12:
@@ -765,6 +1020,22 @@ def parse_drawing(doc: Doc, hint_pns: Sequence[str] = ()) -> Dict[str, Any]:
                     got = _after(doc.rows, i, _clean_rev, ahead=1)
                     if got:
                         rev = (got[0], None)
+        if doc.boxed and not rev:
+            # the REV cell ends the size / drawing number / rev row: the first letter to the right of
+            # the number on the same baseline, even when both labels above it are unreadable
+            pn_line = next((ln for ln in doc.lines if ln.box and len(ln.text.split()) <= 3 and any(
+                fold(c) == key for c in _pn_candidates(ln.text, doc.ocr))), None)
+            if pn_line is not None:
+                right = sorted((ln for ln in doc.lines if ln.box and ln.page == pn_line.page
+                                and ln.box[0] > pn_line.box[2]
+                                and min(ln.box[3], pn_line.box[3]) - max(ln.box[1], pn_line.box[1])
+                                >= 0.5 * min(ln.h, pn_line.h) and (ln.conf is None or ln.conf >= 50)),
+                               key=lambda ln: ln.box[0])
+                for ln in right:
+                    t = ln.text.strip(" |_-.:;'\"")
+                    if re.fullmatch(r"[A-Z]{1,2}|\d{1,2}", t) and _clean_rev(t):
+                        rev = (_clean_rev(t), ln)
+                        break
     # revision table rows: "B ADDED KEYWAY EDGE BREAK NOTE 2025-08-04 TW"
     revs = []
     for row in doc.rows:
@@ -1057,13 +1328,22 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
         def reach(a: Tuple[float, str, Line]) -> float:
             return 0.5 * unit + skew_mag * abs(cx - (a[2].box[0] + a[2].box[2]) / 2)
 
-        k = max((i for i, a in enumerate(anchors) if a[0] - reach(a) <= y), default=None)
+        # A piece that shares height with a part number cell is in that row (a cell centred in a
+        # tall row starts above its part number); anything else continues the row above it.
+        over = [(min(y + ln.h, a[0] + a[2].h) - max(y, a[0]), i) for i, a in enumerate(anchors)]
+        best = max(over)
+        if best[0] > 0.25 * min(ln.h or unit, anchors[best[1]][2].h or unit):
+            k = best[1]
+        else:
+            k = max((i for i, a in enumerate(anchors) if a[0] - reach(a) <= y), default=None)
         if k is None:
             continue
         row = rows[k]
         cells = row["cells"]
         if col is not None:
             if col == "qty":
+                if not re.search(r"\d", text):
+                    continue  # a speck in the quantity cell ("E" at 0% confidence) is not a break
                 row["qty"].append(text)
                 row["qty_conf"] = min(row["qty_conf"] or 100.0, ln.conf if ln.conf is not None else 100.0)
             elif col != "pn" or not _pn_candidates(text, doc.ocr) or fold(_pn_candidates(text, doc.ocr)[0]) != fold(row["pn"]):
@@ -1097,7 +1377,8 @@ def _form_rows_boxed(doc: Doc) -> Optional[List[Dict[str, Any]]]:
                         and fold(_pn_candidates(tok, doc.ocr)[0]) == fold(r["pn"])), None)
             if idx is not None and idx + 1 < len(after):
                 rev = _clean_rev(after[idx + 1])
-        qty, complete = parse_quantities(" / ".join(x.strip(" /") for x in r["qty"])) if r["qty"] else (None, True)
+        qty, complete = parse_quantities(" / ".join(x.strip(" /*'\"`~_.:;") for x in r["qty"])) if r["qty"] \
+            else (None, True)
         if r["qty"] and r["qty"][0].rstrip(" *").endswith("/") and len(r["qty"]) == 1:
             complete = False
         desc = _strip_junk(c.get("desc", "")) or None
@@ -1209,6 +1490,93 @@ def _cell_value(rows: List[str], labels: Sequence[str], accept: Callable[[str], 
     return None
 
 
+REQ_HEADING = re.compile(r"REQUIREMENTS|QUALITY\s+CLAUSES|SPECIAL\s+INSTRUCTIONS")
+REQ_END = re.compile(r"^\W*TERMS\b|SUPPLIER\s+RESP|QUOTED\s+BY|^\W*PAGE\s+\d|^\W*SIGNATURE")
+ITEM_NO = re.compile(r"^\W{0,2}\d{1,2}\s*(?:[.,)]+\W*|\|)\s*")
+
+
+def _req_text(text: str) -> str:
+    """One requirement without its item number and the OCR crumbs around it."""
+    t = ITEM_NO.sub("", clean(text).strip())
+    t = clean(t.replace("|", " "))
+    t = re.sub(r"\bC\s?OF\s?C\b", "C OF C", t)  # OCR drops the space: "C OFC"
+    words = t.split()
+    while words and (re.fullmatch(r"[^A-Za-z0-9]+", words[-1]) or re.fullmatch(r"[a-z]{1,2}", words[-1])):
+        words.pop()  # "LUBRICANTS . a", "ON FIRST LOT \u00b0"
+    return _strip_junk(" ".join(words)).strip(" -_.")
+
+
+def _is_req(text: str) -> bool:
+    words = re.findall(r"[A-Za-z]{3,}", text)
+    return len(words) >= 2 and sum(w.isupper() for w in words) >= len(words) / 2 or \
+        (len(words) >= 3 and not re.search(r"[a-z]{2,}[A-Z]", text))
+
+
+def _form_requirements(doc: Doc) -> List[str]:
+    """The numbered quote requirements under their heading, until the terms or the response box.
+    With OCR boxes, one item is one line of text in the item column; a line continues the item
+    above only when that one ran to the right edge of the block without a period (it wrapped).
+    A tall thin 'line' is the column of item numbers read as one word, and is dropped."""
+    items: List[str] = []
+    lines = [ln for ln in doc.lines if ln.box]
+    head = next((ln for ln in lines if REQ_HEADING.search(ln.text.upper()) and len(ln.text) < 60), None)
+    if head is not None:
+        end_y = min((ln.box[1] for ln in lines if ln.page == head.page and ln.box[1] > head.box[3]
+                     and REQ_END.search(ln.text.upper())), default=float("inf"))
+        block = [ln for ln in lines if ln.page == head.page and head.box[3] - 0.3 * head.h < ln.box[1] < end_y - 2
+                 and ln is not head]
+        heights = sorted(ln.h for ln in block if ln.h)
+        unit = heights[len(heights) // 2] if heights else 20.0
+        block = [ln for ln in block if ln.h <= 2.2 * unit and (ln.conf is None or ln.conf >= 40 or len(ln.text) > 12)]
+        rows: List[List[Line]] = []
+        for ln in sorted(block, key=lambda l: (l.box[1], l.box[0])):
+            if rows and abs(ln.box[1] - rows[-1][0].box[1]) < 0.5 * unit:
+                rows[-1].append(ln)
+            else:
+                rows.append([ln])
+        # A wrapped item ran into the right edge of the printed area; measure that edge on the whole
+        # page (the header and table reach it), not on the requirement lines, which may all be short.
+        left = min((ln.box[0] for ln in block), default=0.0)
+        page_right = max((ln.box[2] for ln in lines if ln.page == head.page and ln.h <= 3 * unit), default=0.0)
+        right = left + 0.85 * (page_right - left)
+        prev_right, prev_text = 0.0, ""
+        for row in rows:
+            row.sort(key=lambda l: l.box[0])
+            raw = " | ".join(l.text for l in row)
+            text = _req_text(raw)
+            if not text or not _is_req(text):
+                continue
+            numbered = bool(ITEM_NO.match(clean(raw)))
+            joiner = re.search(r"(?:,|\bAND|\bOR|\bPER|\bWITH|\bTO|-|&)$", prev_text.upper())
+            wrapped = items and not numbered and not prev_text.endswith(".") and (prev_right >= right > 0 or joiner)
+            if wrapped or (items and text[:1].islower()):
+                items[-1] += " " + text
+            elif not any(overlap(text, x) > 0.9 for x in items):
+                items.append(text)
+            prev_right, prev_text = row[-1].box[2], clean(row[-1].text)
+        return items
+    rows_ = doc.rows
+    start = next((i for i, r in enumerate(rows_) if REQ_HEADING.search(r.upper())), None)
+    if start is None:
+        return items
+    prev = ""
+    for r in rows_[start + 1:]:
+        if REQ_END.search(r.upper()):
+            break
+        text = _req_text(r)
+        if not text or not _is_req(text):
+            continue
+        # in reading order a wrapped item shows as a row that starts in lowercase, or one after
+        # a row that stops on a joining word
+        if items and not ITEM_NO.match(r) and (text[:1].islower() or
+                                               re.search(r"(?:,|\bAND|\bOR|\bPER|\bWITH|-|&)$", prev.upper())):
+            items[-1] += " " + text
+        elif not any(overlap(text, x) > 0.9 for x in items):
+            items.append(text)
+        prev = text
+    return items
+
+
 def parse_form(doc: Doc) -> Dict[str, Any]:
     out: Dict[str, Any] = {"rfq_number": None, "date": None, "respond_by": None, "respond_text": None,
                            "company": None, "rows": [], "requirements": [], "terms": None, "delivery": None}
@@ -1259,23 +1627,9 @@ def parse_form(doc: Doc) -> Dict[str, Any]:
             out["company"] = re.sub(r"\s*\.?\s*REQUEST FOR QUOTATION.*$", "", t).title()
             break
     out["rows"] = (_form_rows_boxed(doc) if doc.boxed else None) or _form_rows_text(doc)
-    # quote requirements: numbered lines after the heading, until the terms or response box
-    reqs: List[str] = []
-    rows = doc.rows
-    start = next((i for i, r in enumerate(rows) if re.search(r"REQUIREMENTS|QUALITY\s+CLAUSES", r.upper())), None)
-    if start is not None:
-        for r in rows[start + 1:]:
-            up = r.upper()
-            if re.search(r"^TERMS\b|SUPPLIER\s+RESP|QUOTED\s+BY|^PAGE\s+\d", up):
-                break
-            text = re.sub(r"^\s*\d{1,2}\s*[.)]?\s+", "", r.replace("|", " ")).strip(" -_.")
-            if len(_tokens(text)) < 2 or not re.search(r"[A-Z]{3}", text):
-                continue
-            if reqs and not re.match(r"^\s*\d", r) and len(reqs[-1]) > 70 and not reqs[-1].endswith("."):
-                reqs[-1] += " " + text  # a long item wrapped onto the next line
-            elif not any(overlap(text, x) > 0.9 for x in reqs):
-                reqs.append(text)
+    reqs = _form_requirements(doc)
     out["requirements"] = reqs
+    rows = doc.rows
     for r in rows:
         m = re.match(r"^\s*TERMS\s*[:.]\s*(.+)$", r, re.IGNORECASE)
         if m:
@@ -1393,6 +1747,58 @@ def _phrase_for(pattern: "re.Pattern[str]", text: str, trim_nouns: bool = False)
     return None
 
 
+REQ_SPLIT = re.compile(r";\s+|,\s+(?=(?:and|so|then|but|plus)\s)|,?\s+(?:and\s+)?then\s+", re.IGNORECASE)
+REQ_POINTER = re.compile(r"\b(?:SEE|ARE (?:ALL )?(?:LISTED )?ON|IS ON|LISTED ON)\s+THE\s+(?:ATTACHED\s+)?(?:RFQ\s+)?FORM\b")
+RELEASES = re.compile(r"\bRELEASED\s+(MONTHLY|QUARTERLY|WEEKLY|ANNUALLY)\b|\b(MONTHLY|QUARTERLY|WEEKLY)\s+RELEASES\b",
+                      re.IGNORECASE)
+
+
+def email_requirements(content: List[str], sents: List[str]) -> List[str]:
+    """What the quote has to include or allow for, one item per demand, in the sender's words.
+    A labelled line ('Inspection: standard, FAI on the first lot') stays whole. Other sentences are
+    cut into clauses at ', and' / ', then' / ';' and only the clauses that make a demand stay:
+    'Passivate per ASTM A967, then precision clean for high vacuum and double bag' gives the
+    cleaning and packaging demand (the finish is its own column). An 'If ...' clause stays with
+    the clause it conditions. A blanket request keeps its term and release schedule."""
+    reqs: List[str] = []
+    labelled = set()
+    for ln in content:
+        m = re.match(r"^\s*([A-Za-z][A-Za-z /&-]{2,30}):\s*(.+)$", ln)
+        if m and not re.match(r"(?:material|finish|quantit|qty|part|p/n|due|quote due|lead time)", m.group(1),
+                              re.IGNORECASE) and REQUIREMENT_RE.search(ln) and not URL_RE.search(ln):
+            reqs.append(clean(ln).rstrip(" ."))
+            labelled.add(clean(ln))
+    body = " ".join(sents)
+    release = RELEASES.search(body)
+    for s in sents:
+        if any(s.strip() in lab or lab in s for lab in labelled) or REQ_POINTER.search(s.upper()):
+            continue
+        if re.match(r"^\s*(?:material|finish|quantit\w*|qty)\s*[:=]", s, re.IGNORECASE):
+            continue
+        clauses = [c.strip(" ,") for c in REQ_SPLIT.split(s) if c and c.strip(" ,")]
+        merged: List[str] = []
+        for c in clauses:
+            if merged and re.match(r"(?:if|when|unless|although|once)\b", merged[-1], re.IGNORECASE) \
+                    and "," not in merged[-1][-1:]:
+                merged[-1] = merged[-1] + ", " + c
+            else:
+                merged.append(c)
+        for c in merged:
+            if not REQUIREMENT_RE.search(c):
+                continue
+            c = re.sub(r"^(?:and|so|then|but|plus)\s+", "", c, flags=re.IGNORECASE).strip(" .")
+            if re.search(r"\bBLANKET\b", c, re.IGNORECASE):
+                m = re.search(r"(?:\d+[- ](?:month|year|yr)\s+)?blanket\s+(?:pricing|order|po|agreement|quote)", c,
+                              re.IGNORECASE)
+                if m:
+                    c = m.group(0)
+                    if release:
+                        c += ", released " + (release.group(1) or release.group(2)).lower()
+            if c and not any(overlap(c, x) > 0.9 for x in reqs):
+                reqs.append(c)
+    return reqs
+
+
 def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     subject = clean(email.get("subject"))
     content, signature = split_body(email.get("body") or "", email.get("from_name") or "")
@@ -1433,9 +1839,17 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     for src, text in (("subject", subject), ("email body", "\n".join(content))):
         for m in PN_RE.finditer(text):
             pn = m.group(1).upper()
-            if (fold(pn) in excluded or pn.split("-")[0] in SPEC_PREFIXES or re.match(r"RFQ-", pn)
+            if (fold(pn) in excluded or pn.split("-")[0] in SPEC_PREFIXES or re.search(r"(?:^|-)RF[QP](?:-|$)", pn)
                     or any(fold(pn) == fold(e) or fold(pn).endswith(fold(e)) for e in excluded)):
                 continue
+            if re.search(r"\bPER\s+$", text[max(0, m.start() - 5):m.start()], re.IGNORECASE):
+                continue  # "label per BWM-QS-0412": a process spec, not a part to quote
+            # "the same program as the TO-5520 lens cell", "our quality clauses CV-QR-004": a number
+            # named for reference, which only joins a line some file already gives
+            lead = re.split(r"[.!?;:\n]", text[max(0, m.start() - 40):m.start()])[-1]
+            ref = bool(re.search(r"\b(?:SAME|SIMILAR|LIKE|PREVIOUS|PRIOR|REPLACES|REPLACED|SUPERSEDES?|OLD|LAST|"
+                                 r"CLAUSES?|SPEC(?:IFICATION)?S?|PROCEDURES?|STANDARDS?|INSTRUCTIONS?|QUALITY)\b",
+                                 lead, re.IGNORECASE))
             after = text[m.end():m.end() + 16]
             r = re.match(r"\s*,?\s*REV(?:ISION)?\.?\s*([A-Z0-9]{1,2})\b", after, re.IGNORECASE)
             rev = r.group(1).upper() if r else None
@@ -1448,13 +1862,14 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             if hit:
                 hit["rev"] = hit["rev"] or rev
                 continue
-            pns.append({"pn": pn, "rev": rev, "src": src, "pos": m.start()})
+            pns.append({"pn": pn, "rev": rev, "src": src, "pos": m.start(), "ref": ref})
     out["part_numbers"] = pns
 
     # per-part lines in the body ("BWM-3105 Rev A, pivot pin, 17-4 PH stainless, condition H1025, passivated")
     per_part: Dict[str, Dict[str, Optional[str]]] = {}
+    part_rows = set()
     for ln in content:
-        m = re.match(r"^\s*(?:P/N\s*)?([A-Z][A-Z0-9]{0,4}-\d{2,6}(?:-[A-Z0-9]{1,4})?)\s*(?:,?\s*REV\.?\s*([A-Z0-9]{1,2}))?\s*[,:-]\s*(.+)$",
+        m = re.match(r"^\s*(?:P/N\s*)?(" + PN_BODY + r")\s*(?:,?\s*REV\.?\s*([A-Z0-9]{1,2}))?\s*[,:-]\s*(.+)$",
                      ln, re.IGNORECASE)
         if not m:
             continue
@@ -1472,7 +1887,11 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
                 info["description"] = f
         info["material"] = ", ".join(mat) or None
         per_part[fold(m.group(1))] = info
+        part_rows.add(ln)
     out["per_part"] = per_part
+    # material and finish said for the whole email come from the other sentences: a per-part row's
+    # "passivated" belongs to that part only
+    general = sentences([ln for ln in content if ln not in part_rows])
 
     # labelled lines: "Material: ...", "Finish: ...", "Quantities: ..."
     labels: Dict[str, str] = {}
@@ -1487,7 +1906,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     if "mater" in labels:
         material = labels["mater"]
     else:
-        for s in sents:
+        for s in general:
             if MATERIAL_STRONG.search(s):
                 material = _phrase_for(MATERIAL_STRONG, s, trim_nouns=True)
                 if material:
@@ -1495,7 +1914,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
     out["material"] = material
     finish = labels.get("finis")
     if not finish:
-        for s in sents:
+        for s in general:
             if FINISH_RE.search(s) and not re.search(r"\bWITH AND WITHOUT\b|\bIF THE\b", s.upper()):
                 finish = _phrase_for(FINISH_RE, s)
                 if finish:
@@ -1570,7 +1989,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
         m = re.search(r"(?:\b(?:the attached|attached|the|a|an|our|your|this|of|on|for)\s+)((?:[a-z][a-z0-9-]*\s*){1,5})$",
                       before)
         if m:
-            d = m.group(1).strip()
+            d = re.sub(r"^(?:a|an|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
             if not re.search(r"\b(?:drawing|print|rfq|file|scan|photo|model|step|quote|pdf|package|revision|rev)\b", d):
                 descs.setdefault(fold(p["pn"]), d)
     sub_desc = None
@@ -1616,16 +2035,7 @@ def parse_email(email: Dict[str, Any], today: dt.date) -> Dict[str, Any]:
             break
     out["delivery"] = delivery
 
-    # requirements
-    reqs: List[str] = []
-    for s in sents:
-        pointer = re.search(r"\b(?:SEE|ARE (?:ALL )?(?:LISTED )?ON|IS ON|LISTED ON)\s+THE\s+(?:ATTACHED\s+)?(?:RFQ\s+)?FORM\b",
-                            s.upper())
-        if REQUIREMENT_RE.search(s) and not pointer:
-            if re.match(r"^\s*(?:material|finish|quantit)", s, re.IGNORECASE):
-                continue
-            reqs.append(s.strip())
-    out["requirements"] = reqs
+    out["requirements"] = email_requirements(content, sents)
 
     # export control, drawing links, drawings promised later
     full = subject + "\n" + "\n".join(content)
@@ -1746,7 +2156,9 @@ def lookup_customer(from_email: str, shop: Dict[str, Any]) -> Optional[Dict[str,
 
 def is_rfq(email: Dict[str, Any], decision: Optional[Dict[str, Any]] = None) -> bool:
     """With a Jev decision, Jev's call. Without one: the sender asks for a price on parts, and the
-    email is not an order question or a sales pitch."""
+    email is not an order (placing, changing, releasing, or chasing a PO) or a sales pitch.
+    A question about what 'something like this' would cost, with no part named, is a capability
+    question for a person to answer, not an RFQ (E17 in the beta inbox)."""
     if decision and "is_rfq" in decision:
         return bool(decision["is_rfq"])
     subject = clean(email.get("subject")).upper()
@@ -1754,20 +2166,43 @@ def is_rfq(email: Dict[str, Any], decision: Optional[Dict[str, Any]] = None) -> 
     body = " ".join(content).upper()
     text = subject + " " + body
     pitch = re.search(r"\d+\s*% OFF|\bUNSUBSCRIBE\b|THIS MONTH ONLY|FREE SHIPPING|\bWEBINAR\b|\bNEWSLETTER\b|"
-                      r"\bOUR (?:ONLINE )?STORE\b|\bRESUME\b|\bJOB OPENING\b|\bWE ARE HIRING\b|SET UP A (?:QUICK )?CALL",
-                      text)
+                      r"\bOUR (?:ONLINE )?STORE\b|\bRESUME\b|\bJOB OPENING\b|\bWE ARE HIRING\b|SET UP A (?:QUICK )?CALL|"
+                      r"\bSTOCK (?:AND DROP )?LIST\b|\bDROP LIST\b|OPEN AN ACCOUNT|CREDIT APP", text)
     order = re.search(r"\b(?:PO|P\.O\.|PURCHASE ORDER)\s*#?\s*\d+[^.?!]*\b(?:STATUS|TRACKING|SHIP|PROMISE|ON TRACK)|"
                       r"\bSTATUS\?|\bTRACKING\b", text)
+    # an order being placed, changed, or released: it may cite a quote, but it does not ask for one
+    placed = re.search(r"^(?:RE:\s*|FW:\s*)?(?:PO|P\.O\.|PURCHASE ORDER|CHANGE ORDER|BLANKET PO|RELEASE)\b", subject) \
+        or re.search(r"\bATTACHED PO\b|\bPO\s+\S+\s+IS ATTACHED|\bRELEASE\s+\d+\s+AGAINST\b|"
+                     r"\bNOT ASKING FOR A NEW QUOTE\b|\bOF OUR PO\b", body)
     ask = re.search(r"\bRFQ\b|\bRFP\b|REQUEST FOR (?:A )?QUOT|\bQUOTE REQUEST\b|\bQUOTATION\b|"
                     r"\b(?:PLEASE|CAN YOU|COULD YOU|WOULD YOU)\s+(?:\w+\s+){0,2}QUOTE\b|\bQUOTE (?:ON|FOR)\b|"
-                    r"\bREQUESTING A QUOTE\b|\bNEED A QUOTE\b|\bSEND (?:ME |US )?PRICING\b|\bPRICING (?:ON|FOR)\b|"
-                    r"\bBLANKET PRICING\b|\bLOOKING FOR PRICING\b|\bQUOTE\b.*\b(?:PCS|QTY|DRAWING)\b|\bUPDATE (?:OUR |THE )?QUOTE\b",
+                    r"\bREQUESTING A QUOTE\b|\bNEED A (?:QUOTE|PRICE)\b|\bSEND (?:ME |US )?(?:BUDGETARY )?PRICING\b|"
+                    r"\bPRICING (?:ON|FOR)\b|\bPRICE ON\b|\bBUDGETARY (?:QUOTE|PRICING|PRICE)\b|"
+                    r"\bBLANKET PRICING\b|\bLOOKING FOR PRICING\b|\bQUOTE\b.*\b(?:PCS|QTY|DRAWING)\b|\bUPDATE (?:OUR |THE )?QUOTE\b|"
+                    r"\bA QUOTE\b",
                     text)
+    explicit = re.search(r"\bRFQ\b|REQUEST FOR (?:A )?QUOT|\bQUOTE REQUEST\b|\bPLEASE QUOTE\b|\bNEED A QUOTE\b|"
+                         r"\bUPDATE (?:OUR |THE )?QUOTE\b", text)
     if pitch and not re.search(r"\bRFQ\b|REQUEST FOR QUOT", subject):
+        return False
+    if placed and not explicit:
         return False
     if order and not ask:
         return False
     return bool(ask)
+
+
+def _near_key(a: str, b: str) -> bool:
+    """Two folded part numbers one or two characters apart, with the same start."""
+    return bool(a and b) and a[:2] == b[:2] and abs(len(a) - len(b)) <= 1 and \
+        difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def _variant_of(a: str, b: str) -> bool:
+    """One part number is the other plus a dash number: BWM-3140-08 and BWM-3140."""
+    a, b = clean(a).upper(), clean(b).upper()
+    long_, short = (a, b) if len(a) > len(b) else (b, a)
+    return long_.count("-") > short.count("-") and fold(long_.rsplit("-", 1)[0]) == fold(short)
 
 
 def _pick(cands: List[Tuple[str, Any, str, Optional[float]]], order: Sequence[str]) -> Optional[Tuple[str, Any, str, Optional[float]]]:
@@ -1779,10 +2214,22 @@ def _pick(cands: List[Tuple[str, Any, str, Optional[float]]], order: Sequence[st
     return None
 
 
+def _email_date(email: Dict[str, Any]) -> Optional[dt.date]:
+    for key in ("date", "received_date", "received"):
+        m = re.match(r"\s*(20\d\d-\d\d-\d\d)", str(email.get(key) or ""))
+        if m:
+            try:
+                return dt.date.fromisoformat(m.group(1))
+            except ValueError:
+                pass
+    return None
+
+
 def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[str, Any],
             decision: Optional[Dict[str, Any]] = None, *, today: Optional[dt.date] = None) -> Dict[str, Any]:
-    """One RFQ record from an email and the ocr.file_text result of each attachment."""
-    today = today or dt.date.today()
+    """One RFQ record from an email and the ocr.file_text result of each attachment. Relative dates
+    ("next Friday") resolve against `today`, else the day the email arrived when it says, else today."""
+    today = today or _email_date(email) or dt.date.today()
     texts = texts or {}
     em = parse_email(email, today)
     check: List[str] = []
@@ -1798,14 +2245,20 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             ("3D model" if media == "step" else "photo" if media == "jpg" else "screenshot" if media == "png" else "other"),
             "digital")
         docs.append(doc)
-    email_pns = [p["pn"] for p in em["part_numbers"]]
+    email_pns = [p["pn"] for p in em["part_numbers"] if not p.get("ref")]
     for doc in docs:
-        if doc.kind == "drawing":
-            doc.parsed = parse_drawing(doc, email_pns)
-        elif doc.kind == "RFQ form":
+        if doc.kind == "RFQ form":
             doc.parsed = parse_form(doc)
         elif doc.kind == "3D model":
             doc.parsed = parse_step(doc)
+    # A drawing number is trusted when it sits in a part number cell or another source names it,
+    # so the drawings are read last, with every number the email, forms, and models give.
+    named = email_pns + [row["part_number"] for d in docs if d.kind == "RFQ form"
+                         for row in d.parsed.get("rows") or [] if row.get("part_number")]
+    named += [d.parsed["part_number"] for d in docs if d.kind == "3D model" and d.parsed.get("part_number")]
+    for doc in docs:
+        if doc.kind == "drawing":
+            doc.parsed = parse_drawing(doc, named)
     forms = [d for d in docs if d.kind == "RFQ form"]
     drawings = [d for d in docs if d.kind == "drawing" and d.parsed.get("part_number")]
     models = [d for d in docs if d.kind == "3D model" and d.parsed.get("part_number")]
@@ -1856,13 +2309,20 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                          f"{form_resp[2]} says {form_resp[0]}; used the RFQ form")
     elif em["respond_by"]:
         respond = _v(em["respond_by"][0], "email body", text=em["respond_by"][1])
+    for f in forms:
+        if f.parsed.get("respond_unreadable") and not f.parsed.get("respond_by"):
+            check.append(f"The respond-by date on {f.name} could not be read" +
+                         ("; used the email's" if respond["value"] else ""))
 
     requirements: List[Dict[str, Any]] = []
     for f in forms:
         for r in f.parsed.get("requirements") or []:
             requirements.append({"value": r, "source": f.label})
+    # an email line that only repeats what the RFQ form already lists adds nothing
+    form_words = " ".join(x["value"] for x in requirements)
     for r in em["requirements"]:
-        if not any(overlap(r, x["value"]) >= 0.8 for x in requirements):
+        if not any(overlap(r, x["value"]) >= 0.8 for x in requirements) and not (form_words and
+                                                                                  _covered(r, form_words)):
             requirements.append({"value": r, "source": "email body"})
 
     delivery = _v()
@@ -1908,6 +2368,19 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             return exact
         return [ln for ln in lines if ln["_key"].startswith(key) and len(ln["_key"]) > len(key)]
 
+    def near_line(pn: Optional[str]) -> List[Dict[str, Any]]:
+        """The one line whose part number only OCR gave and which differs from pn by a slip
+        ('QA-41172' read for 'QA-41127'): the same part, not a new line."""
+        if not pn:
+            return []
+        key = fold(pn)
+        near = [ln for ln in lines if ln["_key"] and ln["_key"] != key and _near_key(ln["_key"], key)
+                and ln["_c"]["part_number"] and all("(OCR" in c[2] for c in ln["_c"]["part_number"])]
+        if len(near) != 1:
+            return []
+        near[0]["_key"] = key  # from here on the line goes by the typed number
+        return near
+
     def new_line(pn: Optional[str]) -> Dict[str, Any]:
         ln = {"_key": fold(pn) if pn else "", "_c": {f: [] for f in ("part_number", "rev", "description", "material",
                                                                        "finish", "quantities", "annual_usage", "size")},
@@ -1949,16 +2422,19 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                 conf.get("title") if d.ocr else None)
             add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material") if d.ocr else None)
             add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish") if d.ocr else None)
+    unnumbered = [d for d in docs if d.kind == "drawing" and not d.parsed.get("part_number")]
     for d in models:
         p = d.parsed
-        targets = find_line(p["part_number"]) or [new_line(p["part_number"])]
+        targets = find_line(p["part_number"]) or near_line(p["part_number"]) or [new_line(p["part_number"])]
         for ln in targets:
             add(ln, "part_number", "model", p["part_number"], d.label)
             add(ln, "rev", "model", p.get("rev"), d.label)
             add(ln, "description", "model", p.get("title"), d.label)
             add(ln, "size", "model", p.get("size"), d.label)
     for p in em["part_numbers"]:
-        targets = find_line(p["pn"])
+        targets = find_line(p["pn"]) or near_line(p["pn"])
+        if not targets and p.get("ref"):
+            continue
         if not targets:
             if lines and (forms or drawings) and p["src"] == "subject" and len(em["part_numbers"]) > len(lines):
                 continue
@@ -1969,6 +2445,19 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
             add(ln, "rev", "email", p.get("rev"), src)
     if not lines:
         new_line(None)
+    # A drawing whose number OCR could not read still describes a part: when the RFQ has one
+    # drawing like that and one line no other drawing covers, its title block belongs to that line.
+    if len(unnumbered) == 1:
+        free = [ln for ln in lines if not any(k == "drawing" for k, *_ in ln["_c"]["material"] + ln["_c"]["finish"]
+                                              + ln["_c"]["description"])]
+        if len(free) == 1 and len(lines) == 1:
+            d, ln = unnumbered[0], free[0]
+            p, conf = d.parsed, d.parsed.get("conf", {})
+            add(ln, "rev", "drawing", p.get("rev"), d.label, conf.get("rev"))
+            add(ln, "description", "drawing", p.get("title"), d.label, conf.get("title"))
+            add(ln, "material", "drawing", p.get("material"), d.label, conf.get("material"))
+            add(ln, "finish", "drawing", p.get("finish"), d.label, conf.get("finish"))
+            check.append(f"The drawing number on {d.name} could not be read; its title block was used for line 1")
     # email-wide values reach every line; per-part listings reach their own line
     qty, _ = em["quantities"]
     for ln in lines:
@@ -1983,9 +2472,8 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
         if not desc and len(lines) == 1:
             desc = em["subject_description"] or em["qty_description"]
         add(ln, "description", "email", desc, "email body" if desc in em["descriptions"].values() else "subject")
-        if not info or not info.get("material"):
+        if not info:
             add(ln, "material", "email", em["material"], "email body")
-        if not info or not info.get("finish"):
             add(ln, "finish", "email", em["finish"], "email body")
         add(ln, "quantities", "email", qty, "email body")
         add(ln, "annual_usage", "email", em["annual_usage"], "email body")
@@ -1993,7 +2481,6 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
 
     # ---- resolve each field with the precedence rules ---------------------- #
     out_lines = []
-    clean_kinds = ("email", "model")
     for n, ln in enumerate(lines, start=1):
         c = ln["_c"]
         rec: Dict[str, Any] = {"line": n}
@@ -2022,10 +2509,22 @@ def extract(email: Dict[str, Any], texts: Dict[str, Dict[str, Any]], shop: Dict[
                     if "(OCR" not in s2 and fold(v2) == fold(value) and v2 != value:
                         value = v2
                         break
+            # a part number OCR read one character off from what a typed source says: the typed one
+            if field == "part_number" and ocr_win:
+                typed = [(v2, s2) for k2, v2, s2, c2 in c[field] if "(OCR" not in s2 and fold(v2) != fold(value)
+                         and _near_key(fold(v2), fold(value)) and not _variant_of(value, v2)]
+                if typed:
+                    check.append(f"Line {n} part number: OCR read {value} in {source}, {typed[0][1]} says "
+                                 f"{typed[0][0]}; used {typed[0][0]}")
+                    value, source, conf = typed[0][0], typed[0][1], None
+                    ocr_win = False
             if field in ("part_number", "rev"):
                 for k2, v2, s2, c2 in c[field]:
                     if k2 == "drawing_variant" or v2 in (None, ""):
                         continue
+                    if field == "part_number" and (_variant_of(value, v2) or (
+                            "(OCR" in s2 and _near_key(fold(v2), fold(value)))):
+                        continue  # a dash number of the drawing (BWM-3140-08), or the OCR slip noted above
                     if fold(v2) != fold(value):
                         if field == "rev" and ("(OCR" in s2 or ocr_win) and len(fold(v2)) == len(fold(value)) == 1 \
                                 and not (("(OCR" in s2) and ocr_win):
@@ -2135,7 +2634,7 @@ def _cell(value: Any) -> str:
     """A spreadsheet-safe cell: text that starts like a formula gets a leading apostrophe."""
     if value is None:
         return ""
-    s = str(value)
+    s = re.sub(r"\s*[\r\n]+\s*", " ", str(value)).replace("\x00", "")  # one spreadsheet row per part line
     if s[:1] in ("=", "+", "@", "\t", "\r") or (s[:1] == "-" and len(s) > 1 and not re.match(r"-\d", s)):
         return "'" + s
     return s
@@ -2148,7 +2647,9 @@ def to_csv(records: List[Dict[str, Any]], bom: bool = False) -> str:
     w = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
     w.writerow(CSV_COLUMNS)
     for r in records:
-        files = "; ".join(f"{f['name']} ({f['type']}, {f['text_from']})" for f in r.get("files") or [])
+        files = "; ".join(f"{f['name']} ({f['type']}, " + (f"{f['capture']}, " if f.get("capture") not in
+                                                                (None, "digital") else "") + f"{f['text_from']})"
+                          for f in r.get("files") or [])
         routing = r.get("routing") or {}
         for ln in r.get("lines") or [{}]:
             q = (ln.get("quantities") or {}).get("value")
@@ -2203,17 +2704,19 @@ def _fallback_text(data: bytes, media: str) -> Dict[str, Any]:
 
 def load_texts(emails: List[Dict[str, Any]], cache_path: Optional[Path] = BETA_CACHE, allow_ocr: bool = True,
                texts_file: Optional[Path] = None) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """email id -> attachment name -> file_text result, for attachments that are real files."""
+    """email id -> attachment name -> file_text result, for attachments that are real files.
+    The OCR cache is only read: ocr.py --build-cache owns it. A file the cache does not hold
+    (or every file, when there is no cache yet) is read live by ocr.file_text."""
     pre = json.loads(Path(texts_file).read_text(encoding="utf-8")) if texts_file else None
     ocr_mod, cache = None, None
     if pre is None:
         try:
             import ocr as ocr_mod  # noqa: F811
-            cache = ocr_mod.OcrCache(cache_path) if cache_path else None
+            if cache_path and Path(cache_path).exists():
+                cache = ocr_mod.OcrCache(cache_path)
         except Exception:  # noqa: BLE001 - ocr.py missing or broken: fall back to text layers
             ocr_mod = None
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    dirty = False
     for email in emails:
         for att in email.get("attachments") or []:
             if not isinstance(att, dict) or not att.get("path"):
@@ -2231,17 +2734,10 @@ def load_texts(emails: List[Dict[str, Any]], cache_path: Optional[Path] = BETA_C
                 continue
             media = att.get("media") or path.suffix.lstrip(".").lower()
             if ocr_mod is not None:
-                before = len(getattr(cache, "_entries", {}) or {}) if cache is not None else 0
                 res = ocr_mod.file_text(data, media, att["name"], cache=cache, allow_ocr=allow_ocr)
-                dirty = dirty or (cache is not None and len(getattr(cache, "_entries", {}) or {}) != before)
             else:
                 res = _fallback_text(data, media)
             out.setdefault(email["id"], {})[att["name"]] = res
-    if dirty and cache is not None:
-        try:
-            cache.save()
-        except Exception:  # noqa: BLE001 - a read-only checkout still gets its results
-            pass
     return out
 
 
@@ -2334,14 +2830,20 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
         add(eid, "export_control", (got or None) == tv.get("value"),
             _source_kind("export_control", where, files, tv.get("value")), got, tv.get("value"),
             bool(where) and not any(w in ("email", "subject") for w in where))
-        # requirements: recall of the answer key's items, and how many extracted items match none
+        # requirements: recall of the answer key's items, one extracted item per key item (so two
+        # items run together count as one hit and one miss), and the extracted items that match none
         got_reqs = [x["value"] for x in r.get("requirements") or []]
+        taken: set = set()
         for item in t.get("requirements") or []:
-            ok = any(overlap(item["value"], g) >= 0.7 for g in got_reqs)
+            scored = [(overlap(item["value"], g), j) for j, g in enumerate(got_reqs) if j not in taken]
+            best = max(scored, default=(0.0, None))
+            ok = best[0] >= 0.7
+            if ok:
+                taken.add(best[1])
             add(eid, "requirements", ok, _source_kind("requirements", item.get("where") or [], files, item["value"]),
                 "" if ok else "; ".join(got_reqs)[:120], item["value"],
                 not any(w in ("email", "subject") for w in item.get("where") or []))
-        extra = [g for g in got_reqs if not any(overlap(i["value"], g) >= 0.7 for i in t.get("requirements") or [])]
+        extra = [g for j, g in enumerate(got_reqs) if j not in taken]
         for g in extra:
             rows.append({"email": eid, "field": "requirements (extra)", "ok": False, "kind": "extra", "got": g,
                          "want": None, "attachment_only": False})
@@ -2379,6 +2881,7 @@ def grade(records: List[Dict[str, Any]], truth: Dict[str, Any]) -> Dict[str, Any
                 where = tv.get("where") or []
                 add(eid, field, ok, _source_kind(field, where, files, tv.get("value")), got, tv.get("value"),
                     bool(where) and not any(w in ("email", "subject") for w in where))
+                rows[-1]["accept"] = list(tv.get("accept") or [])
         for j, gl in enumerate(got_lines):
             if j not in used:
                 rows.append({"email": eid, "field": "lines (extra)", "ok": False, "kind": "extra",
@@ -2420,6 +2923,11 @@ def print_grade(result: Dict[str, Any], verbose: bool = False) -> Tuple[int, int
     att = [r for r in scored if r["attachment_only"]]
     print(f"\nvalues printed only on attachments: {_frac(att)}"
           f"   (OCR-only: {_frac([r for r in att if r['kind'] == 'OCR'])})")
+    # the text fields pass at 85% similarity; this says how many are word for word
+    words = [dict(r, ok=any(norm(r["got"]) == norm(w) for w in [r["want"]] + r.get("accept", []))) for r in scored
+             if r["field"] in ("description", "material", "finish") and r["want"] is not None]
+    print("word for word (description, material, finish): " + "   ".join(
+        f"{k} {_frac([r for r in words if r['kind'] == k])}" for k in kinds if any(r["kind"] == k for r in words)))
     extras = [r for r in rows if r["kind"] == "extra"]
     print(f"extra items not in the answer key: {len(extras)}"
           + (" (" + ", ".join(f"{r['email']} {r['field']}" for r in extras[:12]) + ")" if extras else ""))
@@ -2462,7 +2970,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.with_suffix(".csv").write_text(to_csv(records, bom=True), encoding="utf-8", newline="")
+    # plain UTF-8: the server adds the byte order mark Excel wants when it sends the download
+    out.with_suffix(".csv").write_text(to_csv(records), encoding="utf-8", newline="")
     out.with_suffix(".json").write_text(to_json(records), encoding="utf-8")
     n_lines = sum(len(r["lines"]) for r in records)
     print(f"{len(records)} RFQs, {n_lines} part lines -> {out.with_suffix('.csv')} and {out.with_suffix('.json')}")

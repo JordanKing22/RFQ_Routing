@@ -109,7 +109,10 @@ def _session() -> Any:
 
 
 def available() -> Dict[str, Any]:
-    info: Dict[str, Any] = {"numpy": False, "onnxruntime": False, "onnxruntime_version": None, "pillow": False,
+    """What is installed and whether the model loads. "ready" is the one flag callers need: True when
+    detect() can run (attachments.layout_ready reads it). Loading the model here is the only side effect."""
+    info: Dict[str, Any] = {"ready": False, "model": None, "numpy": False, "onnxruntime": False,
+                            "onnxruntime_version": None, "pillow": False,
                             "pdftoppm": shutil.which("pdftoppm") is not None, "model_path": MODEL_PATH,
                             "model_bytes": os.path.getsize(MODEL_PATH) if os.path.isfile(MODEL_PATH) else None,
                             "threads": _threads(), "loaded": False, "error": None, "classes": list(CLASSES)}
@@ -132,6 +135,8 @@ def available() -> Dict[str, Any]:
     if info["numpy"] and info["onnxruntime"] and info["pillow"]:
         info["loaded"] = _session() is not None
         info["error"] = _state["error"]
+        info["ready"] = info["loaded"]
+        info["model"] = os.path.basename(MODEL_PATH) if info["loaded"] else None
     else:
         missing = [k for k in ("numpy", "onnxruntime", "pillow") if not info[k]]
         info["error"] = "missing: " + ", ".join(missing)
@@ -143,8 +148,11 @@ def available() -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
     """A PIL RGB image and the factors that take its pixels back to the caller's pixels.
-    Big JPEGs are decoded at a reduced scale (JPEG draft mode): the detector only needs 640."""
-    from PIL import Image
+    Big JPEGs are decoded at a reduced scale (JPEG draft mode): the detector only needs 640.
+    Bytes from a phone can carry an EXIF orientation (the pixels are stored sideways and viewers
+    turn them); those are turned upright first, because the model only knows upright pages, so
+    boxes for such a file are in the upright picture's pixels, the way a viewer shows it."""
+    from PIL import Image, ImageOps
     if isinstance(image, Image.Image):
         img = image
         fx = fy = 1.0
@@ -153,9 +161,17 @@ def _open(image: Any, draft: bool = True) -> Tuple[Any, float, float]:
         w0, h0 = img.size
         if w0 * h0 > MAX_PIXELS:
             raise ValueError(f"picture too large: {w0} x {h0}")
+        try:
+            orientation = int(img.getexif().get(0x0112, 1))
+        except Exception:  # a damaged EXIF block is not a reason to give up on the picture
+            orientation = 1
         if draft and img.format == "JPEG":
             img.draft("RGB", (IMGSZ * 2, IMGSZ * 2))  # decodes at 1/2, 1/4 or 1/8 scale, never below 1280
         img.load()
+        if orientation in (2, 3, 4, 5, 6, 7, 8):
+            img = ImageOps.exif_transpose(img)
+            if orientation >= 5:  # a quarter turn swaps width and height
+                w0, h0 = h0, w0
         fx, fy = w0 / img.size[0], h0 / img.size[1]
     else:
         raise TypeError(f"expected a PIL image or PNG/JPEG bytes, got {type(image).__name__}")
@@ -343,17 +359,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not info["loaded"]:
         print(f"layout model not available: {info['error']}")
         return 2
-    with open(args.file, "rb") as fh:
-        data = fh.read()
+    try:
+        with open(args.file, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        print(f"cannot read {args.file}: {exc}")
+        return 1
     t0 = time.perf_counter()
     if data.lstrip()[:4] == b"%PDF":
         img = render_pdf_page(data, args.page, args.dpi)
     else:
         img = None
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
             img = Image.open(io.BytesIO(data))
             img.load()
+            img = ImageOps.exif_transpose(img)  # upright, as detect() does with bytes
         except Exception as exc:
             print(f"cannot read {args.file}: {exc}")
             return 1

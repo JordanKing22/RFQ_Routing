@@ -6,6 +6,11 @@
   "E13",
   "E17"
  ],
+ "not_rfq_why": {
+  "E10": "Status question on an open purchase order (PO 45521): an order follow-up, no quote asked.",
+  "E13": "A tooling vendor's sales promotion.",
+  "E17": "A capability question ('Can you do this kind of work?') with a ballpark price question ('What would something like this cost?') about unnamed parts shown only as pictures on a shared drive: no part number, drawing, quantity, or specific material. The price question makes 'an RFQ with everything missing' defensible, but no quote can be prepared from it and the right next step is a reply asking for drawings and quantities, which the review lane handles. So without a Jev decision rfq_details.is_rfq says False and E17 gets no row in the consolidated file. When Jev does call it an RFQ, extract still returns a record that lists what is missing (see tests/test_rfq_details.py)."
+ },
  "files": {
   "QA-41127_RevB.pdf": {
    "email": "E01",
@@ -497,6 +502,12 @@
     ]
    },
    "requirements": [
+    {
+     "value": "the program flows down DFARS 252.204-7012",
+     "where": [
+      "email"
+     ]
+    },
     {
      "value": "handle it per NIST SP 800-171 and confirm your compliance status in your reply",
      "where": [
@@ -1293,6 +1304,12 @@
     "where": []
    },
    "requirements": [
+    {
+     "value": "precision clean for high vacuum and double bag",
+     "where": [
+      "email"
+     ]
+    },
     {
      "value": "EN 10204 3.1 material certs required",
      "where": [

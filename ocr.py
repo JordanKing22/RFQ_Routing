@@ -83,8 +83,11 @@ def _tools() -> Dict[str, Any]:
     with _tool_lock:
         if _tool_info:
             return _tool_info
-        tess = shutil.which("tesseract")
+        # RFQ_TESSERACT points at another build (the settings were checked against a 5.3.0 build,
+        # the version Debian bookworm ships, as well as the 5.3.4 installed here).
+        tess = os.environ.get("RFQ_TESSERACT", "").strip() or shutil.which("tesseract")
         version = None
+        params: set = set()
         if tess:
             try:
                 proc = subprocess.run([tess, "--version"], capture_output=True, timeout=20)
@@ -93,11 +96,39 @@ def _tools() -> Dict[str, Any]:
                 version = m.group(1) if m else None
                 if not version:
                     tess = None
+                else:
+                    proc = subprocess.run([tess, "--print-parameters"], capture_output=True, timeout=20)
+                    for line in proc.stdout.decode("utf-8", "replace").splitlines()[1:]:
+                        name = line.split("\t", 1)[0].strip()
+                        if name:
+                            params.add(name)
             except (OSError, subprocess.SubprocessError):
                 tess = None
-        _tool_info.update(tesseract=tess, tesseract_version=version, pdftoppm=shutil.which("pdftoppm"),
-                          pdfimages=shutil.which("pdfimages"), pdftotext=shutil.which("pdftotext"))
+        _tool_info.update(tesseract=tess, tesseract_version=version, tesseract_params=params,
+                          pdftoppm=shutil.which("pdftoppm"), pdfimages=shutil.which("pdfimages"),
+                          pdftotext=shutil.which("pdftotext"))
         return _tool_info
+
+
+def _version_tuple(version: Optional[str]) -> Tuple[int, ...]:
+    try:
+        return tuple(int(p) for p in (version or "0").split("."))
+    except ValueError:
+        return (0,)
+
+
+# The oldest Tesseract that has each -c variable this module sets. All of them are in 5.3.0,
+# the version Debian bookworm (the Render image) ships; the check keeps an older or stripped
+# build from failing the whole page over one unknown variable.
+_PARAM_SINCE = {"thresholding_method": (5, 0), "preserve_interword_spaces": (3, 4),
+                "load_system_dawg": (3, 0), "load_freq_dawg": (3, 0)}
+
+
+def _supports(param: str) -> bool:
+    t = _tools()
+    if t["tesseract_params"]:
+        return param in t["tesseract_params"]
+    return _version_tuple(t["tesseract_version"]) >= _PARAM_SINCE.get(param, (99,))
 
 
 def available() -> Dict[str, Any]:
@@ -135,18 +166,30 @@ def _run(cmd: List[str], deadline: float, what: str, data: Optional[bytes] = Non
 # --------------------------------------------------------------------------- #
 # A recipe is a dict of these keys (missing keys are off):
 #   raster_dpi    pdftoppm resolution; "native" renders a scanned page at its own resolution
-#   scale         resize factor before OCR (Lanczos); 0 means "reach target_dpi"
-#   target_dpi    with scale 0: upscale low-resolution sources until the text is this dense
+#   target_dpi    upscale (Lanczos) a low-resolution source until the text is this dense;
+#                 never downscales
+#   scale         a fixed resize factor instead of target_dpi (0 means "use target_dpi")
+#   color         keep the colors of a photo or screenshot instead of converting to gray
 #   median        median filter size (3 removes the 1-pixel salt noise of a fax line)
 #   flatten       remove uneven light: subtract the blurred paper level
+#   invert        turn dark bands with light text (form table headers) into dark on light
 #   autocontrast  stretch the gray levels
 #   unsharp       unsharp mask after resizing
 #   deskew        find the skew with a projection profile and rotate it out
 #   page          find the sheet of paper in a photo or screenshot and warp it flat
 #   psm           tesseract page segmentation modes; with two, the passes are merged
+#   merge         how a second pass joins the first: "fill" adds its words where the first
+#                 pass found nothing; "conf" also swaps in a word read with clearly higher
+#                 confidence at the same place
 #   threshold     tesseract thresholding_method (0 Otsu, 1 adaptive Otsu, 2 Sauvola)
 #   tess_dpi      tell tesseract the resolution of the picture it gets
 #   pis           -c preserve_interword_spaces=1
+#   nodict        -c load_system_dawg=0 -c load_freq_dawg=0 (no English word lists)
+#   repair        uppercase an l that sits in an all-caps line (Helvetica I and l look alike)
+#   orient        when the first reading looks sideways or upside down, ask tesseract's
+#                 orientation detection and read the turned page (on unless set to False)
+#   min_conf      drop words tesseract is less sure of than this (drawing line work read
+#                 as letters), except words with a digit and lone capitals (_keep_word)
 # The per-source recipes below are the measured winners (docs/ocr_settings.md). Change a value
 # there and here together, and rerun python ocr.py --evaluate.
 BASELINE: Dict[str, Any] = {"raster_dpi": 300, "psm": [3], "raw": True}
@@ -177,6 +220,11 @@ def _open_image(data: bytes) -> "Image.Image":
         raise
     except Exception as exc:  # noqa: BLE001 - Pillow raises many types for broken files
         raise OcrError(f"the picture could not be read ({type(exc).__name__})")
+    try:
+        # A phone stores a sideways photo as is and says in EXIF how to turn it.
+        img = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - a broken EXIF block only means no turning
+        pass
     return img
 
 
@@ -232,7 +280,9 @@ def estimate_skew(img: "Image.Image", max_deg: float = 3.0) -> float:
 
     def score(angle: float) -> float:
         r = ink.rotate(angle, resample=Image.BILINEAR, fillcolor=0)
-        rows = list(r.resize((1, r.size[1]), Image.BOX).getdata())
+        col = r.resize((1, r.size[1]), Image.BOX)
+        # Pillow 12 renamed getdata (it goes away in Pillow 14); take whichever this one has.
+        rows = list(col.get_flattened_data() if hasattr(col, "get_flattened_data") else col.getdata())
         return sum(v * v for v in rows)
 
     best = max((a / 2.0 for a in range(int(-max_deg * 2), int(max_deg * 2) + 1)), key=score)
@@ -374,7 +424,80 @@ def _warp_page(img: "Image.Image", corners: List[Tuple[float, float]], scale: fl
     h = (dist(x0, y0, x3, y3) + dist(x1, y1, x2, y2)) / 2 * scale
     w, h = max(1, int(round(w))), max(1, int(round(h)))
     coeffs = _perspective(corners, [(0, 0), (w, 0), (w, h), (0, h)])
-    return img.transform((w, h), Image.PERSPECTIVE, coeffs, resample=Image.BICUBIC, fillcolor=255)
+    return img.transform((w, h), Image.PERSPECTIVE, coeffs, resample=Image.BICUBIC, fillcolor="white")
+
+
+def _invert_bands(g: "Image.Image", dpi: float) -> Tuple["Image.Image", int]:
+    """Turn dark bands with light text (the header row of an RFQ form table) into dark text on
+    light paper. Tesseract takes such a band for a picture, and then also drops the small
+    cells just under it: the item number and the one-letter rev of the first row. Works on a
+    grid of about 1 mm cells and follows the band column by column, so a skewed scan is fine.
+    Returns the picture and how many bands were inverted."""
+    cell = max(4, int(round(dpi / 25.0)))
+    w, h = g.size
+    gw, gh = max(1, w // cell), max(1, h // cell)
+    lum = g if g.mode == "L" else g.convert("L")
+    small = lum.resize((gw, gh), Image.BOX)
+    hist = small.histogram()
+    total, acc, paper = sum(hist), 0, 255
+    for v in range(255, -1, -1):  # the paper level: the brightest 30 % of the page
+        acc += hist[v]
+        if acc >= 0.3 * total:
+            paper = v
+            break
+    px = small.load()
+    # Cells with white letters in them are lighter than the band itself, so the band is
+    # traced at a softer level and must then be mostly truly dark.
+    soft = [[px[x, y] < paper * 0.62 for x in range(gw)] for y in range(gh)]
+    seen = [[False] * gw for _ in range(gh)]
+    mask = Image.new("L", (gw, gh), 0)
+    draw = ImageDraw.Draw(mask)
+    turned = 0
+    for y0 in range(gh):
+        for x0 in range(gw):
+            if not soft[y0][x0] or seen[y0][x0]:
+                continue
+            stack, cols = [(x0, y0)], {}
+            seen[y0][x0] = True
+            edge = False
+            while stack:
+                x, y = stack.pop()
+                lo, hi = cols.get(x, (y, y))
+                cols[x] = (min(lo, y), max(hi, y))
+                edge = edge or x == 0 or y == 0 or x == gw - 1 or y == gh - 1
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < gw and 0 <= ny < gh and soft[ny][nx] and not seen[ny][nx]:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            # A band is at least an inch long, a few mm to about 15 mm tall, and does not touch
+            # the edge of the picture (a copier's edge shadow, a viewer's dark surround).
+            if edge or len(cols) * cell < dpi:
+                continue
+            heights = sorted(hi - lo + 1 for lo, hi in cols.values())
+            if not 3 <= heights[len(heights) // 2] <= max(3, dpi * 0.6 / cell):
+                continue
+            spans = [(x, lo, hi) for x, (lo, hi) in cols.items()]
+            dark = sum(1 for x, lo, hi in spans for y in range(lo, hi + 1) if px[x, y] < paper * 0.45)
+            area = sum(hi - lo + 1 for _, lo, hi in spans)
+            if dark < 0.5 * area:
+                continue
+            # Only a band with light marks in it (text) is worth turning over.
+            band = Image.new("L", (gw, gh), 0)
+            bd = ImageDraw.Draw(band)
+            for x, lo, hi in spans:
+                bd.line([(x, lo), (x, hi)], fill=255)
+            full = band.resize((w, h), Image.NEAREST)
+            rh = lum.histogram(mask=full)
+            light = sum(rh[int(paper * 0.7):]) / max(1, sum(rh))
+            if not 0.02 <= light <= 0.45:
+                continue
+            for x, lo, hi in spans:
+                draw.line([(x, lo), (x, hi)], fill=255)
+            turned += 1
+    if turned:
+        full = mask.resize((w, h), Image.NEAREST)
+        g = Image.composite(ImageOps.invert(g), g, full)
+    return g, turned
 
 
 def _flatten(g: "Image.Image") -> "Image.Image":
@@ -430,12 +553,22 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
     """Clean a page picture for tesseract. Returns (picture, scale from the source, steps)."""
     steps: Dict[str, Any] = {}
     dpi = float(info.get("dpi") or 300)
-    scale = float(recipe.get("scale", 1.0) if recipe.get("scale", 1.0) is not None else 1.0)
-    if scale == 0:
-        scale = max(1.0, float(recipe.get("target_dpi") or 300) / max(dpi, 30.0))
+    scale = recipe.get("scale")
+    if scale:
+        scale = float(scale)
+    elif recipe.get("target_dpi"):
+        scale = max(1.0, float(recipe["target_dpi"]) / max(dpi, 30.0))
+    else:
+        scale = 1.0
     if img.size[0] * img.size[1] * scale * scale > MAX_OCR_PIXELS:
         scale = max(0.25, (MAX_OCR_PIXELS / float(img.size[0] * img.size[1])) ** 0.5)
-    g = _gray(img)
+    if recipe.get("color") and img.mode not in ("1", "L", "LA", "I", "I;16"):
+        # Tesseract makes its own gray picture from the colors (it weighs the channels its
+        # own way); the filters below then work on each channel.
+        g = img.convert("RGB")
+        steps["color"] = True
+    else:
+        g = _gray(img)
     if recipe.get("median"):
         # Before any resize: the fax's salt noise is one pixel at the source resolution.
         g = g.filter(ImageFilter.MedianFilter(int(recipe["median"])))
@@ -453,6 +586,8 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
     if recipe.get("flatten"):
         g = _flatten(g)
         steps["flatten"] = True
+    if recipe.get("invert"):
+        g, steps["invert"] = _invert_bands(g, dpi * scale)
     if recipe.get("autocontrast"):
         g = ImageOps.autocontrast(g, cutoff=1)
         steps["autocontrast"] = True
@@ -462,7 +597,7 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
     if recipe.get("deskew"):
         angle = estimate_skew(g)
         if abs(angle) >= 0.1:
-            g = g.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=255)
+            g = g.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor="white")
         steps["deskew"] = angle
     return g, scale, steps
 
@@ -471,7 +606,7 @@ def prepare(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any]) ->
 # Tesseract
 # --------------------------------------------------------------------------- #
 def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str, Any],
-                     deadline: float) -> List[Dict[str, Any]]:
+                     deadline: float, stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     tess = _tools()["tesseract"]
     if not tess:
         raise OcrError("tesseract is not installed")
@@ -481,11 +616,11 @@ def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str
         cmd += ["--tessdata-dir", str(tessdata)]
     if dpi:
         cmd += ["--dpi", str(int(round(dpi)))]
-    if recipe.get("threshold") is not None:
+    if recipe.get("threshold") is not None and _supports("thresholding_method"):
         cmd += ["-c", f"thresholding_method={int(recipe['threshold'])}"]
-    if recipe.get("pis"):
+    if recipe.get("pis") and _supports("preserve_interword_spaces"):
         cmd += ["-c", "preserve_interword_spaces=1"]
-    if recipe.get("nodict"):
+    if recipe.get("nodict") and _supports("load_system_dawg") and _supports("load_freq_dawg"):
         # Part numbers and specs are not dictionary words; without the word lists the model
         # reads the characters it sees instead of the nearest English word.
         cmd += ["-c", "load_system_dawg=0", "-c", "load_freq_dawg=0"]
@@ -506,9 +641,33 @@ def _tesseract_words(path: str, psm: int, dpi: Optional[float], recipe: Dict[str
         x, y, w, h = int(f[6]), int(f[7]), int(f[8]), int(f[9])
         words.append({"text": text, "conf": conf, "box": [x, y, x + w, y + h],
                       "line": (psm, int(f[2]), int(f[3]), int(f[4]))})
+    if stats is not None:
+        # How the raw reading looks, before any filtering: a sideways page gives tall word
+        # boxes, an upside-down one gives low confidence.
+        long_words = [w for w in words if len(w["text"]) >= 3]
+        stats["conf"] = sum(w["conf"] for w in words) / len(words) if words else 0.0
+        stats["tall"] = (sum(1 for w in long_words if w["box"][3] - w["box"][1] > w["box"][2] - w["box"][0])
+                         / len(long_words)) if long_words else 0.0
+        stats["words"] = len(words)
     if recipe.get("repair"):
         _repair_case(words)
+    floor = float(recipe.get("min_conf") or 0)
+    if floor > 0:
+        words = [w for w in words if _keep_word(w, floor)]
     return words
+
+
+def _keep_word(w: Dict[str, Any], floor: float) -> bool:
+    """Hatching, center lines, and the shaded iso view come back as low-confidence "words"
+    like "ius", "Ww", or "~<". Tesseract is also unsure of things a buyer needs, so those are
+    always kept: anything with a digit (quantities like "25/ 75/150" can score 0) and a lone
+    capital or two (a rev letter in its own table cell scores about 20)."""
+    if w["conf"] >= floor:
+        return True
+    text = w["text"]
+    if any(c.isdigit() for c in text):
+        return True
+    return len(text) <= 2 and text.isalpha() and text.isupper()
 
 
 def _repair_case(words: List[Dict[str, Any]]) -> None:
@@ -540,15 +699,30 @@ def _overlap(a: List[float], b: List[float]) -> float:
     return ix * iy / small
 
 
-def _merge_passes(passes: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def _iou(a: List[float], b: List[float]) -> float:
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    if ix <= 0 or iy <= 0:
+        return 0.0
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - ix * iy
+    return ix * iy / (union or 1)
+
+
+def _merge_passes(passes: List[List[Dict[str, Any]]], mode: str = "fill") -> List[Dict[str, Any]]:
     """Words of the first pass, plus words from later passes where the first found nothing.
     Drawings mix paragraphs (notes) with sparse boxed text (title block, callouts), and each
-    page segmentation mode misses some of one or the other."""
-    merged = list(passes[0])
+    page segmentation mode misses some of one or the other. With mode "conf", a later word
+    that covers the same box as a first-pass word and is read with clearly higher confidence
+    replaces its text (the first pass keeps its line structure)."""
+    merged = [dict(w) for w in passes[0]]
     for extra in passes[1:]:
         for w in extra:
-            if all(_overlap(w["box"], m["box"]) < 0.3 for m in merged):
+            hits = [m for m in merged if _overlap(w["box"], m["box"]) >= 0.3]
+            if not hits:
                 merged.append(w)
+            elif mode == "conf" and len(hits) == 1 and _iou(w["box"], hits[0]["box"]) >= 0.6 \
+                    and w["conf"] >= hits[0]["conf"] + 15 and w["text"] != hits[0]["text"]:
+                hits[0]["text"], hits[0]["conf"] = w["text"], w["conf"]
     return merged
 
 
@@ -637,15 +811,66 @@ def _assemble(pages: List[List[Dict[str, Any]]], scales: List[float]) -> Dict[st
             "confidence": round(sum(confs) / len(confs), 1) if confs else None}
 
 
+def _read_words(path: str, dpi: float, recipe: Dict[str, Any], deadline: float,
+                stats: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    passes = [_tesseract_words(path, psm, dpi if recipe.get("tess_dpi") else None, recipe, deadline,
+                               stats if i == 0 else None)
+              for i, psm in enumerate(recipe.get("psm") or [3])]
+    return _merge_passes(passes, str(recipe.get("merge") or "fill"))
+
+
+def _sure_words(words: List[Dict[str, Any]]) -> int:
+    return sum(1 for w in words if w["conf"] >= 60 and len(w["text"]) >= 2)
+
+
+def _maybe_turned(stats: Dict[str, Any]) -> bool:
+    """Does the first reading look like a sideways or upside-down page? Upright pages of the
+    beta set read at a mean confidence of 67 to 93 with almost no tall word boxes."""
+    return stats.get("tall", 0) > 0.4 or stats.get("conf", 100) < 55 or stats.get("words", 0) < 15
+
+
+def _orientation(path: str, recipe: Dict[str, Any], deadline: float) -> Tuple[int, float]:
+    """(degrees to turn the picture clockwise, confidence) from tesseract's orientation and
+    script detection (--psm 0, which needs osd.traineddata; Debian's tesseract-ocr has it)."""
+    tess = _tools()["tesseract"]
+    cmd = [tess, path, "stdout", "--psm", "0"]
+    tessdata = recipe.get("tessdata") or OCR_TESSDATA
+    if tessdata:
+        cmd += ["--tessdata-dir", str(tessdata)]
+    out = _run(cmd, deadline, "tesseract orientation").decode("utf-8", "replace")
+    rot = re.search(r"Rotate:\s*(\d+)", out)
+    conf = re.search(r"Orientation confidence:\s*([\d.]+)", out)
+    return (int(rot.group(1)) if rot else 0), (float(conf.group(1)) if conf else 0.0)
+
+
 def _ocr_picture(img: "Image.Image", info: Dict[str, Any], recipe: Dict[str, Any], tmp: str,
                  deadline: float, tag: str) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
     g, scale, steps = prepare(img, info, recipe)
     path = os.path.join(tmp, f"{tag}.tif")
     dpi = float(info.get("dpi") or 300) * scale
     g.save(path, "TIFF", dpi=(dpi, dpi))  # uncompressed: fastest to write and to read
-    passes = [_tesseract_words(path, psm, dpi if recipe.get("tess_dpi") else None, recipe, deadline)
-              for psm in (recipe.get("psm") or [3])]
-    return _merge_passes(passes), scale, steps
+    stats: Dict[str, Any] = {}
+    words = _read_words(path, dpi, recipe, deadline, stats)
+    if recipe.get("orient", True) and _maybe_turned(stats):
+        # A drawing scanned sideways, a photo taken upside down: turn it and read it again,
+        # and keep whichever reading has more words tesseract is sure of.
+        try:
+            rot, conf = _orientation(path, recipe, deadline)
+        except OcrError:
+            rot, conf = 0, 0.0
+        if rot in (90, 180, 270) and conf >= 1.5:
+            turned = g.rotate(-rot, expand=True)
+            path2 = os.path.join(tmp, f"{tag}-r.tif")
+            turned.save(path2, "TIFF", dpi=(dpi, dpi))
+            stats2: Dict[str, Any] = {}
+            again = _read_words(path2, dpi, recipe, deadline, stats2)
+            # Tesseract reads a page on its side by itself, but the words come back in its
+            # own frame and out of order; an upright reading of about as many words wins.
+            upright = stats["tall"] > 0.4 and stats2.get("tall", 1) < 0.2
+            if _sure_words(again) > (0.7 if upright else 1.0) * _sure_words(words):
+                words = again
+                steps["rotated"] = rot
+    return words, scale, steps
 
 
 # --------------------------------------------------------------------------- #
@@ -770,6 +995,7 @@ def _pdf_text_layer(data: bytes) -> Dict[str, Any]:
                 if not result["text"].strip():
                     result["text"] = "\n".join(pages)
                     result["pages"] = result["pages"] or len(pages)
+                    result["reader"] = "pdftotext"
         except (OSError, subprocess.SubprocessError):
             pass
     return result
@@ -843,21 +1069,30 @@ def _ocr(data: bytes, media: str, recipes: Dict[str, Dict[str, Any]], deadline: 
                     fh.write(pic)
                 dpi = info.get("dpi") if (recipe.get("tess_dpi") or ext == ".pgm") else None
                 words = _merge_passes([_tesseract_words(path, psm, dpi, recipe, deadline)
-                                       for psm in recipe.get("psm") or [3]])
+                                       for psm in recipe.get("psm") or [3]], str(recipe.get("merge") or "fill"))
                 scale, steps = 1.0, {}
             else:
                 words, scale, steps = _ocr_picture(pic, info, recipe, tmp, deadline, f"p{i}")
             pages.append(words)
             scales.append(scale)
             used.append({"page": i, "source": info.get("type"), "dpi": info.get("source_dpi") or info.get("dpi"),
-                         "psm": list(recipe.get("psm") or [3]),
-                         "threshold": recipe.get("threshold"), **steps})
+                         "recipe": recipe_record(recipe), "steps": steps})
     out = _assemble(pages, scales)
     out["pages"] = len(items)
     out["settings"] = {"engine": f"tesseract {_tools()['tesseract_version']}", "oem": 1, "lang": "eng",
                        "model": str(recipes.get("scan", {}).get("tessdata") or OCR_TESSDATA or "installed"),
                        "pages": used}
     out["seconds"] = round(time.monotonic() - started, 2)
+    return out
+
+
+def recipe_record(recipe: Dict[str, Any]) -> Dict[str, Any]:
+    """The settings of a recipe as they are saved with a result: every switch that is on, and
+    the model by folder name instead of a path on this machine."""
+    out = {k: v for k, v in sorted(recipe.items()) if v not in (None, False, 0, "") and k != "tessdata"}
+    out["psm"] = list(recipe.get("psm") or [3])
+    if recipe.get("tessdata"):
+        out["model"] = Path(str(recipe["tessdata"])).name
     return out
 
 
@@ -924,6 +1159,7 @@ def _file_text(data: bytes, media: str, name: str, *, cache: "Optional[OcrCache]
             text = (layer.get("text") or "").strip()
             if not blank or not allow_ocr or not available()["ocr"]:
                 return _result("text-layer", text=text, pages=layer.get("pages"), sha256=sha,
+                               settings={"reader": layer.get("reader") or "pypdf"},
                                seconds=round(time.monotonic() - started, 2))
             ocr_pages = blank  # a mixed PDF: typed pages plus scanned ones
     if not allow_ocr:
@@ -1028,7 +1264,8 @@ def step_text(data: bytes) -> Dict[str, Any]:
         lines.append(f"Units: {units}")
     if len(lines) <= 1:
         return _result("none", error="the STEP header names no product", seconds=round(time.monotonic() - started, 3))
-    return _result("step-header", text="\n".join(lines), pages=None, seconds=round(time.monotonic() - started, 3))
+    return _result("step-header", text="\n".join(lines), pages=None, settings={"reader": "STEP header"},
+                   seconds=round(time.monotonic() - started, 3))
 
 
 # --------------------------------------------------------------------------- #
@@ -1036,12 +1273,14 @@ def step_text(data: bytes) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 class OcrCache:
     """Saved results keyed by the SHA-256 of the file bytes, so the committed beta files never
-    need OCR on a slow host. Each entry keeps the tesseract version and settings it was made
-    with; an entry is used as long as the file hash matches (rebuild with --build-cache)."""
+    need pypdf or tesseract on a slow host: text-layer, STEP, and OCR results alike. The file
+    also records the tesseract version and the settings the results were made with; an entry
+    is used as long as the file hash matches (rebuild with python ocr.py --build-cache)."""
 
     def __init__(self, path: "str | Path | None"):
         self.path = Path(path) if path else None
         self.entries: Dict[str, Dict[str, Any]] = {}
+        self.meta: Dict[str, Any] = {}
         self._lock = threading.Lock()
         if self.path and self.path.exists():
             try:
@@ -1049,6 +1288,7 @@ class OcrCache:
                 entries = raw.get("entries") if isinstance(raw, dict) else None
                 if isinstance(entries, dict):
                     self.entries = {k: v for k, v in entries.items() if isinstance(v, dict)}
+                    self.meta = {k: v for k, v in raw.items() if k not in ("entries", "about")}
             except (OSError, ValueError):
                 self.entries = {}  # a broken cache is only a slower start, never a crash
 
@@ -1067,11 +1307,15 @@ class OcrCache:
         if not self.path:
             return
         with self._lock:
-            payload = {"about": "OCR results for files whose text cannot be copied, keyed by the SHA-256 of "
-                                "the file bytes. Built by python ocr.py --build-cache; see docs/ocr_settings.md.",
-                       "tesseract_version": _tools()["tesseract_version"],
-                       "entries": dict(sorted(self.entries.items()))}
-            text = json.dumps(payload, indent=1, ensure_ascii=False) + "\n"
+            head = {"about": "Text of the beta attachment files keyed by the SHA-256 of the file bytes: PDF "
+                             "text layers, STEP headers, and OCR results. Built by python ocr.py --build-cache; "
+                             "the OCR settings are explained in docs/ocr_settings.md.",
+                    "tesseract_version": _tools()["tesseract_version"], **self.meta}
+            head["tesseract_version"] = self.meta.get("tesseract_version") or _tools()["tesseract_version"]
+            # One entry per line: the file stays small and a rebuild shows up as a readable diff.
+            body = ",\n".join(f" {json.dumps(k)}: {json.dumps(v, ensure_ascii=False, separators=(',', ':'))}"
+                               for k, v in sorted(self.entries.items()))
+            text = json.dumps(head, indent=1, ensure_ascii=False)[:-2] + ',\n "entries": {\n' + body + "\n }\n}\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".ocr_cache.", dir=str(self.path.parent))
         try:
@@ -1226,7 +1470,7 @@ def truth_ceiling() -> List[Tuple[str, List[str]]]:
 
 
 def parse_settings(spec: str) -> Dict[str, Any]:
-    """"psm=3+11,threshold=2,scale=1.5,median=3" -> a recipe dict (applied to every source type)."""
+    """"psm=3+11,threshold=2,target_dpi=300,median=3" -> a recipe dict."""
     out: Dict[str, Any] = {}
     for part in (spec or "").split(","):
         if not part.strip():
@@ -1235,24 +1479,44 @@ def parse_settings(spec: str) -> Dict[str, Any]:
         key, val = key.strip(), val.strip()
         if key == "psm":
             out["psm"] = [int(v) for v in val.split("+")]
-        elif key in ("scale", "target_dpi"):
+        elif key in ("scale", "target_dpi", "min_conf"):
             out[key] = float(val)
         elif key == "raster_dpi":
             out[key] = val if val == "native" else float(val)
         elif key in ("median", "threshold"):
             out[key] = int(val)
-        elif key in ("tessdata", "resample"):
+        elif key in ("tessdata", "resample", "merge"):
             out[key] = val
         else:
             out[key] = val.lower() not in ("0", "false", "no", "off", "")
     return out
 
 
-def evaluate_one(rel: str, recipes: Dict[str, Dict[str, Any]], timeout: float = 900.0) -> Dict[str, Any]:
-    truth = json.loads(TRUTH_FILE.read_text(encoding="utf-8"))["files"][rel]
-    path = HERE / "data" / rel
-    data = path.read_bytes()
-    media = {".pdf": "pdf", ".jpg": "jpg", ".png": "png"}[path.suffix.lower()]
+def settings_text(recipe: Dict[str, Any]) -> str:
+    """The inverse of parse_settings, for tables and logs."""
+    parts = []
+    for k, v in sorted(recipe.items()):
+        if v in (None, False, "") or (k != "threshold" and v == 0):
+            continue
+        if k == "psm":
+            v = "+".join(str(p) for p in v)
+        elif k == "tessdata":
+            v = Path(str(v)).name
+        elif v is True:
+            v = 1
+        elif isinstance(v, float) and v.is_integer():
+            v = int(v)
+        parts.append(f"{k}={v}")
+    return ",".join(parts)
+
+
+# How the truth file names each kind of uncopyable file, and the source type the pipeline
+# detects for it from the picture alone (classify). Only the harness uses this table.
+RENDER_TYPES = {"scan": "scan", "copier": "lowres", "fax": "bilevel", "photo": "photo", "screen": "screen"}
+
+
+def evaluate_data(rel: str, data: bytes, media: str, truth: Dict[str, Any], recipes: Dict[str, Dict[str, Any]],
+                  timeout: float = 900.0) -> Dict[str, Any]:
     started = time.monotonic()
     try:
         res = _ocr(data, media, recipes, started + timeout)
@@ -1260,42 +1524,305 @@ def evaluate_one(rel: str, recipes: Dict[str, Dict[str, Any]], timeout: float = 
     except OcrError as exc:
         res = {"text": "", "lines": [], "pages": 1, "seconds": round(time.monotonic() - started, 2), "error": str(exc)}
     out = score(res, truth)
-    out.update(file=rel, render=truth["render"], settings=res.get("settings"), error=res.get("error"))
+    detected = [p.get("source") for p in (res.get("settings") or {}).get("pages") or []]
+    out.update(file=rel, render=truth["render"], detected=detected, settings=res.get("settings"),
+               pages=res.get("pages") or 1, error=res.get("error"))
     return out
 
 
-def beta_uncopyable() -> List[str]:
+def evaluate_one(rel: str, recipes: Dict[str, Dict[str, Any]], timeout: float = 900.0,
+                 items: Optional[Dict[str, Tuple[bytes, str, Dict[str, Any]]]] = None) -> Dict[str, Any]:
+    if items and rel in items:
+        data, media, truth = items[rel]
+    else:
+        truth = json.loads(TRUTH_FILE.read_text(encoding="utf-8"))["files"][rel]
+        path = HERE / "data" / rel
+        data = path.read_bytes()
+        media = {".pdf": "pdf", ".jpg": "jpg", ".png": "png"}[path.suffix.lower()]
+    return evaluate_data(rel, data, media, truth, recipes, timeout)
+
+
+def heldout_items(modes: Tuple[str, ...] = tuple(RENDER_TYPES), part: str = "all"
+                  ) -> Dict[str, Tuple[bytes, str, Dict[str, Any]]]:
+    """Degraded copies of the 11 digital beta PDFs, made with the beta generator's own effects
+    (tools/make_rfq_beta.py: office scan, copier, fax, phone photo, viewer screenshot). There
+    is one real photo and one real screenshot, too few to choose settings from, so the search
+    also scores the "tune" part (6 drawings per kind); the "check" part (the other 5) is never
+    seen by the search and tells whether the choice carries over."""
+    import random as _random
+    for p in (str(HERE), str(HERE / "tools")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    import make_rfq_beta as mk  # the generator itself; only the harness imports it
     truth = json.loads(TRUTH_FILE.read_text(encoding="utf-8"))["files"]
-    return [rel for rel, t in truth.items() if not t.get("copyable")]
+    items: Dict[str, Tuple[bytes, str, Dict[str, Any]]] = {}
+    digital = sorted(rel for rel, t in truth.items() if t.get("copyable") and t.get("words") and rel.endswith(".pdf"))
+    if part != "all":
+        digital = digital[0::2] if part == "tune" else digital[1::2]
+    for rel in digital:
+        t = truth[rel]
+        email, spec = rel.split("/")[2], t["spec"]
+        stem = spec["name"].rsplit(".", 1)[0]
+        rnd = _random.Random(rel)
+        for mode in modes:
+            cfg: Dict[str, Any] = {"mode": mode}
+            if mode in ("scan", "copier"):
+                cfg["skew"] = round(rnd.uniform(0.3, 1.4) * rnd.choice([-1, 1]), 2)
+            elif mode == "fax":
+                cfg["skew"] = round(rnd.uniform(-0.5, 0.5), 2)
+            elif mode == "photo":
+                cfg["rename"] = f"{stem}_photo.jpg"
+            elif mode == "screen":
+                cfg["rename"] = f"{stem}_screenshot.png"
+            key = (email, spec["name"])
+            saved = mk.RENDER.get(key)
+            mk.RENDER[key] = cfg
+            try:
+                name, data, tr = mk.render_file(email, spec)
+            finally:
+                if saved is None:
+                    mk.RENDER.pop(key, None)
+                else:
+                    mk.RENDER[key] = saved
+            media = {"jpg": "jpg", "png": "png"}.get(name.rsplit(".", 1)[-1], "pdf")
+            items[f"heldout/{mode}/{email}/{name}"] = (data, media, tr)
+    return items
+
+
+def beta_uncopyable(render: Optional[str] = None) -> List[str]:
+    truth = json.loads(TRUTH_FILE.read_text(encoding="utf-8"))["files"]
+    return [rel for rel, t in truth.items() if not t.get("copyable") and render in (None, t.get("render"))]
+
+
+def _cpu_seconds() -> Optional[float]:
+    """CPU time of this process and of its finished children (tesseract, pdftoppm). CPU time,
+    not the clock, is what predicts a host with a fraction of a CPU, and it does not change
+    when other programs share the machine."""
+    try:
+        import resource
+        ch = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return time.process_time() + ch.ru_utime + ch.ru_stime
+    except Exception:  # noqa: BLE001 - not on Unix: fall back to the clock only
+        return None
 
 
 def evaluate(named: Dict[str, Dict[str, Dict[str, Any]]], files: Optional[List[str]] = None,
-             workers: int = 1) -> Dict[str, List[Dict[str, Any]]]:
-    """Score each named set of recipes on the uncopyable beta files."""
+             workers: int = 1, items: Optional[Dict[str, Tuple[bytes, str, Dict[str, Any]]]] = None
+             ) -> Dict[str, List[Dict[str, Any]]]:
+    """Score each named set of recipes on the uncopyable beta files. One set at a time, so the
+    CPU seconds of a set can be told apart; with one worker also the CPU seconds of each file."""
     from concurrent.futures import ThreadPoolExecutor
     files = files or beta_uncopyable()
-    jobs = [(name, rel) for name in named for rel in files]
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        results = list(pool.map(lambda job: (job[0], evaluate_one(job[1], named[job[0]])), jobs))
-    table: Dict[str, List[Dict[str, Any]]] = {name: [] for name in named}
-    for name, row in results:
-        table[name].append(row)
+    table: Dict[str, List[Dict[str, Any]]] = {}
+    for name, recipes in named.items():
+        before = _cpu_seconds()
+        if workers <= 1:
+            rows = []
+            for rel in files:
+                t0 = _cpu_seconds()
+                row = evaluate_one(rel, recipes, items=items)
+                t1 = _cpu_seconds()
+                if t0 is not None and t1 is not None:
+                    row["cpu_per_page"] = round((t1 - t0) / max(1, row.get("pages") or 1), 2)
+                rows.append(row)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                rows = list(pool.map(lambda rel: evaluate_one(rel, recipes, items=items), files))
+        after = _cpu_seconds()
+        pages = sum(r.get("pages") or 1 for r in rows)
+        for r in rows:
+            if before is not None and after is not None:
+                r["set_cpu_per_page"] = round((after - before) / max(1, pages), 2)
+        table[name] = rows
     return table
 
 
+def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Totals over files: key fields found, mean word recall, precision and F1, mean s/page
+    (clock) and CPU seconds per page."""
+    n = max(1, len(rows))
+    rec = sum(r["word_recall"] for r in rows) / n
+    prec = sum(r["word_precision"] for r in rows) / n
+    f1 = sum(2 * r["word_recall"] * r["word_precision"] / max(1e-9, r["word_recall"] + r["word_precision"])
+             for r in rows) / n
+    if rows and all("cpu_per_page" in r for r in rows):
+        cpu = sum(r["cpu_per_page"] for r in rows) / n
+    else:
+        cpu = rows[0].get("set_cpu_per_page") if rows else None
+    return {"keys": sum(r["keys"] for r in rows), "key_total": sum(r["key_total"] for r in rows),
+            "word_recall": round(rec, 4), "word_precision": round(prec, 4), "word_f1": round(f1, 4),
+            "sec_per_page": round(sum(r["sec_per_page"] for r in rows) / n, 2),
+            "cpu_per_page": round(cpu, 2) if cpu is not None else None, "files": len(rows),
+            "errors": sum(1 for r in rows if r.get("error"))}
+
+
 def _print_table(table: Dict[str, List[Dict[str, Any]]]) -> None:
+    def cpu(v: Any) -> str:
+        return f"{v:6.2f}" if isinstance(v, (int, float)) else f"{'-':>6s}"
+
     for name, rows in table.items():
         print(f"\n== {name}")
-        print(f"{'file':44s} {'type':7s} {'keys':>7s} {'recall':>7s} {'prec':>6s} {'conf':>5s} {'s/page':>7s}  missed")
+        print(f"{'file':38s} {'type':7s} {'keys':>7s} {'recall':>7s} {'prec':>6s} {'conf':>5s} {'s/page':>6s} "
+              f"{'cpu/pg':>6s}  missed")
         for r in rows:
-            print(f"{r['file'].replace('rfq_beta/files/', ''):44s} {r['render']:7s} {r['keys']:>3d}/{r['key_total']:<3d} "
+            print(f"{r['file'].replace('rfq_beta/files/', ''):38s} {r['render']:7s} {r['keys']:>3d}/{r['key_total']:<3d} "
                   f"{r['word_recall']:7.3f} {r['word_precision']:6.3f} {(r['confidence'] or 0):5.1f} "
-                  f"{r['sec_per_page']:7.2f}  {'; '.join(r['missed'])[:120]}{'  ERROR ' + r['error'] if r.get('error') else ''}")
-        keys = sum(r["keys"] for r in rows)
-        total = sum(r["key_total"] for r in rows)
-        print(f"{'ALL':44s} {'':7s} {keys:>3d}/{total:<3d} {sum(r['word_recall'] for r in rows) / len(rows):7.3f} "
-              f"{sum(r['word_precision'] for r in rows) / len(rows):6.3f} {'':5s} "
-              f"{sum(r['sec_per_page'] for r in rows) / len(rows):7.2f}")
+                  f"{r['sec_per_page']:6.2f} {cpu(r.get('cpu_per_page'))}  {'; '.join(r['missed'])[:100]}"
+                  f"{'  ERROR ' + r['error'] if r.get('error') else ''}")
+        for render in RENDER_TYPES:
+            part = [r for r in rows if r["render"] == render]
+            if part and len(part) < len(rows):
+                s = summarize(part)
+                print(f"{'  ' + render:38s} {'':7s} {s['keys']:>3d}/{s['key_total']:<3d} {s['word_recall']:7.3f} "
+                      f"{s['word_precision']:6.3f} {'':5s} {s['sec_per_page']:6.2f} "
+                      f"{cpu(s['cpu_per_page'] if all('cpu_per_page' in r for r in part) else None)}")
+        s = summarize(rows)
+        print(f"{'ALL':38s} {'':7s} {s['keys']:>3d}/{s['key_total']:<3d} {s['word_recall']:7.3f} "
+              f"{s['word_precision']:6.3f} {'':5s} {s['sec_per_page']:6.2f} {cpu(s['cpu_per_page'])}")
+
+
+# --------------------------------------------------------------------------- #
+# The settings search (python ocr.py --evaluate --search)
+# --------------------------------------------------------------------------- #
+# Values tried for each source type, one setting at a time from the current best (coordinate
+# descent, up to three rounds). None and False mean "off"; a two-pass psm is tried with both
+# merges. The start point is the pipeline as it was before the search (START below).
+# A first round on the 13 real files alone also tried --psm 4+11, 6+11 and 3+12 (never better
+# than 3+11, and slower) and nodict and pis, which changed no word (see docs/ocr_settings.md);
+# they are left out here to keep the search inside an hour on a shared 4-core machine.
+_COMMON_SEARCH: Dict[str, List[Any]] = {
+    "invert": [False, True],
+    "psm": [[3], [4], [6], [11], [12], [3, 11], [11, 3]],
+    "threshold": [None, 1, 2],
+    "repair": [False, True],
+    "min_conf": [None, 40, 60],
+    "tess_dpi": [True, False],
+    "deskew": [False, True],
+    "autocontrast": [False, True],
+    "unsharp": [False, True],
+}
+SEARCH: Dict[str, Dict[str, List[Any]]] = {
+    "scan": {"raster_dpi": ["native", 400], **_COMMON_SEARCH, "median": [None, 3]},
+    "lowres": {"target_dpi": [None, 300, 400], "flatten": [False, True], **_COMMON_SEARCH, "median": [None, 3]},
+    "bilevel": {"target_dpi": [None, 300, 400], **_COMMON_SEARCH, "median": [None, 3]},
+    "photo": {"page": [False, True], "target_dpi": [None, 300, 400], "color": [False, True],
+              "flatten": [False, True], **_COMMON_SEARCH},
+    "screen": {"page": [False, True], "target_dpi": [None, 240, 300, 400], "color": [False, True], **_COMMON_SEARCH},
+}
+START: Dict[str, Dict[str, Any]] = {
+    "scan": {"raster_dpi": "native", "psm": [3], "tess_dpi": True},
+    "lowres": {"raster_dpi": "native", "target_dpi": 300, "psm": [3], "tess_dpi": True},
+    "bilevel": {"raster_dpi": "native", "target_dpi": 300, "psm": [3], "tess_dpi": True},
+    "photo": {"page": True, "target_dpi": 300, "psm": [3], "tess_dpi": True},
+    "screen": {"page": True, "target_dpi": 300, "psm": [3], "tess_dpi": True},
+}
+
+
+def _better(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Is summary a better choice than summary b? Key fields first; then word F1, where a
+    slower setting has to earn its time and a faster one may give up a hair of F1."""
+    if a["errors"] != b["errors"]:
+        return a["errors"] < b["errors"]
+    if a["keys"] != b["keys"]:
+        return a["keys"] > b["keys"]
+    gain = a["word_f1"] - b["word_f1"]
+    cost = "cpu_per_page" if a.get("cpu_per_page") and b.get("cpu_per_page") else "sec_per_page"
+    ratio = a[cost] / max(0.01, b[cost])
+    if gain > 0.01:
+        return True
+    if gain > 0.002 and ratio < 1.5:
+        return True
+    return gain > -0.003 and ratio < 0.8
+
+
+def search(render: str, workers: int = 1, rounds: int = 3, log: Optional[Path] = None,
+           start: Optional[Dict[str, Any]] = None, heldout: bool = True) -> Dict[str, Any]:
+    """Coordinate descent over SEARCH for one kind of file, scored on the real beta files of
+    that kind plus (heldout=True) the "tune" part of the held-out pages (see heldout_items).
+    Every run is appended to log (JSON lines) and read back on a rerun, so an interrupted
+    search picks up where it stopped."""
+    kind = RENDER_TYPES[render]
+    real = beta_uncopyable(render)
+    items = heldout_items((render,), "tune") if heldout else {}
+    files = real + list(items)
+    memo: Dict[str, Dict[str, Any]] = {}
+    if log and log.exists():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("render") == render and bool(row.get("heldout")) == heldout:
+                memo[row["settings"]] = row
+    tried: List[Dict[str, Any]] = []
+
+    def run(recipe: Dict[str, Any], change: str) -> Dict[str, Any]:
+        key = settings_text(recipe)
+        if key not in memo:
+            rows = evaluate({key: {t: recipe for t in SOURCE_TYPES}}, files, workers, items)[key]
+            real_rows = [r for r in rows if not r["file"].startswith("heldout/")]
+            ho_rows = [r for r in rows if r["file"].startswith("heldout/")]
+            memo[key] = {"render": render, "settings": key, "heldout": heldout, "summary": summarize(rows),
+                         "real": summarize(real_rows), "held_out": summarize(ho_rows) if ho_rows else None,
+                         "files": [{k: r[k] for k in ("file", "keys", "key_total", "missed", "word_recall",
+                                                       "word_precision", "sec_per_page", "detected")} for r in rows]}
+            if log:
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(memo[key]) + "\n")
+        row = dict(memo[key], change=change)
+        tried.append(row)
+        return row
+
+    current = dict(start or START[kind])
+    best = run(current, "start")
+    for _ in range(rounds):
+        moved = False
+        for dim, values in SEARCH[kind].items():
+            if dim == "merge" and len(current.get("psm") or [3]) < 2:
+                continue  # merging needs two passes
+            for value in values:
+                if value == current.get(dim) or (value in (None, False) and not current.get(dim)):
+                    continue
+                cand = dict(current)
+                if value in (None, False):
+                    cand.pop(dim, None)
+                else:
+                    cand[dim] = value
+                change = f"{dim}={settings_text({dim: value}).partition('=')[2] or 'off'}"
+                cands = [(cand, change)]
+                if dim == "psm" and len(value) > 1:
+                    # A second pass is only worth its time with the right merge, so each
+                    # two-pass mode is tried with both.
+                    cands = [(dict(cand, merge="fill"), change + " (fill)"), (dict(cand, merge="conf"), change + " (conf)")]
+                for cand, change in cands:
+                    row = run(cand, change)
+                    if _better(row["summary"], best["summary"]):
+                        current, best, moved = cand, row, True
+                        row["kept"] = True
+        if not moved:
+            break
+    return {"render": render, "type": kind, "files": real, "heldout": len(items), "best": current,
+            "best_row": best, "tried": tried}
+
+
+def _print_search(res: Dict[str, Any]) -> None:
+    print(f"\n### {res['render']} ({res['type']}): {len(res['files'])} real file(s)"
+          + (f" + {res['heldout']} held-out" if res.get("heldout") else "") + "\n")
+    print("| change | key fields, real | key fields, held-out | word recall | word precision | CPU s/page | kept |")
+    print("|---|---|---|---|---|---|---|")
+    seen = set()
+    for row in res["tried"]:
+        if row["settings"] in seen and not row.get("kept"):
+            continue  # a later round meets settings an earlier one already scored
+        seen.add(row["settings"])
+        s, r, h = row["summary"], row.get("real") or row["summary"], row.get("held_out")
+        held = f"{h['keys']}/{h['key_total']}" if h else "-"
+        print(f"| {row['change']} | {r['keys']}/{r['key_total']} | {held} | {s['word_recall']:.3f} | "
+              f"{s['word_precision']:.3f} | {s['cpu_per_page'] or s['sec_per_page']:.2f} | "
+              f"{'yes' if row.get('kept') else ''} |")
+    s = res["best_row"]["summary"]
+    print(f"\nbest for {res['render']}: `{settings_text(res['best'])}`  keys {s['keys']}/{s['key_total']}, "
+          f"F1 {s['word_f1']:.3f}, {s['cpu_per_page'] or s['sec_per_page']:.2f} CPU s/page")
 
 
 # --------------------------------------------------------------------------- #
@@ -1306,20 +1833,35 @@ def _media_of(path: Path) -> str:
         path.suffix.lower(), "")
 
 
-def build_cache(path: Path = DEFAULT_CACHE, effort: str = "best") -> int:
+def build_cache(path: Path = DEFAULT_CACHE, effort: str = "best", files: Optional[List[Path]] = None) -> int:
+    """Read every beta file (all of them: text layers and STEP headers too, so a restarted server
+    needs neither pypdf nor tesseract for them) and save the results keyed by SHA-256."""
     cache = OcrCache(path)
     cache.entries = {}
-    files = sorted(p for p in BETA_FILES.rglob("*") if p.is_file())
+    t = _tools()
+    cache.meta = {"tesseract_version": t["tesseract_version"], "effort": effort,
+                  "settings": {kind: recipe_record(r) for kind, r in recipes_for(effort).items()},
+                  "made_by": "python ocr.py --build-cache"}
+    files = files if files is not None else sorted(p for p in BETA_FILES.rglob("*") if p.is_file())
+    failed = 0
     for p in files:
         res = file_text(p.read_bytes(), _media_of(p), p.name, effort=effort, timeout=max(OCR_TIMEOUT, 900))
-        rel = p.relative_to(HERE).as_posix()
-        if res["method"] == "ocr" and not res.get("error"):
+        try:
+            rel = p.resolve().relative_to(HERE / "data").as_posix()
+        except ValueError:
+            rel = p.name
+        if res["method"] == "none" or res.get("error"):
+            failed += 1  # never cache a failure: the next reader should try again
+        else:
             cache.put(res["sha256"], dict(res, file=rel))
-        print(f"{res['method']:12s} {res['seconds']:6.1f} s  conf {res['confidence'] or 0:5.1f}  {rel}"
+        conf = f"conf {res['confidence']:5.1f}" if res.get("confidence") is not None else " " * 10
+        print(f"{res['method']:12s} {res['seconds']:6.1f} s  {conf}  {rel}"
               + (f"  ERROR {res['error']}" if res.get("error") else ""))
     cache.save()
-    print(f"{len(cache.entries)} OCR results saved to {path}")
-    return 0
+    counts = Counter(e["method"] for e in cache.entries.values())
+    print(f"{len(cache.entries)} results saved to {path} ({', '.join(f'{n} {m}' for m, n in sorted(counts.items()))})"
+          + (f"; {failed} file(s) failed" if failed else ""))
+    return 1 if failed else 0
 
 
 def main(argv: List[str]) -> int:
@@ -1329,8 +1871,19 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--build-cache", action="store_true")
     ap.add_argument("--evaluate", action="store_true")
     ap.add_argument("--settings", action="append", default=[],
-                    help="baseline | fast | best | key=value,... (repeatable), for --evaluate")
+                    help="for --evaluate: baseline | before | best | fast | key=value,... (repeatable)")
     ap.add_argument("--only", default="", help="for --evaluate: comma-separated substrings of file paths")
+    ap.add_argument("--type", default="", help="for --evaluate: comma-separated kinds (scan,copier,fax,photo,screen)")
+    ap.add_argument("--search", action="store_true", help="for --evaluate: search the settings per kind of file")
+    ap.add_argument("--rounds", type=int, default=3, help="for --search: passes over the settings")
+    ap.add_argument("--log", default=None, help="for --search: JSON-lines log; a rerun resumes from it")
+    ap.add_argument("--real-only", action="store_true",
+                    help="for --search: score on the real beta files only, without the held-out pages")
+    ap.add_argument("--heldout", nargs="?", const="check", choices=("check", "tune", "all"),
+                    help="for --evaluate: score degraded copies of the digital beta PDFs instead "
+                         "(check: the 5 per kind the search never saw; tune; all)")
+    ap.add_argument("--model", default=None,
+                    help="for --evaluate: also score best and fast with the eng.traineddata in this folder")
     ap.add_argument("--workers", type=int, default=1, help="for --evaluate: files OCR'd side by side")
     ap.add_argument("--effort", default="best", choices=("best", "fast"))
     ap.add_argument("--cache", default=None, help="cache file for FILE mode (default: none)")
@@ -1339,21 +1892,47 @@ def main(argv: List[str]) -> int:
     if args.build_cache:
         return build_cache(effort=args.effort)
     if args.evaluate:
+        if not available()["ocr"]:
+            print("tesseract is not installed")
+            return 1
         bad = truth_ceiling()
         for rel, missed in bad:
             print(f"harness cannot find in the truth words of {rel}: {missed}")
+        print(f"tesseract {_tools()['tesseract_version']} ({_tools()['tesseract']}), OMP_THREAD_LIMIT=1, "
+              f"{args.workers} file(s) at a time")
+        renders = [r for r in args.type.split(",") if r] or list(RENDER_TYPES)
+        if args.search:
+            results = []
+            for render in renders:
+                res = search(render, args.workers, args.rounds, Path(args.log) if args.log else None,
+                             heldout=not args.real_only)
+                _print_search(res)
+                results.append(res)
+            print("\nchosen per kind:")
+            for res in results:
+                print(f"  {res['type']:8s} {settings_text(res['best'])}")
+            if args.json:
+                Path(args.json).write_text(json.dumps(results, indent=1), encoding="utf-8")
+            return 0
         named: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        for s in args.settings or ["baseline", "fast", "best"]:
+        for s in args.settings or ["baseline", "before", "best", "fast"]:
             if s == "baseline":
                 named[s] = {t: dict(BASELINE) for t in SOURCE_TYPES}
+            elif s == "before":
+                named[s] = {t: dict(START[t]) for t in SOURCE_TYPES}
             elif s in ("best", "fast"):
                 named[s] = recipes_for(s)
             else:
                 named[s] = {t: parse_settings(s) for t in SOURCE_TYPES}
-        files = beta_uncopyable()
+        if args.model:
+            for s in ("best", "fast"):
+                named[f"{s}+{Path(args.model).name}"] = {t: dict(r, tessdata=args.model)
+                                                         for t, r in recipes_for(s).items()}
+        items = heldout_items(tuple(renders), args.heldout) if args.heldout else None
+        files = list(items) if items else [f for r in renders for f in beta_uncopyable(r)]
         if args.only:
             files = [f for f in files if any(o in f for o in args.only.split(","))]
-        table = evaluate(named, files, args.workers)
+        table = evaluate(named, files, args.workers, items)
         _print_table(table)
         if args.json:
             Path(args.json).write_text(json.dumps(table, indent=1), encoding="utf-8")
