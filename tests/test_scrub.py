@@ -16,6 +16,7 @@ manifest.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -660,6 +661,13 @@ class OutputTests(ScrubTestCase):
         self.scrub(str(self.inbox / "dash.eml"), "--lane", "milling_3axis")
         self.assertEqual(self.one_output(), data)
 
+    def test_report_never_says_nothing_found(self):
+        self.put("c.msg", email_c())
+        report = self.scrub(str(self.inbox / "c.msg"), "--lane", "milling_5axis")
+        self.assertNotIn("nothing found", report)
+        self.assertIn("no match for the checks (", report)
+        self.assertIn("read the whole file", report)
+
     def test_dry_run_writes_nothing(self):
         self.put("a.eml", email_a())
         report = self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", "--dry-run",
@@ -725,12 +733,54 @@ class ConsistencyTests(ScrubTestCase):
         self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=out1)
         self.assertEqual(self.one_output(out1), before)
 
-    def test_fakes_are_deterministic_without_the_map(self):
+    def test_fakes_come_from_the_private_map_salt(self):
+        # The same map gives the same fakes on every rerun; another map (another salt) gives
+        # other fakes, so nobody without the private map can confirm a guessed name.
         self.put("a.eml", email_a())
-        o1, o2 = self.dir / "o1", self.dir / "o2"
-        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=o1, map_file=self.dir / "m1.json")
-        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=o2, map_file=self.dir / "m2.json")
-        self.assertEqual(self.one_output(o1), self.one_output(o2))
+        o1, o2, o3 = self.dir / "o1", self.dir / "o2", self.dir / "o3"
+        m1, m2 = self.dir / "m1.json", self.dir / "m2.json"
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=o1, map_file=m1)
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=o2, map_file=m2)
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis", out=o3, map_file=m1)
+        first, second, again = self.one_output(o1), self.one_output(o2), self.one_output(o3)
+        self.assertEqual(first, again)
+        self.assertEqual(self.outputs(o1)[0].name, self.outputs(o3)[0].name)
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(self.outputs(o1)[0].name, self.outputs(o2)[0].name)
+        map1 = json.loads(m1.read_text(encoding="utf-8"))
+        map2 = json.loads(m2.read_text(encoding="utf-8"))
+        self.assertRegex(map1["salt"], r"^[0-9a-f]{32}$")
+        self.assertNotEqual(map1["salt"], map2["salt"])
+        self.assertNotEqual(map1["first"], map2["first"])
+        self.assertNotEqual(map1["phone"], map2["phone"])
+        self.assertNotIn(map1["salt"].encode(), first)
+        self.assertNotIn(map1["salt"], (o1 / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_a_guess_without_the_salt_confirms_nothing(self):
+        # What the reviewer did: hash each candidate name the way the tool picks a fake. With the
+        # salt left out, the guesses no longer line up with the fakes the map chose.
+        smap = scrub.ScrubMap(self.dir / "m.json")
+        names = ["marisol", "ignatius", "tobiah", "oriel", "priscilla", "anatole", "evander", "wendeline"]
+        chosen = [smap.pick("first", n, scrub.FAKE_FIRST) for n in names]
+        unsalted = [scrub.FAKE_FIRST[int.from_bytes(hashlib.sha256(
+            "\x1f".join(("first", n)).encode()).digest()[:8], "big") % len(scrub.FAKE_FIRST)] for n in names]
+        self.assertNotEqual(chosen, unsalted)
+        other = scrub.ScrubMap(self.dir / "other.json")
+        self.assertNotEqual(chosen, [other.pick("first", n, scrub.FAKE_FIRST) for n in names])
+        smap.save()
+        reloaded = scrub.ScrubMap(self.dir / "m.json")
+        self.assertEqual(reloaded.salt, smap.salt)
+        self.assertEqual([reloaded.pick("first", n, scrub.FAKE_FIRST) for n in names], chosen)
+        self.assertNotEqual(scrub.ScrubMap(None).salt, scrub.ScrubMap(None).salt)
+
+    def test_short_numbers_never_keep_their_real_value(self):
+        for salt in ("a", "b", "c", "d", "e", "f"):
+            for real in ("4", "12", "340", "4B", "117"):
+                self.assertNotEqual(scrub.same_width_digits(salt, "ext", re.sub(r"\D", "", real) or "4"),
+                                    re.sub(r"\D", "", real) or "4")
+                smap = scrub.ScrubMap(None)
+                smap.salt = salt
+                self.assertNotEqual(scrub.Scrubber(smap)._fake_unit_num(real), real)
 
     def test_part_numbers_kept_and_listed_by_default(self):
         self.put("a.eml", email_a())
@@ -1019,7 +1069,7 @@ class ReplacementTests(unittest.TestCase):
         for real, want in (("jana.kolvenbach", f"{ff}.{fl}"), ("jkolvenbach", f"{ff[0]}{fl}"),
                            ("janak", f"{ff}{fl[0]}"), ("kolvenbachj", f"{fl}{ff[0]}"),
                            ("jana_kolvenbach2", None)):
-            got = scrub.mimic_local(real, "Jana", "Kolvenbach", ff, fl)
+            got = scrub.mimic_local(real, "Jana", "Kolvenbach", ff, fl, s.map.salt)
             if want:
                 self.assertEqual(got, want)
             else:
@@ -1036,6 +1086,39 @@ class ReplacementTests(unittest.TestCase):
         s2.add_person("Radomir", "Doe")
         fake = s2.scrub_text("Radomir Doe")
         self.assertEqual(scrub.check_these(s2, [("body", fake)]), [])
+
+    def test_trade_names_are_companies(self):
+        text = ("We buy from Halvorsen Tool & Die and Pemberton Castings.\n"
+                "Kelmscott Machining quoted too. Pemberton is slow.\n"
+                "Precision machined parts. Our Engineering team will review.")
+        out, _ = scrub_one_text(text)
+        for word in ("Halvorsen", "Pemberton", "Kelmscott"):
+            self.assertNotIn(word, out)
+        for keep in ("Tool & Die", "Castings", "Machining quoted", "Precision machined parts",
+                     "Our Engineering team will review"):
+            self.assertIn(keep, out)
+
+    def test_check_list_covers_foreign_addresses_trade_names_and_lone_names(self):
+        text = ("Talk to Gunnar about it. Vandyne Systems spec applies.\n"
+                "Ship to: Unit 4, Brackmills Industrial Estate, Northampton NN4 7PB\n"
+                "Norway office: Hoffsveien 21, 0275 Oslo. Also 12 rue de la Paix, 75002 Paris.\n"
+                "Qty 1000 Pcs, 6061 Aluminum, 4140 Steel, 8-32 UNC-2B, Rev B, ISO 2768 Medium.")
+        s = fresh()
+        joined = "\n".join(scrub.check_these(s, [("body", text)]))
+        for flagged in ('possible name "Gunnar"', 'possible company "Vandyne Systems"',
+                        'possible UK postcode "NN4 7PB"', 'possible address "Brackmills Industrial Estate"',
+                        'possible postal code and city "0275 Oslo"', 'possible street address "Hoffsveien 21"',
+                        'possible postal code and city "75002 Paris"', 'possible street address "12 rue de la Paix"'):
+            self.assertIn(flagged, joined)
+        for quiet in ("1000 Pcs", "6061 Aluminum", "4140 Steel", "UNC", "2768"):
+            self.assertNotIn(quiet, joined)
+
+    def test_a_real_word_that_is_a_fake_elsewhere_is_still_checked(self):
+        # "Gunnar" is a fake first name the map may give someone else; in this email it is real.
+        s = fresh()
+        s.map.set("first", "someone", "Gunnar")
+        checks = scrub.check_these(s, [("body", "Talk to Gunnar about it.")])
+        self.assertTrue(any("Gunnar" in c for c in checks), checks)
 
     def test_check_list_flags_a_known_name_left_behind(self):
         s = fresh()
@@ -1091,7 +1174,7 @@ class RepoRuleTests(unittest.TestCase):
         imports = set(re.findall(r"^(?:from|import) ([\w.]+)", source, re.M))
         allowed = {"__future__", "argparse", "glob", "hashlib", "json", "os", "re", "sys", "unicodedata",
                    "collections", "datetime", "email", "email.headerregistry", "email.message",
-                   "email.policy", "pathlib", "typing", "mailfile"}
+                   "email.policy", "pathlib", "typing", "secrets", "mailfile"}
         self.assertLessEqual(imports, allowed, imports - allowed)
 
 

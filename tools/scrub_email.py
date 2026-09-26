@@ -17,7 +17,9 @@ one run is scrubbed with what was learned from all of them, so run related email
 --lane review needs --rfq or --not-rfq; the other lanes imply it. --map-file picks another map.
 
 What it replaces, the same way in every email and on every run (the real-to-fake map is kept in
-private_emails/.scrub_map.json, so a rerun gives the same fakes):
+private_emails/.scrub_map.json, so a rerun gives the same fakes). The map also holds a random
+secret salt that every fake is picked with, so nobody can work back from a committed fake by
+hashing guessed names; losing the map means new fakes and new file names on the next run.
     people      names in From/To/Cc and the same names in the subject and body: full names, first
                 names alone, "Last, First", initials, possessives, names split across lines,
                 greetings, sign-offs, signature blocks, quoted reply headers, "Mr. Smith", and a
@@ -25,8 +27,9 @@ private_emails/.scrub_map.json, so a rerun gives the same fakes):
     email       every address, mailto: links included (role mailboxes such as quotes@ keep their
                 name, on a fake domain)
     domains     every domain and URL; paths and tracking queries are dropped
-    companies   names ending in Inc, LLC, Corp, Co., Ltd, GmbH and the like, company lines in
-                signatures, and names that match a sender's domain. Distinctive words are replaced
+    companies   names ending in Inc, LLC, Corp, Co., Ltd, GmbH and the like or in a trade (Tool &
+                Die, Castings, Machining, Engineering), company lines in signatures, and names
+                that match a sender's domain. Distinctive words are replaced
                 and generic trade words (Precision, Aerospace, Machining) are kept, so the email
                 still reads like the same kind of customer.
     phones      US and international numbers, extensions, fax; US fakes use the fictional 555-01xx
@@ -41,7 +44,9 @@ X-MS-Exchange-*, In-Reply-To) are not copied.
 
 The review report lists every replacement (real -> fake, with counts) and a "check these" list of
 anything in the output that still looks like a name, company, phone number, email address, or
-street address. It prints real values, so it goes to the terminal only.
+street address, UK and European postcodes and street forms included. Those checks are patterns,
+so an empty list says what was checked, never that nothing is there. The report prints real
+values, so it goes to the terminal only.
 
 Standard library only.
 """
@@ -54,6 +59,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import unicodedata
 from collections import Counter
@@ -256,6 +262,7 @@ individually bagged bag bags bulk critical characteristic characteristics hot ro
 stress relieve relieved relief laser etch etched engrave engraved marking marked facility
 facilities plant plants balloon ballooned sheet sheets gauge gage rough roughing finishing
 thanksgiving christmas holidays warehouse dock hours tooling setup setups fixturing lot lots
+pcs pc ea lbs lb kg mm psi rpm hrs sets pairs pieces
 cheers regards sincerely respectfully cordially thx tia obrigado obrigada gracias saludos
 atentamente merci cordialement danke grazie saluti mfg
 """)
@@ -281,6 +288,8 @@ ltd limited co gmbh plc and of the & north south east west central pacific atlan
 southwest northwest southeast northeast western eastern northern southern mountain valley
 coast bay lakes innovations innovative integrated applied allied universal standard premier
 pro elite apex summit pioneer frontier liberty eagle star mfg. machine-works shop shops
+die dies stamping stampings molding moulding plating anodizing finishing extrusion extrusions
+screw metalworks treating
 usinagem usinage mecanica mecanique mecanizados maquinados industria industrias industrie
 maschinenbau fertigung technik zerspanung metalurgica
 """)
@@ -524,6 +533,17 @@ CONTEXT_AFTER_RE = re.compile(
     r"(?<![\w])" + _PAIR + r"[ \t]+(?:will|would|said|says|mentioned|asked|wants|called|emailed|sent|wrote|"
     r"told|suggested|requested|confirmed|approved|noted|handles|owns|runs|manages|is[ \t]+out|"
     r"is[ \t]+our|from[ \t]+our|at[ \t]+our|in[ \t]+our|of[ \t]+our)\b")
+# Trade words that end a company name. Strong ones are rarely anything else; weak ones are also
+# plain adjectives, so they count only at the end of a short capitalized name.
+TRADE_STRONG_RE = re.compile(
+    r"(?<![\w&])(?P<trade>Tool[ \t]*(?:&|and)[ \t]*Die|Tool[ \t]+Works|Machine[ \t]+(?:Works|Shop|Products|Tool)|"
+    r"Castings?|Forg(?:e|ings?)|Foundry|Manufacturing|Mfg\.?|Industries|Machining|Fabrication|Fabricators|"
+    r"Engineering|Welding|Grinding|Tooling|Metalworks|Plating|Anodizing|Heat[ \t]+Treating|Stamping|"
+    r"Moul?ding|Extrusions?|Screw[ \t]+Products|Gear[ \t]+Works|Machine[ \t]+Company)(?![\w])")
+TRADE_WEAK_RE = re.compile(
+    r"(?<![\w&])(?P<trade>Precision|Aerospace|Automation|Robotics|Hydraulics|Pneumatics|Instruments|"
+    r"Technologies|Metals|Plastics|Dynamics|Controls|Components|Enterprises|Systems|Products|Solutions|"
+    r"Devices|Motion|Optics|Labs|Laboratories|Group|Holdings|Machine)(?![\w])")
 LABELED_COMPANY_RE = re.compile(
     r"(?im)^[ \t>*]*(?:company|customer|vendor|supplier|organi[sz]ation|firm|sold[ -]to|ship[ -]to|"
     r"bill[ -]to|end[ -]user)(?:[ \t]+name)?[ \t]*:[ \t]*(?P<v>[A-Z][^\n,;|\d]{1,60}?)[ \t]*(?:[,;|\n]|$)")
@@ -561,12 +581,31 @@ def _esc(word: str) -> str:
     return re.escape(word).replace("'", "['\u2019]")
 
 
-def _h(*parts: str) -> int:
-    return int.from_bytes(hashlib.sha256("\x1f".join(parts).encode("utf-8")).digest()[:8], "big")
+# Every fake is picked from a hash of the real value mixed with the map's secret salt. Without the
+# salt, anyone with the repo could hash guessed names with this code and see which one gives a
+# fake in a committed file; with it, only the private map can say what a fake stands for.
+def _h(salt: str, *parts: str) -> int:
+    return int.from_bytes(hashlib.sha256("\x1f".join((salt,) + parts).encode("utf-8")).digest()[:8], "big")
 
 
-def _hex(*parts: str, n: int = 8) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:n]
+def _hex(salt: str, *parts: str, n: int = 8) -> str:
+    return hashlib.sha256("\x1f".join((salt,) + parts).encode("utf-8")).hexdigest()[:n]
+
+
+def other_than(salt: str, kind: str, real: str, make) -> str:
+    """make(hash) for a short number (a suite, an extension, a ZIP), tried again until it is not
+    the real value: with few digits a fake can otherwise come out the same by chance."""
+    fake = real
+    for i in range(40):
+        fake = make(_h(salt, kind, real, str(i)))
+        if fake != real:
+            break
+    return fake
+
+
+def same_width_digits(salt: str, kind: str, real: str) -> str:
+    n = len(real)
+    return other_than(salt, kind, real, lambda h: str(h % 10 ** n).zfill(n))
 
 
 def fold(text: str) -> str:
@@ -790,7 +829,7 @@ def local_matches(base: str, first: str, last: str) -> bool:
     return base in options
 
 
-def mimic_local(local: str, first: str, last: str, ffirst: str, flast: str) -> str:
+def mimic_local(local: str, first: str, last: str, ffirst: str, flast: str, salt: str) -> str:
     """Build a fake mailbox name in the same pattern as the real one (jdoe -> nfarrow)."""
     lo = local.lower()
     digits = re.search(r"\d+$", lo)
@@ -799,7 +838,7 @@ def mimic_local(local: str, first: str, last: str, ffirst: str, flast: str) -> s
     f, s = squash(first), squash(last)
     ff, fs = squash(ffirst) or "alex", squash(flast) or "doe"
     if tail:
-        tail = str(_h("tail", lo) % (10 ** len(tail))).zfill(len(tail))
+        tail = same_width_digits(salt, "tail", tail)
     options: List[Tuple[str, str]] = []
     hy = re.sub(r"[^a-z0-9-]", "", fold(last).lower())
     if f and hy and hy != s:        # pashworth-lund for Priscilla Ashworth-Lund
@@ -844,6 +883,11 @@ class ScrubMap:
             for s in self.SECTIONS:
                 if isinstance(loaded.get(s), dict):
                     self.data[s].update(loaded[s])
+            if isinstance(loaded.get("salt"), str) and loaded["salt"]:
+                self.data["salt"] = loaded["salt"]
+        self.is_new = "salt" not in self.data
+        self.data.setdefault("salt", secrets.token_hex(16))
+        self.salt: str = self.data["salt"]
         # Kept up to date as values are added, so picking a fake stays fast with a big map.
         self._used: Dict[str, Set[str]] = {s: set() for s in self.SECTIONS}
         self._reals: Set[str] = set()
@@ -885,7 +929,7 @@ class ScrubMap:
         used = self._used[section]
         reals = self._reals
         n = len(candidates)
-        start = _h(section, key) % n
+        start = _h(self.salt, section, key) % n
         choice = candidates[start]
         for i in range(n):
             c = candidates[(start + i) % n]
@@ -1040,7 +1084,7 @@ class Scrubber:
                 return          # one generic word ("Precision") is no company name
             key = " ".join(lowered)
             stem = self.map.pick("company", "whole:" + key, COMPANY_STEMS)
-            trade = COMPANY_TRADES[_h("trade", key) % len(COMPANY_TRADES)][0]
+            trade = COMPANY_TRADES[_h(self.map.salt, "trade", key) % len(COMPANY_TRADES)][0]
             if not self.map.get("company", key):
                 self.map.set("company", key, f"{stem} {trade}")
         self.map.set("company_forms", " ".join(lowered), True)
@@ -1154,20 +1198,21 @@ class Scrubber:
             first, _, last = person.partition("|")
             ff = self.fake_token(first, "first") if first else ""
             fl = self.fake_token(last, "last") if last else ""
-            flocal = mimic_local(local, first, last, ff or fake_first_for(local), fl or fake_last_for(local))
+            flocal = mimic_local(local, first, last, ff or fake_first_for(local, self.map.salt),
+                                 fl or fake_last_for(local, self.map.salt), self.map.salt)
         else:
             guess = local_part_name(local)
             if guess:
                 self.add_person(*guess)
                 flocal = mimic_local(local, guess[0], guess[1], self.fake_token(guess[0], "first"),
-                                     self.fake_token(guess[1], "last"))
+                                     self.fake_token(guess[1], "last"), self.map.salt)
             else:
-                ff = FAKE_FIRST[_h("lf", local) % len(FAKE_FIRST)]
-                fl = FAKE_LAST[_h("ll", local) % len(FAKE_LAST)]
+                ff = FAKE_FIRST[_h(self.map.salt, "lf", local) % len(FAKE_FIRST)]
+                fl = FAKE_LAST[_h(self.map.salt, "ll", local) % len(FAKE_LAST)]
                 flocal = (ff[0] + fl).lower() if len(base) > 2 else ff.lower()
                 digits = re.search(r"\d+$", local)
                 if digits:
-                    flocal += str(_h("d", local) % (10 ** len(digits.group(0)))).zfill(len(digits.group(0)))
+                    flocal += same_width_digits(self.map.salt, "d", digits.group(0))
         fake = f"{flocal}@{fhost}"
         used = self.map.used("email")
         n = 2
@@ -1185,7 +1230,7 @@ class Scrubber:
             if v:
                 return v
         self.add_name_token(prefer, token)
-        return self.map.get(prefer, key) or FAKE_FIRST[_h("t", key) % len(FAKE_FIRST)]
+        return self.map.get(prefer, key) or FAKE_FIRST[_h(self.map.salt, "t", key) % len(FAKE_FIRST)]
 
     def fake_phone_digits(self, digits: str, cc: str) -> str:
         """Same number of digits; US numbers become AAA-555-01XX."""
@@ -1195,7 +1240,7 @@ class Scrubber:
             return got
         used = self.map.used("phone")
         for salt in range(200):
-            h = _h("phone", key, str(salt))
+            h = _h(self.map.salt, "phone", key, str(salt))
             if cc == "44" and len(digits) == 12:
                 # Ofcom's ranges for drama: 020 7946 0xxx and 07700 900xxx.
                 head = "7700900" if digits[2] == "7" else "2079460"
@@ -1223,7 +1268,7 @@ class Scrubber:
             return got
         used = self.map.used("part")
         for salt in range(50):
-            h = hashlib.sha256(f"part\x1f{key}\x1f{salt}".encode()).digest()
+            h = hashlib.sha256(f"{self.map.salt}\x1fpart\x1f{key}\x1f{salt}".encode()).digest()
             out = []
             for i, ch in enumerate(part):
                 b = h[i % len(h)]
@@ -1476,25 +1521,22 @@ class Scrubber:
             if 1 <= len(value.split()) <= 6 and all(w[0].isupper() or w in ("&", "and", "of") for w in value.split()):
                 self.add_company(value)
         for m in COMPANY_SUFFIX_RE.finditer(text):
-            before = text[: m.start()]
-            line_start = before.rfind("\n") + 1
-            seg = before[line_start:].rstrip(" ,\t")
-            # "Sr. Buyer, Acme Precision Inc.": the name starts after the last comma or bar.
-            seg = re.split(r"[,;:|()\[\]<>\u2022\u00b7]|\s-\s", seg)[-1]
-            words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&.\-]*|&", seg)
-            run: List[str] = []
-            for w in reversed(words):
-                if w[0].isupper() or w[0].isdigit() and run or w in ("&", "and", "of", "de"):
-                    run.insert(0, w)
-                    if len(run) >= 5:
-                        break
-                else:
-                    break
-            while run and (run[0].lower() in ("and", "of", "&", "de") or
-                           (run[0].lower().strip(".") in NOT_A_NAME and run[0].lower().strip(".") not in INDUSTRY_WORDS)):
-                run.pop(0)
-            if run and seg.endswith(run[-1]):
+            run = company_words_before(text, m.start())
+            if run:
                 self.add_company(" ".join(run) + " " + m.group("suf"))
+        # "Halvorsen Tool & Die", "Pemberton Castings": a trade name is a company name too.
+        known_people = set(self.map.data["first"]) | set(self.map.data["last"])
+        for rx, loose in ((TRADE_STRONG_RE, False), (TRADE_WEAK_RE, True)):
+            for m in rx.finditer(text):
+                run = company_words_before(text, m.start())
+                distinct = [w for w in run if is_distinctive(w)]
+                if not distinct or all(w.lower() in known_people for w in distinct):
+                    continue
+                # A weak trade word ("Precision", "Systems") must end the name: "Acme Precision
+                # machined parts" is not "Acme Precision Machined".
+                if loose and (len(run) > 2 or re.match(r"[ \t]+[a-z]", text[m.end():m.end() + 3])):
+                    continue
+                self.add_company(" ".join(run) + " " + m.group("trade"))
 
     def _collect_domain_matches(self, text: str) -> None:
         """Capitalized words that spell a sender's domain ("Acme Precision" for
@@ -1644,7 +1686,7 @@ class Scrubber:
             path = rest[len(hostport):]
             fhost = self.fake_domain(host)
             if is_public_service(host) and path.strip("/"):
-                fpath = "/s/" + _hex("url", url, n=10)
+                fpath = "/s/" + _hex(self.map.salt, "url", url, n=10)
             else:
                 fpath = "/" if path else ""
             fake = scheme + fhost + fpath
@@ -1697,7 +1739,7 @@ class Scrubber:
         fext = ""
         if ext:
             ed = re.search(r"\d+$", ext).group(0)
-            fe = str(_h("ext", ed) % (10 ** len(ed))).zfill(len(ed))
+            fe = same_width_digits(self.map.salt, "ext", ed)
             fext = ext[: len(ext) - len(ed)] + fe
         self._count("phone", num + (ext or ""), fake + fext)
         self.leak_terms.add(("phone digits", digits[-7:]))
@@ -1731,7 +1773,7 @@ class Scrubber:
             real = m.group(0)
             key = _norm_ws(f"{m.group('num')} {name} {m.group('suf')}").lower().rstrip(".")
             fake_name = self.map.pick("street", key, FAKE_STREETS)
-            num = str(100 + _h("num", key) % 9800)
+            num = other_than(self.map.salt, "num", m.group("num"), lambda h: str(100 + h % 9800))
             fake = f"{num} {fake_name} {m.group('suf')}"
             if m.group("unit"):
                 fake += self._fake_unit(m.group("unit"))
@@ -1747,13 +1789,13 @@ class Scrubber:
         def route(m: re.Match) -> str:
             real = m.group(0)
             key = real.lower()
-            fake = f"{100 + _h('route', key) % 9800} {self.map.pick('street', key, FAKE_STREETS)} Rd"
+            fake = f"{100 + _h(self.map.salt, 'route', key) % 9800} {self.map.pick('street', key, FAKE_STREETS)} Rd"
             self._count("street", real, fake)
             return slots.put(fake)
         s = ROUTE_RE.sub(route, s)
 
         def pobox(m: re.Match) -> str:
-            fake = f"{m.group('label')} {100 + _h('box', m.group('num')) % 9800}"
+            fake = f"{m.group('label')} {other_than(self.map.salt, 'box', m.group('num'), lambda h: str(100 + h % 9800))}"
             self._count("po box", m.group(0), fake)
             return slots.put(fake)
         s = POBOX_RE.sub(pobox, s)
@@ -1784,13 +1826,13 @@ class Scrubber:
             if with_zip and m.groupdict().get("zip"):
                 z = m.group("zip")
                 if m.re is CITY_CA_RE:
-                    fz = "".join(("ABCEGHJKLMNPRSTVXY"[_h("pc", z, str(i)) % 18] if c.isalpha()
-                                  else str(_h("pc", z, str(i)) % 10) if c.isdigit() else c)
-                                 for i, c in enumerate(z))
+                    fz = other_than(self.map.salt, "pc", z, lambda h: "".join(
+                        ("ABCEGHJKLMNPRSTVXY"[(h >> (5 * i)) % 18] if c.isalpha()
+                         else str((h >> (5 * i)) % 10) if c.isdigit() else c) for i, c in enumerate(z)))
                 else:
-                    fz = str(10000 + _h("zip", z[:5]) % 89999).zfill(5)
+                    fz = other_than(self.map.salt, "zip", z[:5], lambda h: str(10000 + h % 89999))
                     if len(z) > 5:
-                        fz += "-" + str(_h("zip4", z) % 10000).zfill(4)
+                        fz += "-" + same_width_digits(self.map.salt, "zip4", z[6:])
                 out = out[::-1].replace(z[::-1], fz[::-1], 1)[::-1]
             fake_city = match_case(real_city, fcity)
             self._count("city", m.group(0)[len(" ".join(keep)):].strip(), (fake_city + out).strip())
@@ -1807,7 +1849,7 @@ class Scrubber:
         fc = self.map.get("city", key)
         if not fc:
             used = self.map.used("city")
-            start = _h("city", key)
+            start = _h(self.map.salt, "city", key)
             pair = FAKE_CITIES[start % len(FAKE_CITIES)]
             for i in range(len(FAKE_CITIES)):
                 cand = FAKE_CITIES[(start + i) % len(FAKE_CITIES)]
@@ -1821,7 +1863,8 @@ class Scrubber:
         return fcity, fstate
 
     def _fake_unit_num(self, num: str) -> str:
-        return "".join(str(_h("unit", num, str(i)) % 9 + 1) if c.isdigit() else c for i, c in enumerate(num))
+        return other_than(self.map.salt, "unit", num, lambda h: "".join(
+            str((h >> (4 * i)) % 9 + 1) if c.isdigit() else c for i, c in enumerate(num)))
 
     def _fake_unit(self, unit: str) -> str:
         m = re.search(r"[A-Z0-9][A-Z0-9\-]*$", unit)
@@ -1993,7 +2036,7 @@ class Scrubber:
                             return match_case(w, ff[0])
                         if lw == last[0].lower() and not span.lower().startswith(lw):
                             return match_case(w, fl[0])
-                        return match_case(w, "ABCDEFGHJKLMNPRSTW"[_h("mi", w, first) % 18])
+                        return match_case(w, "ABCDEFGHJKLMNPRSTW"[_h(self.map.salt, "mi", w, first) % 18])
                     return w
                 out = re.sub(r"[^\W\d_]+(?:['\u2019\-][^\W\d_]+)*", tok, span.replace("\u2019", "'"))
                 out = re.sub(r"\s{2,}", " ", out) if not re.search(r"\n", span) else out
@@ -2092,6 +2135,31 @@ def name_context(text: str, start: int, end: int) -> bool:
     return False
 
 
+def company_words_before(text: str, pos: int) -> List[str]:
+    """The capitalized words just before a company suffix or trade word on the same line:
+    "Sr. Buyer, Acme Precision Inc." -> ["Acme", "Precision"]."""
+    before = text[:pos]
+    seg = before[before.rfind("\n") + 1:].rstrip(" ,\t")
+    # The name starts after the last comma, bar, bracket, or sentence end.
+    seg = re.split(r"[,;:|()\[\]<>\u2022\u00b7]|\s-\s|\.\s", seg)[-1]
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&.\-]*|&", seg)
+    run: List[str] = []
+    for w in reversed(words):
+        # "&" joins a name ("Tool & Die"); a lowercase "and" joins two names.
+        if w[0].isupper() or w[0].isdigit() and run or w in ("&", "of", "de"):
+            run.insert(0, w)
+            if len(run) >= 5:
+                break
+        else:
+            break
+    while run and (run[0].lower() in ("and", "of", "&", "de") or
+                   (run[0].lower().strip(".") in NOT_A_NAME and run[0].lower().strip(".") not in INDUSTRY_WORDS)):
+        run.pop(0)
+    if not run or not seg.endswith(run[-1]):
+        return []
+    return run
+
+
 def company_core(name: str) -> List[str]:
     """'The Acme Precision Machining, Inc.' -> ['Acme', 'Precision', 'Machining']"""
     text = _norm_ws(name.replace(",", " "))
@@ -2148,12 +2216,12 @@ def split_stem(stem: str) -> List[str]:
     return [s] + tail
 
 
-def fake_first_for(key: str) -> str:
-    return FAKE_FIRST[_h("ff", key) % len(FAKE_FIRST)]
+def fake_first_for(key: str, salt: str) -> str:
+    return FAKE_FIRST[_h(salt, "ff", key) % len(FAKE_FIRST)]
 
 
-def fake_last_for(key: str) -> str:
-    return FAKE_LAST[_h("fl", key) % len(FAKE_LAST)]
+def fake_last_for(key: str, salt: str) -> str:
+    return FAKE_LAST[_h(salt, "fl", key) % len(FAKE_LAST)]
 
 
 def sanitize_filename(name: str) -> str:
@@ -2165,13 +2233,30 @@ def sanitize_filename(name: str) -> str:
 # ---------------------------------------------------------------------------------------------
 # What still looks identifying
 
+CHECK_UK_POSTCODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-Z]{1,2}\d[A-Z\d]?[ \t]?\d[ABD-HJLNP-UW-Z]{2}(?![A-Za-z0-9])")
+_UP, _LO = "A-Z\u00c0-\u00de", "a-z\u00df-\u00ff"
+CHECK_EU_POSTAL_RE = re.compile(
+    r"(?<![\w-])(?:[A-Z]{1,2}-)?\d{4,5}(?:[ \t][A-Z]{2})?[ \t]+"
+    r"(?P<city>[" + _UP + r"][" + _LO + r"]+(?:[ \t-][" + _UP + r"][" + _LO + r"]+)?)(?![\w])")
+CHECK_EU_STREET_RE = re.compile(
+    r"(?<![\w])[" + _UP + r"][" + _LO + r"]*(?:veien|vegen|gata|gaten|gatan|vej|vejen|v\u00e4gen|v\u00e4g|"
+    r"stra\u00dfe|strasse|str\.|weg|laan|straat|gasse|platz|allee|ring|damm|gade|str\u00e6de|katu|tie)"
+    r"[ \t]+\d{1,4}[a-zA-Z]?(?![\w])"
+    r"|(?<![\w])(?:Via|Viale|Calle|Carrer|Avenida|Avda\.|Rua|Rue|Chemin|All\u00e9e|Piazza|Paseo|Plaza)"
+    r"[ \t]+(?:[A-Za-z\u00c0-\u00ff'.]+[ \t]+){0,4}?\d{1,4}(?![\w])"
+    r"|(?<![\w])\d{1,4}[ \t,]+(?:rue|avenue|boulevard|chemin|all\u00e9e|place)[ \t]+[A-Za-z\u00c0-\u00ff][\w'\u00c0-\u00ff -]*")
+CHECK_ESTATE_RE = re.compile(
+    r"(?:[A-Z][A-Za-z'\-]+[ \t]+){1,3}(?:Industrial|Business|Trading|Enterprise|Technology|Science|Commerce|"
+    r"Retail|Office)[ \t]+(?:Estate|Park|Centre|Center|Zone|Area)(?![\w])|(?<![\w])Unit[ \t]+\d+[A-Z]?,")
 CHECK_TITLE_PAIR_RE = re.compile(r"(?<![\w])(?=([A-Z][a-z]{1,20})[ \t]+([A-Z][a-z]{2,20})(?![\w]))")
 CHECK_PHONEISH_RE = re.compile(r"(?<![\w.])\+?\(?\d[\d \t().\-]{6,20}\d(?![\w])")
 
 
 def check_these(scrubber: Scrubber, fields: Sequence[Tuple[str, str]]) -> List[str]:
     """Anything in the scrubbed output that still looks identifying, with where it is."""
-    fakes = scrubber.map.fakes()
+    # Only the fakes this email was given are known to be fake here. A word that is a fake for
+    # someone else in the map ("Gunnar") may be a real name in this email, so it is still checked.
+    fakes = {w for (_, _, fake) in scrubber.stats for w in re.findall(r"[^\W\d_]+", fake.lower())}
     fake_emails = set(scrubber.map.data["email"].values())
     fake_phones = {str(v) for v in scrubber.map.data["phone"].values()}
     fake_domains = {v for k, v in scrubber.map.data["domain"].items() if not k.endswith("|stem")}
@@ -2297,7 +2382,39 @@ def check_these(scrubber: Scrubber, fields: Sequence[Tuple[str, str]]) -> List[s
                 for m in rx.finditer(line):
                     if not any(w.lower() in fakes for w in m.group("city").split()):
                         add(loc, f"possible city and postal code \"{m.group(0).strip()}\"")
+            for rx in (TRADE_STRONG_RE, TRADE_WEAK_RE):
+                for m in rx.finditer(line):
+                    run = company_words_before(line, m.start())
+                    if any(is_distinctive(w) and w.lower() not in fakes for w in run):
+                        add(loc, f"possible company \"{' '.join(run)} {m.group('trade')}\"")
+            for m in CHECK_UK_POSTCODE_RE.finditer(line):
+                add(loc, f"possible UK postcode \"{m.group(0)}\"")
+            for m in CHECK_EU_POSTAL_RE.finditer(line):
+                city = m.group("city")
+                if re.search(r"(?i)\b(?:iso|din|en|astm|ams|sae|aisi|uns|mil|grade|class|type|series|alloy|"
+                             r"rev|no|qty|po|rfq|quote|order|lot|job|part|p/n)[ \t.#:]*$", line[:m.start()]):
+                    continue              # "ISO 2768 Medium" is a spec, "Qty 500 Pcs" a quantity
+                if not any(w.lower() in NOT_A_NAME or w.lower() in fakes for w in re.split(r"[ \t-]+", city)):
+                    add(loc, f"possible postal code and city \"{m.group(0).strip()}\"")
+            for m in CHECK_EU_STREET_RE.finditer(line):
+                add(loc, f"possible street address \"{m.group(0).strip()}\"")
+            for m in CHECK_ESTATE_RE.finditer(line):
+                if not any(w.lower() in fakes for w in m.group(0).split()):
+                    add(loc, f"possible address \"{m.group(0).strip().rstrip(',')}\"")
+            # One capitalized word used as a name ("Hi Gunnar", "Gunnar will send", "Gunnar's").
+            for m in re.finditer(r"(?<![\w])[A-Z][a-z]{2,}(?![\w])", line):
+                w = m.group(0).lower()
+                if w in AMBIGUOUS or w in fakes or w in COMMON_FIRST_NAMES or w in GREETING_SKIP:
+                    continue
+                if name_context(line, m.start(), m.end()):
+                    add(loc, f"possible name \"{m.group(0)}\"")
     return out
+
+
+CHECK_COVERS = ("names and companies the map knows, email and web addresses, phone-like numbers, "
+                "capitalized name pairs, common first names, names in greetings and sign-offs, "
+                "company suffixes and trade names (Tool & Die, Castings, Machining), and US, UK, "
+                "and European street and postal patterns")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2356,11 +2473,12 @@ def slugify(text: str, limit: int = 48) -> str:
     return (s[:limit].rstrip("-")) or "email"
 
 
-def email_id(em: Dict[str, Any]) -> str:
-    """Stable id of a real email, from its Message-ID, else its sender, date, subject, and body."""
+def email_id(em: Dict[str, Any], salt: str) -> str:
+    """Id of a real email for its file name, from its Message-ID, else its sender, date, subject,
+    and body; stable for as long as the map (and its salt) is kept."""
     if em.get("message_id"):
-        return _hex("mid", em["message_id"].strip().lower(), n=8)
-    return _hex("em", (em.get("from_email") or "").lower(), em.get("date") or "", em.get("subject") or "",
+        return _hex(salt, "mid", em["message_id"].strip().lower(), n=8)
+    return _hex(salt, "em", (em.get("from_email") or "").lower(), em.get("date") or "", em.get("subject") or "",
                 (em.get("body") or "")[:2000], n=8)
 
 
@@ -2522,7 +2640,7 @@ def run(argv: Optional[Sequence[str]] = None, stdout=None) -> int:
         scrubber.stats = Counter()
         scrubber.leak_terms = set()
         res = scrub_one(scrubber, em, keep_attachments=args.keep_attachments)
-        eid = email_id(em)
+        eid = email_id(em, scrubber.map.salt)
         fname = f"scrubbed_{slugify(res['subject'])}_{eid}.eml"
         target = out_dir / fname
         old_names = [f.get("file") for f in manifest.get("files", [])
@@ -2580,6 +2698,9 @@ def run(argv: Optional[Sequence[str]] = None, stdout=None) -> int:
 
     print("Scrub report" + ("  (DRY RUN: nothing was written)" if args.dry_run else ""), file=out)
     print(f"Map: {map_path}", file=out)
+    if args.dry_run and smap.is_new:
+        print("(No map yet, so this dry run used a throwaway salt: the real run will pick other fakes.)",
+              file=out)
     print("", file=out)
     for r in reports:
         print(r, file=out)
@@ -2650,20 +2771,22 @@ def scrub_one(scrubber: Scrubber, em: Dict[str, Any], keep_attachments: bool = F
         else:
             dropped.append(name)
     domain = f_email.rpartition("@")[2] or "scrubbed.invalid"
-    mid = f"scrub.{email_id(em)}@{domain}"
+    salt = scrubber.map.salt
+    eid = email_id(em, salt)
+    mid = f"scrub.{eid}@{domain}"
     notes: List[str] = []
     if dashes:
         notes.append(f"{dashes} em/en dash(es) turned into plain hyphens (repo rule)")
     date = em.get("date")
     if not parse_iso(date):
         # tests/test_import.py wants a date on every fixture; a fixed one keeps reruns identical.
-        date = (datetime(2026, 1, 5, 9, 0) + timedelta(days=_h("date", email_id(em)) % 180)).replace(
+        date = (datetime(2026, 1, 5, 9, 0) + timedelta(days=_h(salt, "date", eid) % 180)).replace(
             tzinfo=timezone.utc).isoformat()
         notes.append(f"the original has no date, so the file says {date[:10]}")
     if not body.strip():
         notes.append("the body is empty (tests/test_import.py expects text in every body)")
     eml = build_eml(from_name=f_name, from_email=f_email, to=to, cc=cc, subject=subject, date=date,
-                    message_id=mid, body=body, dropped=dropped, kept=kept, boundary=f"scrub-{email_id(em)}")
+                    message_id=mid, body=body, dropped=dropped, kept=kept, boundary=f"scrub-{eid}")
     fields = [("from", f"{f_name} <{f_email}>"), ("to", "; ".join(f"{n} <{a}>" for n, a in to)),
               ("cc", "; ".join(f"{n} <{a}>" for n, a in cc)), ("subject", subject), ("body", body)]
     fields += [("attachment name", n) for n in dropped + [k["name"] for k in kept]]
@@ -2712,7 +2835,10 @@ def format_report(src: str, target: Path, status: str, res: Dict[str, Any], scru
         for c in res["checks"]:
             lines.append(f"      - {c}")
     else:
-        lines.append("   Check these: nothing found (still read the file)")
+        # Never "nothing found": the checks are patterns, and a pattern can miss things.
+        lines.append(f"   Check these: no match for the checks ({CHECK_COVERS}).")
+        lines.append("      They cannot see a surname on its own, a city or company named on its own, or"
+                     " anything inside an attachment, so read the whole file.")
     return "\n".join(lines) + "\n"
 
 

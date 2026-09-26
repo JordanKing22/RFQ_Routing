@@ -21,6 +21,7 @@ import struct
 import sys
 import time
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -387,6 +388,21 @@ class MsgRoundTripTests(unittest.TestCase):
         em = load_one("x.msg", msgwriter.write_cfb(tree))["emails"][0]
         self.assertEqual(em["from_email"], "avery.quill@example.com")
         self.assertEqual(em["date"], "2026-09-24T09:40:00-04:00")  # the transport headers' Date wins
+
+    def test_exchange_transport_headers_preamble(self):
+        headers = ("Microsoft Mail Internet Headers Version 2.0\r\n"
+                   "Received: from mx.example.net by mail.example.com; Thu, 24 Sep 2026 09:40:05 -0400\r\n"
+                   "From: Avery Quill <avery.quill@example.com>\r\n"
+                   "To: Jordan Vale <quotes@example.net>\r\n"
+                   "Date: Thu, 24 Sep 2026 09:40:00 -0400\r\n"
+                   "Message-ID: <hdr-4471@example.com>\r\n\r\n")
+        tree = msgwriter.message_tree(rfq(transport_headers=headers, message_id=None), exchange_sender=True)
+        del tree["__substg1.0_5D01001F"]
+        em = load_one("x.msg", msgwriter.write_cfb(tree))["emails"][0]
+        self.assertEqual(em["from_email"], "avery.quill@example.com")
+        self.assertEqual(em["date"], "2026-09-24T09:40:00-04:00")
+        self.assertEqual(em["message_id"], "hdr-4471@example.com")
+        self.assertNotIn("no sender address", em["warnings"])
 
     def test_exchange_sender_with_nothing_else(self):
         tree = msgwriter.message_tree(rfq(), exchange_sender=True)
@@ -849,6 +865,24 @@ class EmlTests(unittest.TestCase):
         self.assertEqual(len(em["body"]), 100)
         self.assertEqual((em["attachments"][0]["data"], em["attachments"][0]["size"]), (None, len(PDF)))
 
+    def test_file_name_encodings(self):
+        raw = (b"From: a@example.com\r\nSubject: names\r\nMIME-Version: 1.0\r\n"
+               b"Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+               b"--B\r\nContent-Type: text/plain\r\n\r\nsee files\r\n"
+               b"--B\r\nContent-Type: application/pdf; name=\"=?utf-8?Q?Caf=C3=A9_1.pdf?=\"\r\n"
+               b"Content-Disposition: attachment; filename=\"=?utf-8?Q?Caf=C3=A9_1.pdf?=\"\r\n\r\nx\r\n"
+               b"--B\r\nContent-Type: application/pdf\r\n"
+               b"Content-Disposition: attachment; filename*=utf-8''Stra%C3%9Fe%202.pdf\r\n\r\nx\r\n"
+               b"--B\r\nContent-Type: application/pdf\r\n"
+               b"Content-Disposition: attachment; filename=\"Pi\xc3\xa8ce 3.pdf\"\r\n\r\nx\r\n"
+               b"--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment;\r\n"
+               b" filename*0*=utf-8''long%20na;\r\n filename*1*=me%C3%A9.pdf\r\n\r\nx\r\n"
+               b"--B\r\nContent-Type: application/pdf; name=\"only-in-type.pdf\"\r\n\r\nx\r\n"
+               b"--B--\r\n")
+        names = [a["name"] for a in load_one("n.eml", raw)["emails"][0]["attachments"]]
+        self.assertEqual(names, ["Caf\u00e9 1.pdf", "Stra\u00dfe 2.pdf", "Pi\u00e8ce 3.pdf", "long name\u00e9.pdf",
+                                 "only-in-type.pdf"])
+
     def test_signed_email(self):
         raw = (b"From: a@example.com\r\nSubject: signed RFQ\r\nMIME-Version: 1.0\r\n"
                b"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=S\r\n\r\n"
@@ -942,7 +976,8 @@ class ZipTests(unittest.TestCase):
         data = zip_of([(f"RFQ {i}.eml", self.email(i)) for i in range(8)])
         result = load_one("e.zip", data, Limits(max_zip_entries=5))
         self.assertEqual(len(result["emails"]), 5)
-        self.assertEqual(result["skipped"], [{"source": "e.zip", "reason": "the zip has 8 entries; only the first 5 were read"}])
+        self.assertEqual(result["skipped"],
+                         [{"source": "e.zip", "reason": "the zip has 8 entries; only the first 5 were read"}])
         self.assertEqual(load_one("empty.zip", zip_of([])),
                          {"emails": [], "skipped": [{"source": "empty.zip", "reason": "no emails found"}]})
         many = zip_of([(f"x{i}", b"") for i in range(25_000)], zipfile.ZIP_STORED)
@@ -969,6 +1004,124 @@ class ZipTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+class ParserCostTests(unittest.TestCase):
+    """Inputs that made the email package spend minutes: each must now finish fast, with a
+    skipped reason or a warning."""
+
+    def fat_content_type(self, params, parts):
+        ct = b"multipart/mixed; boundary=b" + b"".join(b";\r\n x%d=v" % i for i in range(params))
+        head = (b"From: a@example.com\r\nSubject: fat ct\r\nDate: Thu, 24 Sep 2026 08:15:00 -0700\r\n"
+                b"MIME-Version: 1.0\r\nContent-Type: " + ct + b"\r\n\r\n")
+        return head + b"--b\r\n\r\nx\r\n" * parts + b"--b--\r\n"
+
+    def many_parts(self, n, subject="many parts"):
+        head = (b"From: a@example.com\r\nSubject: " + subject.encode() + b"\r\nDate: Thu, 24 Sep 2026 08:15:00 -0700\r\n"
+                b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n")
+        return head + b"--b\r\n\r\nx\r\n" * n + b"--b--\r\n"
+
+    def timed(self, name, data, limits=mailfile.LIMITS):
+        start = time.time()
+        result = load_one(name, data, limits)
+        return result, time.time() - start
+
+    def test_oversized_multipart_header(self):
+        data = self.fat_content_type(2000, 800)  # 29 KB: took 60 s with policy.default
+        result, took = self.timed("fat.eml", data)
+        self.assertLess(took, 2)
+        self.assertEqual(result["emails"], [])
+        self.assertIn("Content-Type header is far too long", result["skipped"][0]["reason"])
+        result, took = self.timed("fat.zip", zip_of([(f"fat {i}.eml", data) for i in range(20)]))
+        self.assertLess(took, 2)
+        self.assertEqual(len(result["skipped"]), 20)
+
+    def test_long_leaf_header_is_still_read(self):
+        # A long RFC 2231 file name makes a long Content-Type on a leaf part: harmless, and real.
+        name = "".join("%E5%9B%B3%E9%9D%A2" for _ in range(200))  # 400 CJK characters, 3.6 KB encoded
+        raw = (b"From: a@example.com\r\nSubject: long name\r\nMIME-Version: 1.0\r\n"
+               b"Content-Type: multipart/mixed; boundary=B\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\nsee file\r\n"
+               b"--B\r\nContent-Type: application/pdf;\r\n name*=utf-8''" + name.encode() + b".pdf\r\n"
+               b"Content-Transfer-Encoding: base64\r\n\r\n" + base64.encodebytes(PDF) + b"--B--\r\n")
+        self.assertGreater(len(name), mailfile._MAX_MULTIPART_HEADER)
+        em = load_one("long.eml", raw)["emails"][0]
+        self.assertEqual(em["attachments"][0]["data"], PDF)
+        self.assertEqual(em["attachments"][0]["name"], "\u56f3\u9762" * 58 + ".pdf")  # cut to 120 characters
+
+    def test_too_many_parts(self):
+        data = self.many_parts(700_000)  # 7 MB: took 68 s and 260 MB with policy.default
+        result, took = self.timed("parts.eml", data)
+        self.assertLess(took, 2)
+        self.assertEqual(result["emails"], [])
+        self.assertIn("MIME part boundaries", result["skipped"][0]["reason"])
+        result, took = self.timed("parts.zip", zip_of([("parts.eml", data)]))
+        self.assertLess(took, 2)
+        self.assertIn("MIME part boundaries", result["skipped"][0]["reason"])
+
+    def test_many_parts_under_the_line(self):
+        result, took = self.timed("parts.eml", self.many_parts(15_000))
+        self.assertLess(took, 2)
+        em = result["emails"][0]
+        self.assertIn("more than 5,000 MIME parts; the rest were not read", em["warnings"])
+
+    def test_parts_summed_over_one_upload(self):
+        data = zip_of([(f"RFQ {i}.eml", self.many_parts(12_000, f"RFQ {i}")) for i in range(3)])
+        with mock.patch.object(mailfile, "_MAX_RUN_BOUNDARY_LINES", 30_000):
+            result, took = self.timed("many.zip", data)
+        self.assertLess(took, 3)
+        self.assertEqual([e["subject"] for e in result["emails"]], ["RFQ 0", "RFQ 1"])
+        self.assertEqual(result["skipped"][0]["source"], "many.zip/RFQ 2.eml")
+        self.assertIn("MIME parts in all", result["skipped"][0]["reason"])
+
+    def test_signed_msg_with_hostile_mime_is_kept_as_a_file(self):
+        hostile = b"Content-Type: multipart/signed; boundary=b\r\n\r\n" + b"--b\r\n\r\nx\r\n" * 30_000
+        atts = [{"name": "smime.p7m", "content_type": "multipart/signed", "data": hostile}]
+        start = time.time()
+        em = load_one("s.msg", msgwriter.build_msg(rfq(attachments=atts)))["emails"][0]
+        self.assertLess(time.time() - start, 2)
+        self.assertEqual([a["name"] for a in em["attachments"]], ["smime.p7m"])
+        self.assertTrue(any("MIME part boundaries" in w for w in em["warnings"]), em["warnings"])
+
+
+class AttachmentBudgetTests(unittest.TestCase):
+    def emails_with(self, *attachments):
+        out = []
+        for i, (name, ctype, data) in enumerate(attachments):
+            msg = simple_eml(subject=f"RFQ {i}")
+            maintype, subtype = ctype.split("/")
+            msg.add_attachment(data, maintype, subtype, filename=name)
+            out.append((f"RFQ {i}.eml", eml_bytes(msg)))
+        return zip_of(out)
+
+    def test_budget_is_shared_by_the_whole_upload(self):
+        data = self.emails_with(("a.pdf", "application/pdf", PDF), ("b.pdf", "application/pdf", PDF),
+                                ("c.pdf", "application/pdf", PDF))
+        result = load_one("z.zip", data, Limits(max_total_attachment_bytes=2 * len(PDF) + 100))
+        kept = [(a["name"], a["data"] is not None, a["size"]) for e in result["emails"] for a in e["attachments"]]
+        self.assertEqual(kept, [("a.pdf", True, len(PDF)), ("b.pdf", True, len(PDF)), ("c.pdf", False, len(PDF))])
+        self.assertTrue(any("c.pdf: only the name is kept (this upload's attachments passed" in w
+                            for w in result["emails"][2]["warnings"]), result["emails"][2]["warnings"])
+
+    def test_types_the_importer_cannot_use_count_too(self):
+        blob = bytes(range(256)) * 40
+        data = self.emails_with(("prices.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", blob),
+                                ("raw.bin", "application/octet-stream", blob), ("QA-1.pdf", "application/pdf", PDF))
+        result = load_one("z.zip", data, Limits(max_total_attachment_bytes=2 * len(blob) + 100))
+        self.assertIsNotNone(result["emails"][0]["attachments"][0]["data"])
+        self.assertIsNotNone(result["emails"][1]["attachments"][0]["data"])
+        self.assertIsNone(result["emails"][2]["attachments"][0]["data"])
+
+    def test_msg_attachments_count(self):
+        atts = [{"name": f"sheet {i}.pdf", "content_type": "application/pdf", "data": PDF} for i in range(4)]
+        em = load_one("x.msg", msgwriter.build_msg(rfq(attachments=atts)),
+                      Limits(max_total_attachment_bytes=3 * len(PDF)))["emails"][0]
+        self.assertEqual([a["data"] is not None for a in em["attachments"]], [True, True, True, False])
+
+    def test_default_and_body_limit(self):
+        self.assertEqual(mailfile.LIMITS.max_total_attachment_bytes, 64 * 1024 * 1024)
+        em = load_one("b.eml", eml_bytes(simple_eml(body="y" * 50_000)), Limits(max_body_chars=20_000))["emails"][0]
+        self.assertEqual(len(em["body"]), 20_000)
+        self.assertIn("body cut to 20,000 characters", em["warnings"])
+
+
 class LoadContractTests(unittest.TestCase):
     def test_inputs_that_are_not_bytes(self):
         text = "From: a@example.com\nSubject: typed in\n\nhello"

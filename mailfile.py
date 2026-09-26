@@ -9,7 +9,10 @@ Every byte here comes from outside, so nothing trusts a size, count, offset, or 
 each one is checked against the file and against Limits, and a problem becomes a warning on the
 email or a skipped entry, never an exception.
 
-.eml    email.parser with policy.default. Emails attached as message/rfc822 (how Outlook on the web
+.eml    email.parser with policy.compat32 (policy.default re-parses a multipart's whole Content-Type
+        header for every part it holds, so a crafted header costs minutes), after a cheap look at
+        the raw bytes for too many parts or an oversized multipart header. Emails attached as
+        message/rfc822 (how Outlook on the web
         and new Outlook export several at once: select them, Forward, save) are listed after the
         email that carried them.
 .msg    Outlook's own format: a Compound File (MS-CFB) of MAPI properties (MS-OXMSG), read here with
@@ -28,6 +31,7 @@ import binascii
 import codecs
 import datetime as _dt
 import email.feedparser
+import email.message
 import email.parser
 import email.policy
 import email.utils
@@ -56,6 +60,7 @@ class Limits:
     max_attachments: int = 25                     # per email; the rest are reported
     max_attachment_bytes: int = 10 * 1024 * 1024  # bigger ones keep their name but lose their data (data=None)
     max_body_chars: int = 200_000
+    max_total_attachment_bytes: int = 64 * 1024 * 1024  # all attachment data one load() keeps, every type
 
 
 LIMITS = Limits()
@@ -72,6 +77,13 @@ _MAX_MIME_PARTS = 5000             # parts looked at in one .eml
 _MAX_HTML_CHARS = 5_000_000        # HTML read into text (Outlook HTML is often 10x its text)
 _MAX_RTF_BYTES = 10 * 1024 * 1024  # decompressed RTF (pictures inside RTF make it big)
 _MAX_MSG_OBJECTS = 5000            # recipient or attachment storages looked at in one .msg
+# The email package builds an object per MIME part while parsing, before any limit of ours can
+# apply, so these are checked on the raw bytes first. A boundary line starts with "--"; the count
+# also includes signature and "-----Original Message-----" lines, hence the margin.
+_MAX_BOUNDARY_LINES = 20_000       # lines starting "--" in one .eml
+_MAX_RUN_BOUNDARY_LINES = 100_000  # the same, summed over one load()
+_MAX_MULTIPART_HEADER = 2048       # characters in a multipart Content-Type header (real ones: ~100)
+_MAX_CONTENT_TYPE = 65536          # characters in any Content-Type header
 
 _UTC = _dt.timezone.utc
 
@@ -479,6 +491,8 @@ class _Run:
         self.emails: List[Dict[str, Any]] = []
         self.skipped: List[Dict[str, str]] = []
         self.full = False
+        self.attachment_bytes = 0     # attachment data kept so far, against max_total_attachment_bytes
+        self.boundary_lines = 0       # MIME boundary lines parsed so far, against _MAX_RUN_BOUNDARY_LINES
 
     def skip(self, source: str, reason: str) -> None:
         self.skipped.append({"source": source, "reason": reason})
@@ -527,6 +541,7 @@ def _keep_attachments(run: _Run, candidates: List[_Candidate], cids: set,
     signatures = 0
     over: List[str] = []
     big: List[str] = []
+    spent: List[str] = []     # left without data because the whole upload's budget ran out
     for c in candidates:
         referenced = bool(c.content_id) and c.content_id.strip("<>").lower() in cids
         inline = c.inline or referenced
@@ -543,15 +558,26 @@ def _keep_attachments(run: _Run, candidates: List[_Candidate], cids: set,
         if len(kept) >= limits.max_attachments:
             over.append(c.name)
             continue
+        room = limits.max_total_attachment_bytes - run.attachment_bytes
         if data is ... and c.size_hint is not None and c.size_hint > limits.max_attachment_bytes:
             data = None  # known to be too big: do not decode it just to drop it
             big.append(c.name)
+        elif data is ... and c.size_hint is not None and c.size_hint > room:
+            data = None
+            spent.append(c.name)
         elif data is ...:
             data = _load(c, warnings)
         size = len(data) if data is not None else (c.size_hint or 0)
         if data is not None and len(data) > limits.max_attachment_bytes:
             big.append(c.name)
             data = None
+        elif data is not None and len(data) > room:
+            # One upload keeps at most max_total_attachment_bytes of attachment data in memory,
+            # whatever the type: a zip of big emails must not hold 200 MB until load() returns.
+            spent.append(c.name)
+            data = None
+        if data is not None:
+            run.attachment_bytes += len(data)
         kept.append({"name": c.name, "content_type": c.content_type, "data": data, "size": size,
                      "inline": inline})
     if signatures:
@@ -559,6 +585,10 @@ def _keep_attachments(run: _Run, candidates: List[_Candidate], cids: set,
     if big:
         mb = limits.max_attachment_bytes / (1024 * 1024)
         warnings.append(f"{_name_list(big)}: larger than {mb:g} MB, only the name is kept")
+    if spent:
+        mb = limits.max_total_attachment_bytes / (1024 * 1024)
+        warnings.append(f"{_name_list(spent)}: only the name is kept (this upload's attachments passed "
+                        f"{mb:g} MB)")
     if over:
         warnings.append(f"{len(over)} more attachment{'s' if len(over) != 1 else ''} left out "
                         f"(the limit is {limits.max_attachments}): {_name_list(over)}")
@@ -706,11 +736,43 @@ def _load_bytes(run: _Run, data: bytes, source: str, depth: int, top: bool = Fal
 # .eml
 # --------------------------------------------------------------------------- #
 def _load_eml(run: _Run, data: bytes, source: str, depth: int) -> None:
+    problem, lines = _mime_problem(data)
+    if problem:
+        run.skip(source, problem)
+        return
+    run.boundary_lines += lines
+    if run.boundary_lines > _MAX_RUN_BOUNDARY_LINES:
+        run.skip(source, f"this upload has more than {_MAX_RUN_BOUNDARY_LINES:,} MIME parts in all; "
+                 "this email was not read")
+        return
     msg = _parse_mime(data)  # None on RecursionError from absurd nesting, and on parser bugs
     if msg is None:
         run.skip(source, "not a readable email")
         return
     _eml_email(run, msg, source, depth)
+
+
+# A Content-Type header and its folded lines, found without a case-insensitive search (which is
+# ten times slower on a 40 MB file).
+_CT_NAME = rb"[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Tt][Yy][Pp][Ee][ \t]*:([^\n]*(?:\n[ \t][^\n]*)*)"
+_CT_FIRST = re.compile(_CT_NAME)
+_CT_LATER = re.compile(rb"\n" + _CT_NAME)
+
+
+def _mime_problem(data: bytes) -> Tuple[str, int]:
+    """(reason not to parse, boundary lines) from the raw bytes, before the email package builds
+    anything. Its cost grows with the number of parts, and with the parts times the size of
+    their parent's Content-Type header, which it reads again for every part."""
+    lines = data.count(b"\n--")
+    if lines > _MAX_BOUNDARY_LINES:
+        return f"more than {_MAX_BOUNDARY_LINES:,} MIME part boundaries (malformed or hostile); not read", lines
+    first = _CT_FIRST.match(data)
+    for m in ([first] if first else []) + list(_CT_LATER.finditer(data)):
+        value = m.group(1)
+        if len(value) > _MAX_CONTENT_TYPE or (
+                len(value) > _MAX_MULTIPART_HEADER and value.lstrip(b" \t\r\n").lower().startswith(b"multipart")):
+            return "a Content-Type header is far too long (malformed or hostile); not read", lines
+    return "", lines
 
 
 def _part_type(part: Any) -> str:
@@ -729,7 +791,15 @@ def _part_disposition(part: Any) -> Optional[str]:
 
 
 def _part_filename(part: Any) -> str:
-    for getter in (lambda: part.get_filename(), lambda: part.get_param("name")):
+    """The part's file name: RFC 2231 (filename*=) and RFC 2047 (=?utf-8?...?=) decoded, raw
+    8-bit names read as UTF-8 or Windows-1252. The headers are copied into a scratch message
+    first because compat32 turns raw 8-bit parameters into replacement characters."""
+    scratch = email.message.Message()
+    for key in ("Content-Disposition", "Content-Type"):
+        raw = _raw_header(part, key)
+        if raw is not None:
+            scratch[key] = _unsurrogate(raw)
+    for getter in (lambda: scratch.get_filename(), lambda: scratch.get_param("name")):
         try:
             value = getter()
         except Exception:  # noqa: BLE001
@@ -746,6 +816,16 @@ def _part_filename(part: Any) -> str:
 
 def _part_bytes(part: Any) -> bytes:
     """A leaf part's decoded bytes (base64 and quoted-printable undone, damage tolerated)."""
+    try:
+        payload = part.get_payload()
+        if isinstance(payload, str) and _one_line(_raw_header(part, "content-transfer-encoding")).lower() == "base64":
+            # Straight from the text: get_payload(decode=True) first copies a 30 MB attachment's
+            # base64 into bytes, which is 40 MB more at the worst moment.
+            return binascii.a2b_base64(payload)
+    except (binascii.Error, ValueError):
+        pass  # damaged base64: the email package's decoder is more forgiving
+    except Exception:  # noqa: BLE001
+        pass
     try:
         data = part.get_payload(decode=True)
     except Exception:  # noqa: BLE001
@@ -882,9 +962,10 @@ def _mime_walk(run: _Run, msg: Any, warnings: List[str]
                 warnings.append("MIME parts nested too deeply; the deepest were not read")
                 continue
             try:
-                children = list(part.iter_parts())
+                payload = part.get_payload()
             except Exception:  # noqa: BLE001
-                children = []
+                payload = None
+            children = [c for c in payload if isinstance(c, email.message.Message)] if isinstance(payload, list) else []
             for child in reversed(children):
                 stack.append((child, ctype, level + 1))
             continue
@@ -932,11 +1013,12 @@ def _set_body(em: Dict[str, Any], plain: List[str], htmls: List[str], limits: Li
 
 
 def _parse_mime(data: bytes) -> Optional[Any]:
-    """The parsed message, or None (RecursionError on absurd nesting, and parser bugs). Fed a
-    megabyte at a time: parsebytes() would first copy the whole file into one string, and a big
-    .eml already costs several times its size in memory."""
+    """The parsed message, or None (RecursionError on absurd nesting, and parser bugs). Call
+    _mime_problem first. compat32, not policy.default: this module reads headers raw and decodes
+    them itself, and policy.default parses a parent's Content-Type again for every child part.
+    Fed a megabyte at a time: parsebytes() would first copy the whole file into one string."""
     try:
-        parser = email.feedparser.BytesFeedParser(policy=email.policy.default)
+        parser = email.feedparser.BytesFeedParser(policy=email.policy.compat32)
         view = memoryview(data)
         for start in range(0, len(data), 1 << 20):
             parser.feed(bytes(view[start:start + (1 << 20)]))
@@ -1005,11 +1087,11 @@ def _zip_path(name: str) -> str:
 
 
 def _read_zip_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo, file_budget: int,
-                    total_budget: int, peek: bool = False) -> Tuple[Optional[bytes], int, str]:
+                    total_budget: int, peek: bool = False) -> Tuple[Optional[bytearray], int, str]:
     """(bytes, bytes read, problem). Counts what actually comes out of the decompressor, a chunk
     at a time, and stops at a budget whatever the header claimed. peek: just the first
     file_budget bytes."""
-    chunks: List[bytes] = []
+    buf = bytearray()  # grown in place: joining chunks would hold the entry twice
     got = 0
     try:
         with zf.open(info) as fh:
@@ -1021,18 +1103,18 @@ def _read_zip_entry(zf: zipfile.ZipFile, info: zipfile.ZipInfo, file_budget: int
                 if got > total_budget:
                     return None, got, "total"
                 if peek and got >= file_budget:
-                    chunks.append(chunk)
+                    buf += chunk
                     break
                 if got > file_budget:
                     return None, got, "file"
-                chunks.append(chunk)
+                buf += chunk
     except RuntimeError:
         return None, got, "password protected"
     except NotImplementedError:
         return None, got, "compressed with a method this reader does not open"
     except Exception as exc:  # noqa: BLE001 - BadZipFile (CRC), zlib.error, EOFError, OSError
         return None, got, f"could not be unzipped ({type(exc).__name__})"
-    return b"".join(chunks), got, ""
+    return buf, got, ""
 
 
 def _load_zip(run: _Run, data: bytes, source: str, depth: int) -> None:
@@ -1102,6 +1184,7 @@ def _load_zip(run: _Run, data: bytes, source: str, depth: int) -> None:
                 run.skip(entry, problem)
                 continue
             _load_bytes(run, content or b"", entry, depth + 1)
+            content = None  # let this entry go before the next one is unzipped
 
 
 # --------------------------------------------------------------------------- #
@@ -1711,10 +1794,12 @@ def _msg_email(run: _Run, cfb: _CFB, storage: int, source: str, depth: int, head
     p = _Props(cfb, storage, header, parent_codepage)
 
     headers = None
-    transport = p.string(0x007D)
+    # Exchange starts the headers with a line of its own ("Microsoft Mail Internet Headers
+    # Version 2.0"); the parser would take it for the body and see no headers at all.
+    transport = re.sub(r"\A[^\r\n:]*\r?\n", "", p.string(0x007D).lstrip())
     if transport.strip():
         try:
-            headers = email.parser.Parser(policy=email.policy.default).parsestr(transport, headersonly=True)
+            headers = email.parser.Parser(policy=email.policy.compat32).parsestr(transport, headersonly=True)
         except Exception:  # noqa: BLE001
             headers = None
 
@@ -1843,7 +1928,11 @@ def _msg_email(run: _Run, cfb: _CFB, storage: int, source: str, depth: int, head
         if method == 1 and mime == "multipart/signed":
             # A signed email: Outlook keeps the whole signed MIME message as one attachment
             # (smime.p7m), and the real attachments are inside it.
-            signed = _parse_mime(cfb.read(data_idx) or b"")
+            raw_signed = cfb.read(data_idx) or b""
+            problem, _lines = _mime_problem(raw_signed)
+            signed = None if problem else _parse_mime(raw_signed)
+            if problem:
+                warnings.append(f"{aname}: {problem}")
             if signed is not None:
                 plain2, htmls2, found, nested2 = _mime_walk(run, signed, warnings)
                 candidates.extend(found)

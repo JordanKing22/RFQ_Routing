@@ -306,7 +306,7 @@ Classic Outlook's drag and drop does not reach a web page directly, so drag the 
 | `RFQ_IMPORT_OCR_EFFORT` | `fast` | OCR settings for imported scans (`best` is slower) |
 | `RFQ_UPLOAD_MEMORY_MB` | 100 | Memory for uploaded and imported attachment bytes |
 
-One file can be up to 40 MB, and a zip can hold up to 1,000 entries (200 MB unpacked, 500 emails). Each email keeps up to 25 attachments.
+One file can be up to 40 MB, and a zip can hold up to 1,000 entries (200 MB unpacked, 500 emails). Each email keeps up to 25 attachments, and one file's attachments up to 64 MB in all; past that, attachments keep only their name. Files built to slow the parser down (thousands of MIME parts, giant headers) are left out with a reason.
 
 **From the command line**
 
@@ -327,7 +327,7 @@ python tools/import_emails.py https://your-demo.onrender.com path/to/emails --pa
 - **Real emails.** Everything committed here is fictional, so real emails go through `tools/scrub_email.py` first:
   1. Put the real files in `private_emails/`. Git ignores that folder.
   2. Run `python tools/scrub_email.py private_emails/*.msg --lane turning --rfq`, one run per lane. The lanes are `milling_3axis`, `milling_5axis`, `turning`, `itar`, `orders`, `review`, and `filtered`. `--dry-run` shows the report without writing anything.
-  3. The tool writes one fictional `.eml` per email into `tests/emails/` and adds its manifest entry with `"reviewed": false`. It replaces names, email addresses, domains, companies, phone numbers, and street addresses with fictional ones. The same real value always gets the same fake one, and the real-to-fake map stays in `private_emails/.scrub_map.json`. `--map "Real=Fake"` adds a pair it missed. Part numbers are kept unless you pass `--part-numbers`. Attachments are left out and listed by name, because the title block of a PDF cannot be scrubbed reliably. `--keep-attachments` keeps them, unscrubbed.
+  3. The tool writes one fictional `.eml` per email into `tests/emails/` and adds its manifest entry with `"reviewed": false`. It replaces names, email addresses, domains, companies, phone numbers, and street addresses with fictional ones. The same real value always gets the same fake one. The real-to-fake map, with a random salt that keeps the fakes from being traced back by guessing, stays in `private_emails/.scrub_map.json`: keep it, or reruns give new fakes. `--map "Real=Fake"` adds a pair it missed. Part numbers are kept unless you pass `--part-numbers`. Attachments are left out and listed by name, because the title block of a PDF cannot be scrubbed reliably. `--keep-attachments` keeps them, unscrubbed.
   4. Read the report it prints (every replacement, and a "check these" list), open each new `.eml`, and fix anything identifying that is left. The tool cannot catch everything: an unusual name with nothing around it, a company named without "Inc" or "LLC", a city mentioned in passing, a non-US address, or a phone number written in words.
   5. Set `"reviewed": true`, run `python -m unittest tests.test_import`, and commit.
 
@@ -445,7 +445,7 @@ python -m unittest discover -s tests -v
 
 The mock's answers are guesses, not Jev's, so do not judge accuracy with it.
 
-The suite has 348 tests and takes about three and a half minutes:
+The suite has 369 tests and takes about three and a half minutes:
 
 | File | What it tests |
 | --- | --- |
