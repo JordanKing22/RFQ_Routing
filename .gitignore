@@ -8,5 +8,4 @@ cache/
 # Python
 __pycache__/
 *.py[cod]
-
 private_emails/

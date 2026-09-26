@@ -27,6 +27,7 @@ import base64
 import binascii
 import codecs
 import datetime as _dt
+import email.feedparser
 import email.parser
 import email.policy
 import email.utils
@@ -287,6 +288,7 @@ class _HTMLText(html.parser.HTMLParser):
         self.pre = 0
         self.cells = 0
         self.trail = 0          # line ends at the end of the output so far
+        self.p_lines = 2        # how the open <p> ends: 1 for Outlook's lines, 2 for paragraphs
         self.started = False    # any visible text yet
 
     def _break(self, lines: int) -> None:
@@ -318,7 +320,8 @@ class _HTMLText(html.parser.HTMLParser):
             # Outlook writes every line as <p class=MsoNormal> with no margin, and its blank lines
             # as empty paragraphs; other mailers mean a paragraph break.
             cls = " ".join(v or "" for k, v in attrs if k == "class").lower()
-            self._break(1 if "mso" in cls else 2)
+            self.p_lines = 1 if "mso" in cls else 2
+            self._break(self.p_lines)
         elif tag in _PARAGRAPH_TAGS:
             self._break(2)
         elif tag in _BLOCK_TAGS:
@@ -333,7 +336,9 @@ class _HTMLText(html.parser.HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_TAGS:
             self.skip = max(0, self.skip - 1)
-        elif tag == "p" or tag in _PARAGRAPH_TAGS:
+        elif tag == "p":
+            self._break(self.p_lines)
+        elif tag in _PARAGRAPH_TAGS:
             self._break(2)
         elif tag in _BLOCK_TAGS:
             self._break(1)
@@ -538,7 +543,10 @@ def _keep_attachments(run: _Run, candidates: List[_Candidate], cids: set,
         if len(kept) >= limits.max_attachments:
             over.append(c.name)
             continue
-        if data is ...:
+        if data is ... and c.size_hint is not None and c.size_hint > limits.max_attachment_bytes:
+            data = None  # known to be too big: do not decode it just to drop it
+            big.append(c.name)
+        elif data is ...:
             data = _load(c, warnings)
         size = len(data) if data is not None else (c.size_hint or 0)
         if data is not None and len(data) > limits.max_attachment_bytes:
@@ -754,6 +762,8 @@ def _part_bytes(part: Any) -> bytes:
 
 
 def _part_size_hint(part: Any) -> Optional[int]:
+    """A leaf part's decoded size without decoding it: exact for base64 and unencoded parts,
+    None for quoted-printable (which has to be decoded to know)."""
     try:
         payload = part.get_payload()
     except Exception:  # noqa: BLE001
@@ -761,7 +771,13 @@ def _part_size_hint(part: Any) -> Optional[int]:
     if not isinstance(payload, str):
         return None
     cte = _one_line(_raw_header(part, "content-transfer-encoding")).lower()
-    return len(payload) * 3 // 4 if cte == "base64" else len(payload)
+    if cte == "base64":
+        chars = len(payload) - sum(payload.count(c) for c in "\r\n\t ")
+        pad = len(payload.rstrip("\r\n\t ")) - len(payload.rstrip("\r\n\t =").rstrip("\r\n\t "))
+        return max(0, chars * 3 // 4 - min(pad, 2))
+    if cte in ("", "7bit", "8bit", "binary"):
+        return len(payload)
+    return None
 
 
 def _part_charset(part: Any) -> Optional[str]:
@@ -916,8 +932,15 @@ def _set_body(em: Dict[str, Any], plain: List[str], htmls: List[str], limits: Li
 
 
 def _parse_mime(data: bytes) -> Optional[Any]:
+    """The parsed message, or None (RecursionError on absurd nesting, and parser bugs). Fed a
+    megabyte at a time: parsebytes() would first copy the whole file into one string, and a big
+    .eml already costs several times its size in memory."""
     try:
-        return email.parser.BytesParser(policy=email.policy.default).parsebytes(data)
+        parser = email.feedparser.BytesFeedParser(policy=email.policy.default)
+        view = memoryview(data)
+        for start in range(0, len(data), 1 << 20):
+            parser.feed(bytes(view[start:start + (1 << 20)]))
+        return parser.close()
     except Exception:  # noqa: BLE001
         return None
 
@@ -1053,20 +1076,21 @@ def _load_zip(run: _Run, data: bytes, source: str, depth: int) -> None:
                 # bzip2 and LZMA decompress a whole chunk at once, with no cap on what comes out.
                 run.skip(entry, "compressed with a method this reader does not open")
                 continue
+            problem, content = "", None
             if ext not in EMAIL_EXTENSIONS:
                 # Maildir and some exports name emails without .eml: look at the first bytes
                 # rather than unzipping every drawing and spreadsheet in the archive.
                 head, got, problem = _read_zip_entry(zf, info, 4096, limits.max_zip_total_bytes - total,
                                                      peek=True)
                 total += got
-                if problem or sniff(head or b"") not in ("eml", "msg"):
-                    run.skip(entry, "not an email file" if not problem or problem == "total" else problem)
-                    continue
-            if not run.room(entry):
-                break
-            content, got, problem = _read_zip_entry(zf, info, limits.max_file_bytes,
-                                                    limits.max_zip_total_bytes - total)
-            total += got
+                if not problem and sniff(head or b"") not in ("eml", "msg"):
+                    problem = "not an email file"
+            if not problem:
+                if not run.room(entry):
+                    break
+                content, got, problem = _read_zip_entry(zf, info, limits.max_file_bytes,
+                                                        limits.max_zip_total_bytes - total)
+                total += got
             if problem == "total":
                 run.skip(entry, f"the zip holds more than {mb_total:g} MB uncompressed; this entry "
                          "and the rest were not read")
@@ -1119,7 +1143,7 @@ class _CFB:
         self.data = data
         self.v4 = shift == 12
         self.ssize = 1 << shift
-        self.nsect = max(0, (len(data) - self.ssize + self.ssize - 1) // self.ssize)
+        self.nsect = (len(data) - 1) // self.ssize  # sectors after the header, a partial last one included
         self.damaged = False
         # Streams that share sectors could make a small file read as gigabytes: count what is read.
         self.budget = 2 * len(data) + (1 << 20)
@@ -1127,11 +1151,13 @@ class _CFB:
          first_difat, _ndifat) = struct.unpack_from("<IIIIIIII", data, 44)
 
         # The FAT's own sectors: 109 listed in the header, the rest in a chain of DIFAT sectors.
+        # Only as many as the file has sectors to describe: more could only point past the end.
         per = self.ssize // 4
+        need = (self.nsect + per - 1) // per
         fat_sectors = [s for s in struct.unpack_from("<109I", data, 76) if s <= _MAXREGSECT]
         seen = set()
         s = first_difat
-        while s <= _MAXREGSECT:
+        while s <= _MAXREGSECT and len(fat_sectors) < need:
             if s in seen or s >= self.nsect:
                 self.damaged = True
                 break
@@ -1139,8 +1165,6 @@ class _CFB:
             vals = struct.unpack(f"<{per}I", self._sector(s))
             fat_sectors.extend(v for v in vals[:-1] if v <= _MAXREGSECT)
             s = vals[-1]
-        # Only as much FAT as the file has sectors: the rest could only point past the end.
-        need = (self.nsect + per - 1) // per
         raw = bytearray()
         for fs in fat_sectors[:need]:
             if fs >= self.nsect:
@@ -1256,9 +1280,16 @@ class _CFB:
         e = self.entry(i) if i is not None else None
         return e is not None and e[1] == 1
 
-    def size(self, i: Optional[int]) -> int:
+    def size(self, i: Optional[int]) -> Optional[int]:
+        """A stream's declared size, or None when there is no such stream or the size is more
+        than the file could hold (the file is then marked damaged)."""
         e = self.entry(i) if i is not None else None
-        return e[6] if e is not None and e[1] == 2 else 0
+        if e is None or e[1] != 2:
+            return None
+        if e[6] > len(self.data):
+            self.damaged = True
+            return None
+        return e[6]
 
     def read(self, i: Optional[int]) -> Optional[bytes]:
         """A stream's bytes, or None when it is missing or damaged (the file is marked damaged)."""

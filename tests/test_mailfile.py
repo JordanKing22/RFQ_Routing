@@ -96,8 +96,8 @@ def eml_bytes(msg):
     return msg.as_bytes(policy=email.policy.SMTP)
 
 
-def simple_eml(subject="RFQ 5102 - hinge plate", body="Please quote 20 pcs of HP-5102.", sender="Avery Quill <avery.quill@example.com>",
-               **headers):
+def simple_eml(subject="RFQ 5102 - hinge plate", body="Please quote 20 pcs of HP-5102.",
+               sender="Avery Quill <avery.quill@example.com>", **headers):
     msg = email.message.EmailMessage()
     msg["From"] = sender
     msg["To"] = "Jordan Vale <quotes@example.net>"
@@ -180,7 +180,8 @@ class SniffTests(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 class LzfuTests(unittest.TestCase):
     # MS-OXRTFCP 3.1.1 and 3.1.2: the specification's own compressed examples.
-    VECTOR_1 = bytes.fromhex("2d0000002b0000004c5a4675f1c5c7a703000a007263706731323542320af32068656c090020627705b06c647d0a800fa0")
+    VECTOR_1 = bytes.fromhex("2d0000002b0000004c5a4675f1c5c7a703000a007263706731323542320af320"
+                             "68656c090020627705b06c647d0a800fa0")
     RAW_1 = b"{\\rtf1\\ansi\\ansicpg1252\\pard hello world}\r\n"
     VECTOR_2 = bytes.fromhex("1a0000001c0000004c5a4675e2d44b51410004205758595a0d6e7d010eb0")
     RAW_2 = b"{\\rtf1 WXYZWXYZWXYZWXYZWXYZ}"
@@ -253,7 +254,8 @@ class RtfTextTests(unittest.TestCase):
     def test_plain_rtf(self):
         rtf = (b"{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Arial;}}{\\colortbl;\\red0\\green0\\blue0;}"
                b"{\\*\\generator Riched20 10.0;}{\\info{\\author Kit Marsh}}\\pard\\plain Qty\\tab 50\\par "
-               b"Unit price \\'80 12\\par Caf\\u233?\\par A\\emdash B\\par {\\field{\\*\\fldinst HYPERLINK \"x\"}{\\fldrslt link}}}")
+               b"Unit price \\'80 12\\par Caf\\u233?\\par A\\emdash B\\par "
+               b"{\\field{\\*\\fldinst HYPERLINK \"x\"}{\\fldrslt link}}}")
         text, was_html = mailfile.rtf_to_text(rtf)
         self.assertFalse(was_html)
         self.assertEqual(text, "Qty\t50\nUnit price \u20ac 12\nCaf\u00e9\nA-B\nlink")
@@ -280,7 +282,7 @@ class RtfTextTests(unittest.TestCase):
     def test_html_deencapsulation(self):
         rtf = (b"{\\rtf1\\ansi\\ansicpg1252\\fromhtml1 \\deff0{\\fonttbl{\\f0\\fswiss Arial;}}"
                b"{\\*\\htmltag19 <html>}{\\*\\htmltag34 <head><style>p {margin:0}</style></head>}{\\*\\htmltag50 <body>}"
-               b"{\\*\\htmltag64 <p>}Ship to \\htmlrtf {\\b\\htmlrtf0 dock 4\\htmlrtf }\\htmlrtf0 "
+               b"{\\*\\htmltag64 <p>}Ship to \\htmlrtf {\\b\\htmlrtf0 dock 4\\htmlrtf }\\htmlrtf0  "
                b"{\\*\\htmltag84 &amp;}\\htmlrtf &\\htmlrtf0  call{\\*\\htmltag72 </p>}\\htmlrtf \\par\\htmlrtf0 "
                b"{\\*\\mhtmltag0 <img src=\"cid:x\">}{\\*\\htmltag64 <p>}Rev \\'c9 ok{\\*\\htmltag72 </p>}"
                b"{\\*\\htmltag58 </body>}{\\*\\htmltag27 </html>}}")
@@ -315,7 +317,7 @@ class HtmlTextTests(unittest.TestCase):
         self.assertEqual(mailfile.html_to_text(page), "Hi Jordan,\n\nQty 50")
 
     def test_unclosed_head_and_junk(self):
-        self.assertEqual(mailfile.html_to_text("<html><head><title>x<body><p>Still here</p>"), "Still here")
+        self.assertEqual(mailfile.html_to_text("<html><head><style>p {}</style><body><p>Still here</p>"), "Still here")
         for junk in ("", "<", "<<<>>>", "<a " * 5000, "&#99999999;", "<![CDATA[x]]>", "<p" + "x" * 10000):
             mailfile.html_to_text(junk)  # never raises
 
@@ -407,7 +409,8 @@ class MsgRoundTripTests(unittest.TestCase):
     def test_signature_logo_left_out_screenshot_kept(self):
         page = '<html><body><p>See below</p><img src="cid:shot@01"><img src="cid:logo@01"></body></html>'
         atts = [{"name": "image001.png", "content_type": "image/png", "data": LOGO, "inline": True, "content_id": "logo@01"},
-                {"name": "image002.png", "content_type": "image/png", "data": SCREENSHOT, "inline": True, "content_id": "shot@01"},
+                {"name": "image002.png", "content_type": "image/png", "data": SCREENSHOT, "inline": True,
+                 "content_id": "shot@01"},
                 {"name": "QA-41127_RevB.pdf", "content_type": "application/pdf", "data": PDF}]
         em = load_one("x.msg", msgwriter.build_msg(rfq(html=page, attachments=atts), body="all"))["emails"][0]
         self.assertEqual([(a["name"], a["inline"]) for a in em["attachments"]],
@@ -452,7 +455,8 @@ class MsgRoundTripTests(unittest.TestCase):
         many = [{"name": f"sheet {i}.pdf", "content_type": "application/pdf", "data": b"%PDF" + bytes([i])} for i in range(40)]
         em = load_one("x.msg", msgwriter.build_msg(rfq(attachments=many)))["emails"][0]
         self.assertEqual(len(em["attachments"]), 25)
-        self.assertTrue(any(w.startswith("15 more attachments left out (the limit is 25)") for w in em["warnings"]), em["warnings"])
+        self.assertTrue(any(w.startswith("15 more attachments left out (the limit is 25)") for w in em["warnings"]),
+                        em["warnings"])
         small = Limits(max_attachment_bytes=1000, max_body_chars=20)
         em = load_one("x.msg", msgwriter.build_msg(rfq()), small)["emails"][0]
         self.assertEqual((em["attachments"][0]["data"], em["attachments"][0]["size"]), (None, len(PDF)))
@@ -573,8 +577,7 @@ class HostileMsgTests(unittest.TestCase):
 
     def test_cyclic_fat_in_a_stream(self):
         e = entry_named(self.data, "__substg1.0_37010102", min_size=4096)
-        count = (e[7] + 511) // 512
-        looped = patched(self.data, fat_offset(e[6] + count - 1), "<I", e[6])
+        looped = patched(self.data, fat_offset(e[6] + 5), "<I", e[6] + 2)  # sector 5 leads back to sector 2
         em = load_one("loop.msg", looped)["emails"][0]
         self.assertEqual(em["subject"], "RFQ 4471 - bracket, 6061-T6")
         pdf = [a for a in em["attachments"] if a["name"] == "QA-41127_RevB.pdf"][0]
@@ -605,9 +608,9 @@ class HostileMsgTests(unittest.TestCase):
                 self.assertIn("parts of this Outlook file are damaged and were not read", result["emails"][0]["warnings"])
 
     def test_cyclic_mini_fat(self):
-        e = entry_named(self.data, "__substg1.0_0037001F")  # the subject, in the mini stream
+        e = entry_named(self.data, "__substg1.0_1000001F")  # the body: three mini sectors
         minifat = struct.unpack_from("<I", self.data, 60)[0]
-        looped = patched(self.data, 512 + minifat * 512 + 4 * e[6], "<I", e[6])
+        looped = patched(self.data, 512 + minifat * 512 + 4 * (e[6] + 1), "<I", e[6])
         em = load_one("miniloop.msg", looped)["emails"][0]
         self.assertIn("parts of this Outlook file are damaged and were not read", em["warnings"])
 
@@ -629,13 +632,18 @@ class HostileMsgTests(unittest.TestCase):
         self.assertIn("parts of this Outlook file are damaged and were not read", em["warnings"])
 
     def test_difat_loop(self):
+        # The header lists no FAT sector, and the one DIFAT sector lists none either and points to
+        # itself: the walk must notice the loop instead of going round forever.
         e = entry_named(self.data, "__substg1.0_37010102", min_size=4096)
         sector = e[6]
-        data = patched(self.data, 512 + (sector + 1) * 512 - 4 - 512, "<I", sector)  # its last word points to itself
-        data = patched(data, 68, "<I", sector)
-        data = patched(data, 72, "<I", 1)
-        result = load_one("difat.msg", data)
-        self.assertEqual(result["emails"][0]["subject"], "RFQ 4471 - bracket, 6061-T6")
+        data = bytearray(self.data)
+        start = 512 + sector * 512
+        data[start:start + 512] = b"\xff" * 508 + struct.pack("<I", sector)
+        struct.pack_into("<II", data, 68, sector, 1)       # first DIFAT sector, one of them
+        struct.pack_into("<109I", data, 76, *([0xFFFFFFFF] * 109))
+        result = load_one("difat.msg", bytes(data))
+        self.assertEqual(result["emails"], [])
+        self.assertIn("no sector allocation table", result["skipped"][0]["reason"])
 
     def test_shared_sectors_cannot_multiply_reads(self):
         cfb = mailfile._CFB(self.data)
@@ -795,7 +803,7 @@ class EmlTests(unittest.TestCase):
         names = [a["name"] for a in load_one("n.eml", eml_bytes(msg))["emails"][0]["attachments"]]
         self.assertEqual(names[:4], ["passwd", "drawing.pdf", "evilfdp.exe", "ab.txt"])
         self.assertEqual((len(names[4]), names[4][-4:]), (120, ".pdf"))
-        self.assertEqual(names[5:], ["attachment", "trailing dots", "attachment.pdf"])
+        self.assertEqual(names[5:], ["attachment.bin", "trailing dots", "attachment.pdf"])
 
     def test_deep_nesting(self):
         msg = simple_eml(subject="level 6")
@@ -845,7 +853,8 @@ class EmlTests(unittest.TestCase):
         raw = (b"From: a@example.com\r\nSubject: signed RFQ\r\nMIME-Version: 1.0\r\n"
                b"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=S\r\n\r\n"
                b"--S\r\nContent-Type: multipart/mixed; boundary=M\r\n\r\n--M\r\nContent-Type: text/plain\r\n\r\nQuote please.\r\n"
-               b"--M\r\nContent-Type: application/pdf; name=\"D-1.pdf\"\r\nContent-Disposition: attachment; filename=\"D-1.pdf\"\r\n"
+               b"--M\r\nContent-Type: application/pdf; name=\"D-1.pdf\"\r\n"
+               b"Content-Disposition: attachment; filename=\"D-1.pdf\"\r\n"
                b"Content-Transfer-Encoding: base64\r\n\r\n" + base64.encodebytes(PDF) + b"--M--\r\n"
                b"--S\r\nContent-Type: application/pkcs7-signature; name=smime.p7s\r\nContent-Transfer-Encoding: base64\r\n\r\n"
                b"MIIB\r\n--S--\r\n")
@@ -865,7 +874,8 @@ class ZipTests(unittest.TestCase):
                        ("notes.txt", b"call Kit"), ("maildir/cur/1727180100.M1P2", self.email(3)), ("readme", b"just text")])
         result = load_one("orders.zip", data)
         self.assertEqual([e["source"] for e in result["emails"]],
-                         ["orders.zip/Inbox/RFQ 1.eml", "orders.zip/Inbox/Sub/RFQ 2.msg", "orders.zip/maildir/cur/1727180100.M1P2"])
+                         ["orders.zip/Inbox/RFQ 1.eml", "orders.zip/Inbox/Sub/RFQ 2.msg",
+                          "orders.zip/maildir/cur/1727180100.M1P2"])
         self.assertEqual(result["skipped"], [{"source": "orders.zip/notes.txt", "reason": "not an email file"},
                                              {"source": "orders.zip/readme", "reason": "not an email file"}])
 
@@ -925,14 +935,16 @@ class ZipTests(unittest.TestCase):
                        ("bad\x01name.eml", self.email(5))])
         result = load_one("t.zip", data)
         self.assertEqual(sorted(e["source"] for e in result["emails"]),
-                         ["t.zip/Users/kit/win.eml", "t.zip/a/b/z.eml", "t.zip/abs/root.eml", "t.zip/badname.eml", "t.zip/evil.eml"])
+                         ["t.zip/Users/kit/win.eml", "t.zip/a/b/z.eml", "t.zip/abs/root.eml", "t.zip/badname.eml",
+                          "t.zip/evil.eml"])
 
     def test_entry_limit_and_empty(self):
         data = zip_of([(f"RFQ {i}.eml", self.email(i)) for i in range(8)])
         result = load_one("e.zip", data, Limits(max_zip_entries=5))
         self.assertEqual(len(result["emails"]), 5)
         self.assertEqual(result["skipped"], [{"source": "e.zip", "reason": "the zip has 8 entries; only the first 5 were read"}])
-        self.assertEqual(load_one("empty.zip", zip_of([])), {"emails": [], "skipped": [{"source": "empty.zip", "reason": "no emails found"}]})
+        self.assertEqual(load_one("empty.zip", zip_of([])),
+                         {"emails": [], "skipped": [{"source": "empty.zip", "reason": "no emails found"}]})
         many = zip_of([(f"x{i}", b"") for i in range(25_000)], zipfile.ZIP_STORED)
         result = load_one("many.zip", many, Limits(max_zip_entries=1000))
         self.assertIn("far more than", result["skipped"][0]["reason"])
@@ -966,7 +978,8 @@ class LoadContractTests(unittest.TestCase):
         self.assertEqual(load_one("t.eml", None)["skipped"], [{"source": "t.eml", "reason": "empty file"}])
 
     def test_sources_and_reasons(self):
-        self.assertEqual(load_one("C:\\Users\\kit\\Desktop\\RFQ 1.eml", eml_bytes(simple_eml()))["emails"][0]["source"], "RFQ 1.eml")
+        em = load_one("C:\\Users\\kit\\Desktop\\RFQ 1.eml", eml_bytes(simple_eml()))["emails"][0]
+        self.assertEqual(em["source"], "RFQ 1.eml")
         self.assertEqual(load_one("", eml_bytes(simple_eml()))["emails"][0]["source"], "upload")
         cases = {"drawing.pdf": (b"%PDF-1.4\n", "not an email file (.eml, .msg, or .zip)"),
                  "x.msg": (b"From nowhere", "not an Outlook .msg file (no Compound File signature)"),

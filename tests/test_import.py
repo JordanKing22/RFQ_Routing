@@ -81,8 +81,8 @@ class ManifestTests(unittest.TestCase):
             emails, _ = imported(entry)
             for email in emails:
                 for text in (email["subject"], email["body"]):
-                    self.assertNotIn("—", text, entry["file"])
-                    self.assertNotIn("–", text, entry["file"])
+                    self.assertNotIn("\u2014", text, entry["file"])
+                    self.assertNotIn("\u2013", text, entry["file"])
 
 
 class ServerImportTests(unittest.TestCase):

@@ -406,16 +406,18 @@ class _Props:
         self.fixed[tag] = struct.pack("<II", 0xFFFFFFFF, 0)
 
     def table(self, header: bytes) -> bytes:
+        """__properties_version1.0: the header, then 16 bytes a property (tag, flags readable and
+        writable, value or size)."""
         rows = b"".join(struct.pack("<II", tag, 0x6) + self.fixed[tag] for tag in sorted(self.fixed))
         return header + rows
 
 
 def _split_address(value: str) -> Tuple[str, str]:
-    name, addr = email.utils.parseaddr(str(value))
-    return name, addr
+    return email.utils.parseaddr(str(value))
 
 
-def _legacy_dn(name: str, addr: str) -> str:
+def _legacy_dn(addr: str) -> str:
+    """An Exchange legacy DN, what Outlook stores as the address of a sender in the same tenant."""
     who = re.sub(r"[^A-Za-z0-9]", "", addr.split("@")[0]).upper() or "USER"
     return f"/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP (FYDIBOHF23SPDLT)/CN=RECIPIENTS/CN={who}"
 
@@ -456,7 +458,7 @@ def message_tree(email_dict: Dict[str, Any], unicode: bool = True, body: str = "
         p.string(0x0C1A, from_name or from_email)
         p.string(0x0042, from_name or from_email)
         if exchange_sender:
-            dn = _legacy_dn(from_name, from_email)
+            dn = _legacy_dn(from_email)
             p.string(0x0C1F, dn)
             p.string(0x0C1E, "EX")
             p.string(0x0065, dn)

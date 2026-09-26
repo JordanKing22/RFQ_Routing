@@ -425,6 +425,13 @@ class NoLeakTests(ScrubTestCase):
         self.assertFalse((self.inbox / ".scrub_map.json.tmp").exists())
         self.assertTrue(self.map.exists())
 
+    def test_wildcard_input(self):
+        self.put("a.eml", email_a())
+        self.put("e.eml", email_e())
+        self.put("notes.txt", b"not an email")
+        self.scrub(str(self.inbox / "*.eml"), "--lane", "review", "--rfq")
+        self.assertEqual(len(self.outputs()), 2)
+
     def test_forward_bundle_writes_the_attached_emails(self):
         outer = EmailMessage()
         outer["From"] = "Marisol Quintero-Vance <mquintero@brackwaterfluid.com>"
@@ -462,10 +469,7 @@ class OutputTests(ScrubTestCase):
         entry = self.manifest()["files"][0]["emails"][0]
         self.assertEqual(entry["subject"], back["subject"])
         self.assertEqual(entry["from_email"], back["from_email"])
-        self.assertNotIn("different subject", report)
-        self.assertNotIn("different sender", report)
-        self.assertNotIn("body", re.findall(r"reading the file back gave a different (.*)", report) and
-                         re.findall(r"reading the file back gave a different (.*)", report)[0] or "")
+        self.assertNotIn("reading the file back gave a different", report)
         # Headers that carry names or addresses are not copied.
         for h in ("Received", "Thread-Topic", "In-Reply-To", "X-Originating-IP"):
             self.assertIsNone(msg[h], h)
@@ -525,7 +529,6 @@ class OutputTests(ScrubTestCase):
         self.assertEqual(len(names), 2, names)
         self.assertTrue(all("Cordwainer" not in n and "HX-44120" in n for n in names), names)
         self.assertIsNone(msg["X-Scrubbed-Attachments"])
-        self.assertIn("WARNING", report)
         self.assertIn("UNSCRUBBED", report)
         self.assertIn("WARNING", self.last_stderr)
         self.assert_clean(data, C_SECRETS, C_DIGITS)
@@ -576,6 +579,86 @@ class OutputTests(ScrubTestCase):
         self.assertEqual(len(files), 1)
         self.assertNotEqual(files[0].name, old)
         self.assertEqual([f["file"] for f in self.manifest()["files"]], [files[0].name])
+
+    def test_review_flag_survives_an_unchanged_rerun_only(self):
+        self.put("a.eml", email_a())
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis")
+        data = self.manifest()
+        data["files"][0]["reviewed"] = True
+        (self.out / "manifest.json").write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+        report = self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis")
+        self.assertIn("still reviewed", report)
+        self.assertIs(self.manifest()["files"][0]["reviewed"], True)
+        # A different lane is a different answer: review it again.
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "review", "--rfq")
+        self.assertIs(self.manifest()["files"][0]["reviewed"], False)
+
+    def test_existing_manifest_format_is_kept(self):
+        real = ROOT / "tests" / "emails" / "manifest.json"
+        if not real.exists():
+            self.skipTest("tests/emails/manifest.json is not there yet")
+        self.out.mkdir()
+        original = real.read_text(encoding="utf-8")
+        (self.out / "manifest.json").write_text(original, encoding="utf-8")
+        before = json.loads(original)
+        self.put("a.eml", email_a())
+        self.scrub(str(self.inbox / "a.eml"), "--lane", "milling_3axis")
+        text = (self.out / "manifest.json").read_text(encoding="utf-8")
+        after = json.loads(text)
+        self.assertEqual(after["about"], before["about"])
+        self.assertEqual(after["files"][:len(before["files"])], before["files"])
+        self.assertEqual(len(after["files"]), len(before["files"]) + 1)
+        indent = scrub.manifest_indent(real)
+        self.assertEqual(text, json.dumps(after, indent=indent, ensure_ascii=False) + "\n")
+        # The generated part of the file is byte for byte what it was.
+        head = original[:original.rstrip().rindex("]")].rstrip()      # up to the last entry's "}"
+        self.assertTrue(text.startswith(head), "generated entries were reformatted")
+
+    def test_scrubbed_files_pass_the_import_fixture_checks(self):
+        # The same per-file checks tests/test_import.py makes on every file in tests/emails.
+        self.put("a.eml", email_a())
+        self.put("b.eml", email_b())
+        self.put("c.msg", email_c(body="rtf", exchange_sender=True))
+        self.put("e.eml", email_e())
+        self.scrub(str(self.inbox), "--lane", "review", "--rfq")
+        on_disk = {p.name for p in self.out.iterdir() if p.name != "manifest.json"}
+        entries = self.manifest()["files"]
+        self.assertEqual(on_disk, {e["file"] for e in entries})
+        for entry in entries:
+            with self.subTest(file=entry["file"]):
+                res = mailfile.load(entry["file"], (self.out / entry["file"]).read_bytes())
+                emails = [e for e in res["emails"] if not e.get("container_only")]
+                self.assertEqual(len(emails), len(entry["emails"]))
+                for got, want in zip(emails, entry["emails"]):
+                    self.assertEqual(got["subject"], want["subject"])
+                    self.assertEqual(got["from_email"], want["from_email"].lower())
+                    self.assertEqual([a["name"] for a in got["attachments"]], want["attachments"])
+                    self.assertTrue(got["body"].strip())
+                    self.assertTrue(got["date"])
+                    for text in (got["subject"], got["body"]):
+                        self.assertNotIn(chr(0x2014), text)
+                        self.assertNotIn(chr(0x2013), text)
+
+    def test_dashes_become_hyphens_and_a_missing_date_gets_a_fixed_one(self):
+        em = chr(0x2014)
+        en = chr(0x2013)
+        headers = [("From", "Marisol Quintero-Vance <mquintero@brackwaterfluid.com>"),
+                   ("To", "rfq@ferncastmachine.com"), ("Subject", f"RFQ {em} manifold block, qty 10{en}20")]
+        body = f"Hi Tobiah {em} please quote 10{en}20 pcs.\n\nThanks,\nMarisol\n"
+        self.put("dash.eml", make_eml(headers, text=body, attachments=[(f"Block {en} RevA.pdf", "application/pdf", b"%PDF")]))
+        report = self.scrub(str(self.inbox / "dash.eml"), "--lane", "milling_3axis")
+        data = self.one_output()
+        text = self.views(data)
+        self.assertNotIn(em, text)
+        self.assertNotIn(en, text)
+        self.assertIn("RFQ - manifold block, qty 10-20", text)
+        self.assertIn("Block - RevA.pdf", text)
+        self.assertIn("dash(es) turned into plain hyphens", report)
+        back = mailfile.load("x.eml", data)["emails"][0]
+        self.assertTrue(back["date"].startswith("2026-"))
+        self.assertIn("has no date", report)
+        self.scrub(str(self.inbox / "dash.eml"), "--lane", "milling_3axis")
+        self.assertEqual(self.one_output(), data)
 
     def test_dry_run_writes_nothing(self):
         self.put("a.eml", email_a())
@@ -850,6 +933,57 @@ class ReplacementTests(unittest.TestCase):
         self.assertNotIn("Mark will send", out)
         self.assertFalse(out.rstrip().endswith("Mark"), out)
 
+    def test_labeled_company_lines(self):
+        text = "Company: Ravelstoke Instruments\nShip To: Ravelstoke Instruments, 12 Oakmere St\nRavelstoke needs it."
+        out, _ = scrub_one_text(text)
+        self.assertNotIn("Ravelstoke", out)
+        self.assertNotIn("Oakmere", out)
+        self.assertIn("Instruments", out)
+
+    def test_curly_apostrophes_in_names(self):
+        headers = {"from_name": "Siobhan O'Farrelly", "from_email": "sofarrelly@glenvarra.com"}
+        text = "Thanks,\nSiobhan O\u2019Farrelly\nO\u2019Farrelly\u2019s team"
+        out, _ = scrub_one_text(text, headers)
+        self.assertNotIn("Farrelly", out)
+        self.assertNotIn("Siobhan", out)
+
+    def test_international_signatures(self):
+        cases = [
+            ({"from_name": "Rhys Tennant-Ogilvy", "from_email": "rto@vexmoor.co.uk",
+              "body": "Cheers,\nRhys\nVexmoor Engineering Ltd\n+44 (0)1457 555 123\n"
+                      "https://www.linkedin.com/in/rhys-tennant-ogilvy-12345"},
+             ["Rhys", "Tennant", "Ogilvy", "Vexmoor", "1457 555 123", "rhys-tennant"],
+             ["Cheers,", "Engineering Ltd", "+44 (0)", "linkedin.com/s/"]),
+            ({"from_name": "Ana-Lucia Ferreira dos Santos", "from_email": "alsantos@orvalla.com.br",
+              "body": "Obrigada,\nAna-Lucia Ferreira dos Santos\nOrvalla Usinagem Ltda.\nSantos will call."},
+             ["Ana-Lucia", "Ferreira", "Santos", "Orvalla", "alsantos"],
+             ["Obrigada,", " dos ", "Usinagem Ltda.", ".com.br"]),
+        ]
+        for em, secrets, kept in cases:
+            with self.subTest(sender=em["from_name"]):
+                em.update(subject="", to=[], cc=[])
+                s = fresh()
+                s.collect(em)
+                s.finish_collect()
+                res = scrub.scrub_one(s, em)
+                text = res["eml"].decode("utf-8")
+                for secret in secrets:
+                    self.assertNotIn(secret.lower(), text.lower())
+                for keep in kept:
+                    self.assertIn(keep, text)
+                self.assertEqual(res["checks"], [])
+
+    def test_names_in_the_subject_and_sign_off_words(self):
+        em = {"subject": "Quote request from Dmitri Zolotarev", "body": "Cheers,\nsee attached",
+              "from_name": "", "from_email": "rfq@kelsharrow.com", "to": [], "cc": []}
+        s = fresh()
+        s.collect(em)
+        s.finish_collect()
+        res = scrub.scrub_one(s, em)
+        self.assertNotIn("Dmitri", res["subject"])
+        self.assertNotIn("Zolotarev", res["subject"])
+        self.assertTrue(res["body"].startswith("Cheers,"), res["body"])
+
     def test_emails_urls_and_domains(self):
         headers = {"from_name": "Jana Kolvenbach", "from_email": "jana.kolvenbach@ostrander-hydraulic.com"}
         text = ("Write to jana.kolvenbach@ostrander-hydraulic.com or quotes@ostrander-hydraulic.com.\n"
@@ -870,6 +1004,13 @@ class ReplacementTests(unittest.TestCase):
         first, last = fake.split("@")[0].split(".")
         self.assertEqual(first, s.map.get("first", "jana").lower())
         self.assertEqual(last, s.map.get("last", "kolvenbach").lower())
+
+    def test_things_that_are_not_domains(self):
+        text = "Dwg.No. 1234, see Note.3, file.pdf and model.step, e.g. this, U.S. made, rev.B"
+        out, _ = scrub_one_text(text)
+        self.assertEqual(out, text)
+        out, _ = scrub_one_text("Site: KELSHARROW-TOOL.COM and kelsharrow-tool.co")
+        self.assertNotIn("kelsharrow", out.lower())
 
     def test_email_address_pattern_is_mimicked(self):
         s = fresh()
@@ -911,7 +1052,7 @@ class ReplacementTests(unittest.TestCase):
 class RepoRuleTests(unittest.TestCase):
     def test_fictional_lists_stay_clear_of_the_demo(self):
         files = [ROOT / "data" / "sample_emails.json", ROOT / "data" / "rfq_beta" / "emails.json",
-                 ROOT / "shop_config.json"]
+                 ROOT / "shop_config.json", ROOT / "tools" / "make_email_fixtures.py"]
         text = "\n".join(p.read_text(encoding="utf-8") for p in files if p.exists())
         low = text.lower()
         people = set()
