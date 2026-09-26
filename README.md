@@ -8,6 +8,8 @@ Jev doesn't write text. It answers typed questions (pick one, yes/no, score) and
 
 **This branch (`RFQ_Details_Beta`) adds the RFQ details beta.** The demo opens a smaller inbox: 22 of the sample emails, whose attachments are 30 real files. 13 of those files cannot be copied from (scans, faxes, a phone photo, a screenshot), so their text is read with Tesseract OCR. The details of every RFQ go into one consolidated file. See [RFQ details beta](#rfq-details-beta). To open the 100-email inbox instead, set `RFQ_EMAILS_FILE=data/sample_emails.json`.
 
+**This branch (`Mass_Upload_Beta`) builds on it and adds importing Outlook emails in bulk:** `.msg` and `.eml` files, one or many at a time, or a `.zip` of them. Imported emails join the inbox with their attachments, which are read like the beta's files, and example emails can be added to the test suite with their expected lane. See [Import Outlook emails](#import-outlook-emails-mass-upload-beta).
+
 ## Run it
 
 1. Double-click **`run_demo.bat`**.
@@ -275,6 +277,62 @@ The dataset takes about 4.5 minutes on 3 cores. `--base yolo11n.pt` starts from 
 - onnxruntime sends usage events (model loads, sessions, the device) to Microsoft unless `ORT_DISABLE_TELEMETRY=1` is set before it loads. `layout.py` sets it, and so does the Dockerfile, so the demo calls no one but Jev. No document content was ever in those events.
 - This is a summary, not legal advice.
 
+## Import Outlook emails (mass upload beta)
+
+**Import emails** in the top bar takes Outlook emails as files. Drop them on the dialog (or anywhere on the page), or pick them with **Add files**.
+
+| Where the emails come from | How to get them out | File |
+| --- | --- | --- |
+| Classic Outlook for Windows | Select the emails and drag them to a folder (one file each), or File, Save As | `.msg` |
+| New Outlook for Windows, Outlook on the web | Right-click an email, Save as (or Download). For many at once: select them, Forward (they go as attachments), then save that one email | `.eml` |
+| Outlook for Mac | Select the emails and drag them to a folder | `.eml` |
+| Any of these | Zip a folder of the files | `.zip` |
+
+Classic Outlook's drag and drop does not reach a web page directly, so drag the emails to a folder first. Outlook's whole-mailbox exports (`.pst`, `.olm`) are not read.
+
+**What happens to an import**
+
+- Files upload one at a time. Each shows what it gave: emails added, emails already in the inbox (the same Message-ID), and anything left out with the reason (not an email, password protected, nested too deeply, over a limit).
+- Each email joins the inbox as `M01`, `M02`, and so on, with its sender, subject, date, text, and attachments. It is not routed until you ask: **Route N imported emails** in the dialog, or **Route inbox**. On the AI Gateway free tier Jev answers about one email a minute.
+- A forward bundle adds the emails it carries, not itself. An Outlook item attached to an email is imported as an email of its own, next to the one that carried it.
+- The body comes from the plain text part, or from the HTML, or, for old `.msg` files, from the compressed RTF. Signature logos under 30 KB are left out. Other pictures pasted into the email are kept, because they are often screenshots of a drawing.
+- PDF, PNG, JPG, and STEP attachments up to 10 MB are kept and read in the background, one email at a time, with the same text layer, OCR, and STEP reading as the beta's files. Files already in the OCR cache are not read again, and scans are read with the fast settings (`RFQ_IMPORT_OCR_EFFORT`). They get the same tiles, viewer, 3D view, and Detected regions. Other attachments (spreadsheets, DXF, winmail.dat) keep only their name, which Jev still reads. Routing waits until an email's files are read.
+- Relative dates in an imported email ("within two weeks") count from the day it was sent.
+- Imported emails live in memory, like pasted ones: a restart (a Render redeploy or sleep) clears them. Their attachment bytes share the upload memory budget (`RFQ_UPLOAD_MEMORY_MB`, 100 MB); once it is full, the oldest files are dropped and keep only the text already read.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `RFQ_IMPORT_MAX_EMAILS` | 500 | Imported emails one server keeps |
+| `RFQ_IMPORT_OCR_EFFORT` | `fast` | OCR settings for imported scans (`best` is slower) |
+| `RFQ_UPLOAD_MEMORY_MB` | 100 | Memory for uploaded and imported attachment bytes |
+
+One file can be up to 40 MB, and a zip can hold up to 1,000 entries (200 MB unpacked, 500 emails). Each email keeps up to 25 attachments.
+
+**From the command line**
+
+`tools/import_emails.py` sends many files (or folders of them) to any running demo, the same as the dialog, and can route them and score the lanes:
+
+```
+python tools/import_emails.py http://127.0.0.1:8765 tests/emails --route --check
+python tools/import_emails.py https://your-demo.onrender.com path/to/emails --password pick-one --route
+```
+
+`--check` compares each email's lane with the answer key in `tests/emails/manifest.json` (matched by subject). Run it against a demo with your real key to measure Jev on the example emails.
+
+**Add emails to the test suite**
+
+`tests/emails/` holds example emails and `manifest.json`, their answer key: for every file, the emails in it with subject, sender, attachments, expected lane, and whether each one is an RFQ. `tests/test_import.py` parses every listed file, checks it against the manifest, then imports them all into a running server, routes them against the mock, and checks the RFQ details. A new file in the folder must be in the manifest, or the tests fail.
+
+- **Generated examples.** `python tools/make_email_fixtures.py` rebuilds the 11 fictional files (16 emails): plain text, HTML only with a signature logo, an old 8-bit `.msg` from an Exchange sender, a body kept only as compressed RTF, an Outlook item attached to an email, a forward bundle of three, a screenshot of a drawing, and a zipped Outlook folder with a duplicate and the junk a Mac adds. Their attachments are beta files, so their text is already in the OCR cache. The `.msg` files are written by `tools/msgwriter.py`, because there is no Outlook here.
+- **Real emails.** Everything committed here is fictional, so real emails go through `tools/scrub_email.py` first:
+  1. Put the real files in `private_emails/`. Git ignores that folder.
+  2. Run `python tools/scrub_email.py private_emails/*.msg --lane turning --rfq`, one run per lane. The lanes are `milling_3axis`, `milling_5axis`, `turning`, `itar`, `orders`, `review`, and `filtered`. `--dry-run` shows the report without writing anything.
+  3. The tool writes one fictional `.eml` per email into `tests/emails/` and adds its manifest entry with `"reviewed": false`. It replaces names, email addresses, domains, companies, phone numbers, and street addresses with fictional ones. The same real value always gets the same fake one, and the real-to-fake map stays in `private_emails/.scrub_map.json`. `--map "Real=Fake"` adds a pair it missed. Part numbers are kept unless you pass `--part-numbers`. Attachments are left out and listed by name, because the title block of a PDF cannot be scrubbed reliably. `--keep-attachments` keeps them, unscrubbed.
+  4. Read the report it prints (every replacement, and a "check these" list), open each new `.eml`, and fix anything identifying that is left. The tool cannot catch everything: an unusual name with nothing around it, a company named without "Inc" or "LLC", a city mentioned in passing, a non-US address, or a phone number written in words.
+  5. Set `"reviewed": true`, run `python -m unittest tests.test_import`, and commit.
+
+`mailfile.py` does the reading, with the standard library only: `.eml` through Python's email package, `.msg` with its own reader for Outlook's compound file format (including compressed RTF bodies and attached Outlook items), and `.zip` with limits checked on the bytes it actually unpacks. It never raises on a bad file; it reports what it left out. It was checked against extract-msg on 54 real `.msg` files from open-source test sets.
+
 ## Files
 
 | File | What it is |
@@ -304,6 +362,12 @@ The dataset takes about 4.5 minutes on 3 cores. `--base yolo11n.pt` starts from 
 | `static/index.html` | The dashboard |
 | `tools/make_rfq_beta.py` | Builds the beta inbox, its 30 files, and `tests/rfq_beta_truth.json` |
 | `tools/make_layout_dataset.py` / `tools/train_layout.py` | Build the detector's synthetic training pages; train, evaluate, export, and time the detector |
+| `mailfile.py` | Reads Outlook emails: `.eml`, `.msg` (its own compound-file reader), and `.zip` files of them |
+| `tools/import_emails.py` | Sends many email files to a running demo, routes them, and scores the lanes against the answer key |
+| `tools/scrub_email.py` | Turns real emails into fictional test emails for `tests/emails/`, with a review report |
+| `tools/make_email_fixtures.py` / `tools/msgwriter.py` | Build the fictional example emails in `tests/emails/`; write `.msg` files for them |
+| `tests/emails/` | Example emails (`.eml`, `.msg`, `.zip`) and `manifest.json`, their answer key |
+| `private_emails/` | Real emails waiting to be scrubbed (git ignores it) |
 | `tests/` | The test suites (see Test it without a key), `mock_jev.py` (a stand-in Jev endpoint), and the answer keys for the beta |
 | `cache/` | Saved Jev results and live OCR results (created on first run) |
 
@@ -364,6 +428,9 @@ print(result.answers["is_rfq"].noul, result.answers["machine"].choice)
 | No **Detected regions** button | The server cannot run the detector. Run `pip install -r requirements.txt` (numpy, onnxruntime, Pillow) and restart |
 | Detected regions says the page image could not be made | For PDFs, install poppler (`pdftoppm`) |
 | The downloaded RFQ details differ from `data/rfq_beta/rfq_details.csv` | Relative dates ("within two weeks") resolve against the server's date, and the committed file uses September 25, 2026. After routing, Jev decides which emails are RFQs (see [The consolidated file](#the-consolidated-file)) |
+| Import emails lists a file as "not an email file" | Only `.eml` and `.msg` files (and zips of them) are read. Save the emails from Outlook as described in [Import Outlook emails](#import-outlook-emails-mass-upload-beta) |
+| An imported attachment says it "was dropped from memory before it could be read" | Many imports filled the upload memory budget before the file was read. Import that email again, or raise `RFQ_UPLOAD_MEMORY_MB` on a bigger host |
+| Imported emails are gone | The server restarted (a redeploy or a free-plan sleep). Import the files again |
 | Replays are slow again after a cloud restart | Commit a fresh `data/saved_results.json` (Settings, Download saved results). Saved answers only match the exact emails, attachments, and questions they were made with |
 
 ## Test it without a key
@@ -378,7 +445,7 @@ python -m unittest discover -s tests -v
 
 The mock's answers are guesses, not Jev's, so do not judge accuracy with it.
 
-The suite has 200 tests and takes about two and a half minutes:
+The suite has 348 tests and takes about three and a half minutes:
 
 | File | What it tests |
 | --- | --- |
@@ -387,7 +454,10 @@ The suite has 200 tests and takes about two and a half minutes:
 | `tests/test_ocr.py` | The OCR pipeline: text layers skip OCR, every uncopyable file gives its key fields, broken files give an error instead of a crash |
 | `tests/test_rfq_details.py` | The extractor and the consolidated file, against `tests/rfq_beta_fields_truth.json` |
 | `tests/test_layout.py` | The region detector: the model loads, finds the right regions, and handles broken input |
+| `tests/test_mailfile.py` | Reading `.eml`, `.msg`, and `.zip` files: every Outlook body and attachment form, forward bundles, limits, and damaged or hostile files |
+| `tests/test_import.py` | Every file in `tests/emails/` against its manifest, then importing them into a running server: duplicates, background reading, routing, and RFQ details |
+| `tests/test_scrub.py` | The scrub tool: no invented identity survives, fakes stay the same between runs, and the manifest entry |
 
-The tests that need Tesseract, poppler, Pillow, numpy, or onnxruntime skip when those are missing: with plain Python and only poppler installed, the suite passes with 70 of the 200 skipped, and with neither poppler nor Tesseract with 72 skipped.
+The tests that need Tesseract, poppler, Pillow, numpy, or onnxruntime skip when those are missing.
 
 Jev reads text: the email and the text of its attachments (sample files from their specs, real files from their text layer or OCR, uploaded PDFs through pypdf). It never sees pixels, so a scan or a photo counts through the text OCR reads from it, or only by its file name when Tesseract is not installed. All companies, people, and emails in the sample and beta inboxes are fictional.

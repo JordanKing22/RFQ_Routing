@@ -589,7 +589,7 @@ class App:
                 duplicates.append({"source": source, "subject": pe.get("subject") or "", "id": existing})
                 continue
             attachments = [att_mod.normalize(a) for a in (self._imported_attachment(x) for x in pe.get("attachments") or [])
-                           if a is not None][:20]
+                           if a is not None][:mailfile.LIMITS.max_attachments]
             with self.cond:
                 if key in self._import_keys:  # the same email in two files imported at once
                     duplicates.append({"source": source, "subject": pe.get("subject") or "",
